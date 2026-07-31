@@ -22,3 +22,18 @@ env/
 
 # Local map CSVs produced by the map editor
 maps/
+
+# Internal — everything except what runs the project (2026-07-06 reorg)
+data/
+scripts/
+debugging_scripts/
+docs/
+modeltraining/
+runs/
+/RESUME.md
+/ISSUES.md
+/PROJECT_STRUCTURE.md
+/CLAUDE.md
+/reorg-kickoff.md
+/REORG-HANDOFF.md
+
