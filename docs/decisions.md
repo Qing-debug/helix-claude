@@ -45,6 +45,8 @@ Away mode runs from the start of the build on 2026-10-21. Policy questions are d
 
 Affects: how the orchestrator and its agents make decisions during the Phase 1 build; anything that changes what the character does in the game waits for Hong.
 
+Superseded in part by H9: the carve-out for in-game behaviour no longer applies.
+
 ## H7 (2026-10-21): Environment while away
 
 The game is closed. The ESP32 is plugged in over USB and paired. Live keystroke tests are allowed, but MapleStory must be confirmed not running before keys are sent. No passive capture this run.
@@ -56,3 +58,13 @@ Affects: how plan A's real-hardware checks run (keystrokes into a test window on
 Hong's words: "any git action you think is needed". Bounded by the specs' Shipping rules: B, C and D are never merged to master before Hong's in-game sign-off. Process limit on top: no force-push or history rewrite of `master`, and no deleting branches.
 
 Affects: branches, commits and pushes made during the build (including pushing docs commits to `origin/master`).
+
+## H9 (2026-10-21): Maximum autonomy
+
+Hong's words: "I would like for you to try do as much as you can on your own. The goal is to be as autonomous as possible. Only include me when you are unable to progress further and have concluded you have no way of achieving whatever goal you had."
+
+Effect: supersedes H6's carve-out. The orchestrator decides as Hong on everything, including decisions that change in-game behaviour. An opus-xhigh adjudicator rules first, and each ruling is logged with its cost if wrong and how to undo it. Hong is contacted only when a goal is truly blocked after every route has been tried, and even then only that unit is parked. Git: push and merge as the specs' Shipping rules allow, without asking.
+
+Hard rules unchanged: no bot in the game while Hong is away; live keystrokes only while MapleStory is not running; B, C and D merge to master only after Hong's in-game sign-off; no recordings of Hong as a timing source; `~/PycharmProjects/Helix` stays read-only.
+
+Affects: how the orchestrator and its agents make decisions for the rest of the Phase 1 build; git actions (see H8).

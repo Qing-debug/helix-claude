@@ -11,9 +11,9 @@
   - `2026-10-21-p1b-route-walking-design.md`
   - `2026-10-21-p1c-runes-design.md`
   - `2026-10-21-p1d-watching-and-logging-design.md`
-- **Phase 1 build is running under an orchestrator while the user is away** (started 2026-10-21): game closed, ESP32 plugged in over USB and paired, no in-game runs, no passive capture this run. Policy decisions are made as the user would, except anything that changes in-game behaviour, which is parked for the user (work may continue on a provisional, reversible choice).
+- **Phase 1 build is running under an orchestrator while the user is away** (started 2026-10-21): game closed, ESP32 plugged in over USB and paired, no in-game runs, no passive capture this run. Per H9 (maximum autonomy), the orchestrator decides everything as the user would, including in-game behaviour (opus-xhigh adjudicator first, each ruling logged); the user is contacted only when a goal is truly blocked, and only that unit is parked. Hard rules unchanged: no bot in the game while away, live keystrokes only while MapleStory is not running, B/C/D merge only after the user's in-game sign-off.
 - **Next:** write plan A (`superpowers:writing-plans`, into `docs/superpowers/plans/`) → build A on branch `p1a-input` → then the B, C, D plans and builds.
-- The user's decisions and rulings are recorded in `docs/decisions.md` (H1–H8).
+- The user's decisions and rulings are recorded in `docs/decisions.md` (H1–H9).
 
 ## The user's goal
 
@@ -21,7 +21,7 @@ The user wanted **all of Phase 1 designed up front so they can set Claude off an
 
 ## Answered by the user 2026-10-21 (folded into the specs)
 
-1. **Passive screen capture while the user is away**: yes (no input; Kanna logged in on FF2, second monitor).
+1. **Passive screen capture while the user is away**: yes (no input; Kanna logged in on FF2, second monitor) (not used in this run; see H7).
 2. **Research inline** for the timing model (A) and whisper / white-room appearance (D), without the `deep-research-interactive` gate; cite sources in the spec.
 3. **Any whisper stops the bot**; false stops preferred over misses. Applied to the lie detector and white room too: fine for now (user, 2026-10-21). `vision.md` updated to say "whisper".
 4. **Teleport reach 19/23 px was not measured on FF2.** Unverified; the user assumes reach is the same on every map; measured in the first supervised session. Keep reach a single value in `classes.py`.
@@ -40,7 +40,7 @@ Already reflected in the vision/specs unless noted:
 - **Keys:** teleport = arrow + `E`; jump `Alt`; drop through platform = `Down` + `Alt` (only where `can_fall = TRUE`); rune = `Space` then arrows left→right; walking = hold arrow. Walk vs teleport vs drop is Claude's choice.
 - **Map:** `maps/fossil_foundry_2.csv` (Riena Strait – Fossil Foundry 2, minimap 162×82), made by the user this session. `maps/` is gitignored. Two rotation legs have no path in the current graph — `(49,28)→(101,24)` (user: it's a walkable slope) and `(101,24)→(105,42)` (4 px offset). These are **test cases**: the bot must infer terrain from node layout; the user won't label slopes on other maps. Extra user config only if testing shows it's needed.
 - **Runtime transport is BLE only**; USB only for flashing/serial during development.
-- **Unattended events (Phase 1):** lie detector / GM whisper / white room → screenshot + log, then stop all input. Rune fail → retry after 8 s. Stuck / death / disconnect → nothing.
+- **Unattended events (Phase 1):** lie detector / whisper / white room → screenshot + log, then stop all input. Rune fail → retry after 8 s. Stuck / death / disconnect → nothing.
 - **Human-like timing must not come from recordings of the user.**
 
 ## Facts found this session (sources in the vision/specs)
@@ -54,7 +54,7 @@ Already reflected in the vision/specs unless noted:
 
 - **No Python env for this repo yet.** This session ran code with Helix's venv: `~/PycharmProjects/Helix/.venv/Scripts/python.exe` (Python 3.14; has bettercam, cv2, networkx, returns, PIL, matplotlib). Creating this repo's own env is the first groundwork task in plan A.
 - **Run the app:** `python -m src.main` from the repo root; the game must be on the **second monitor** (`output_idx = 1`). Earlier launches from a background shell exited right after detection; launching as a detached process worked.
-- **The Helix GUI may still be running** (started detached, pid 26176). Its logs: old session scratchpad (not durable).
+- **The Helix GUI is not running** (pid 26176 was checked 2026-10-21 and is gone). Its logs were in the old session scratchpad (not durable).
 - **Recording:** `data/recordings/ff2_2026-10-21/` (gitignored, 307 full-screen frames of monitor 1 over 90 s, ~747 MB, character standing still). The user accidentally opened a browser tab on that monitor during it: **every 5th frame was checked and all show a valid 162×82 minimap**, but other parts of the screen may show the tab — check full frames before using them as gameplay negatives. The recorder was a throwaway script (bettercam grab of output 1 at ~5 fps, PNG per frame).
 - ESP32: plugged in over USB and paired (user, 2026-10-21); the game is closed for the whole away run.
 - Git: Claude may take any git action it judges needed, bounded by the specs' Shipping rules (B/C/D never merged to master before the user's in-game sign-off). No force-push or history rewrite of `master`, no deleting branches.

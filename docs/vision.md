@@ -44,7 +44,7 @@ Features are rolled out in phases, each grouping features that do a similar job.
 The bot, on that map:
 
 1. Presses keys reliably through the ESP32, with human-like timing.
-2. Knows how far each movement skill travels. Kanna's main movement ability (teleport) is already measured by the user: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`). A calibration step is only needed for any other movement skills Phase 1 ends up using.
+2. Knows how far each movement skill travels. Kanna's main movement ability (teleport) is already measured by the user: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`) (not measured on FF2; see docs/decisions.md H3). A calibration step is only needed for any other movement skills Phase 1 ends up using.
 3. Walks the map's route (the blue-node rotation from a map-editor CSV) reliably, using the character's movement abilities. No attacking yet.
 4. Notices a rune has spawned and, **once it finishes the node it is currently travelling to** (the "good stopping point"), goes to the rune, interacts with it, reads it (static and spinning arrows), and inputs the answer.
 5. Recognises when a lie detector or a whisper appears, saves a screenshot and a timestamped log entry for the user to review later, and handles it as below. The user won't always be there when it happens.
