@@ -6,36 +6,34 @@
 
 - **Repo:** `Qing-debug/helix-claude` (private), cloned from `Qing-debug/Helix` with full history. Remotes: `origin` = helix-claude, `upstream` = Helix (fetch-only, push disabled). Unlike upstream, this repo tracks `CLAUDE.md` and `docs/`.
 - **Vision approved** by the user: `docs/vision.md` (commit `c5d5c5d`).
-- **Phase 1 specs written, NOT yet approved**, in `docs/superpowers/specs/`:
+- **Phase 1 specs approved by the user 2026-10-21**, in `docs/superpowers/specs/` (open questions answered and folded in, plus per-feature reliability targets and a Shipping section in each):
   - `2026-10-21-p1a-input-over-bluetooth-design.md`
   - `2026-10-21-p1b-route-walking-design.md`
   - `2026-10-21-p1c-runes-design.md`
   - `2026-10-21-p1d-watching-and-logging-design.md`
-- A builder-check reviewer read all four. Its questions were sorted; **five are waiting on the user** (below). Once answered: fold the answers into the specs, get the user's approval of the specs, then write the plans (`superpowers:writing-plans`), then build A → B → C → D.
+- **Next:** write the plans (`superpowers:writing-plans`) into `docs/superpowers/plans/`, then build A → B → C → D.
 
 ## The user's goal for the next step
 
 The user wants **all of Phase 1 designed up front so they can set Claude off and leave.** After the specs are approved, Claude plans and builds while the user is away, stopping only for things that change in-game behaviour.
 
-## Questions waiting on the user (asked 2026-10-21, unanswered)
+## Answered by the user 2026-10-21 (folded into the specs)
 
-Each was offered with a default; the user may just say "defaults fine".
-
-1. **Passive screen capture while the game runs and the user is away** (no input), with Kanna left logged in on Fossil Foundry 2 on the second monitor — for real minimap frames, rune-spawn appearance, gameplay negatives. *Default: yes.*
-2. **Research without the deep-research "go" gate** (the user's global CLAUDE.md routes deep research through `deep-research-interactive`): for the human-timing model (spec A) and GM-whisper / white-room appearance (spec D). *Default: research inline, cite sources in the spec.*
-3. **Which whispers stop the bot**: any whisper, or only confirmed-GM ones? Prefer false stops or possible misses? *Default: any whisper stops it.*
-4. **Was Kanna's 19/23 px teleport reach measured on Fossil Foundry 2?** Minimap scale differs per map (FF2 is 162×82; older test maps were 186×74). *Default if unknown: measure in the first supervised session.*
-5. **May Claude unpair/re-pair "Guiness" in Windows and reset the board over USB serial itself?** Bonding must be re-added to the firmware (HID input report needs an encrypted link; Helix `ISSUES.md` #3/#4). *Default: yes.*
-
-Also proposed (default, not yet confirmed): if spinning-arrow ground truth can't be established without the user, **ship the best-measuring method flagged "accuracy unverified"**, relying on the 8 s retry.
+1. **Passive screen capture while the user is away**: yes (no input; Kanna logged in on FF2, second monitor).
+2. **Research inline** for the timing model (A) and whisper / white-room appearance (D), without the `deep-research-interactive` gate; cite sources in the spec.
+3. **Any whisper stops the bot**; false stops preferred over misses (Claude extended this to lie detector and white room; user OK'd). `vision.md` updated to say "whisper".
+4. **Teleport reach 19/23 px was NOT measured on FF2.** The user assumes it's the same on every map; unverified (a different minimap size could be a bigger map at the same scale). Measure in the first supervised session; keep reach a single value in `classes.py`.
+5. **Claude may unpair/re-pair "Guiness" and reset the board over USB serial.** Bonding must be re-added to the firmware.
+6. **Spinning arrows without ground truth**: ship the best-measuring method flagged "accuracy unverified".
+7. **Only merge code that really works.** A merges on its real-hardware checks; B, C, D merge only after in-game sign-off. C branches off B's branch, D off C's (stacked, pushed to `origin`, rebased if the base changes).
 
 ## Decided and recorded (don't re-ask)
 
 Already reflected in the vision/specs unless noted:
 
 - **Autonomy while away:** live keystrokes into a test window only while MapleStory is NOT running; **no running the bot in the game while the user is away** (the early bot would look more bot-like — no attacking, rough timing — and a flagged account gets lie detectors it would fail); may compile and flash the ESP32 whenever needed.
-- **Git:** one branch per feature, merge to `master` once its checks pass, push to `origin`. *(Not yet written into the specs — add to the plans.)*
-- **Reliability targets:** Claude sets a number per feature, records it in that spec, and the user can override later. *(Not yet written in — add when folding answers in.)*
+- **Git:** one branch per feature, pushed to `origin`; merge rule as in item 7 above. Written into each spec's Shipping section.
+- **Reliability targets:** Claude sets a number per feature, records it in that spec, and the user can override later. Written into each spec.
 - **Firmware** copied into this repo and flashed from there; the user's sketchbook copy stays untouched.
 - **Keys:** teleport = arrow + `E`; jump `Alt`; drop through platform = `Down` + `Alt` (only where `can_fall = TRUE`); rune = `Space` then arrows left→right; walking = hold arrow. Walk vs teleport vs drop is Claude's choice.
 - **Map:** `maps/fossil_foundry_2.csv` (Riena Strait – Fossil Foundry 2, minimap 162×82), made by the user this session. `maps/` is gitignored. Two rotation legs have no path in the current graph — `(49,28)→(101,24)` (user: it's a walkable slope) and `(101,24)→(105,42)` (4 px offset). These are **test cases**: the bot must infer terrain from node layout; the user won't label slopes on other maps. Extra user config only if testing shows it's needed.

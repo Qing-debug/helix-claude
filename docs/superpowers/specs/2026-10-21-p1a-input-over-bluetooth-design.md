@@ -30,11 +30,13 @@ This feature also owns **how human-like the timing is**, because every keypress 
 - **The firmware sketch is copied into this repo** (e.g. `firmware/Helix_BLE/`) and that copy is the one Claude edits and flashes. The user's sketchbook copy (`~/Documents/Arduino/Helix_BLE/Helix_BLE.ino`) is left untouched.
 - Claude may **compile and flash the board** whenever it needs to (board is plugged in over USB and paired over Bluetooth).
 - Claude may send **live keystrokes on this PC into a test window**, but **only while MapleStory is not running**.
+- Claude may **unpair and re-pair "Guiness" in Windows and reset the board over USB serial** itself (user, 2026-10-21).
+- The timing model is **researched inline**, not through the `deep-research-interactive` gate, with its sources cited in this spec (user, 2026-10-21).
 
 ## Constraints and facts
 
 - Board: ESP32-S3, BLE name "Guiness". Custom service `a723b49a-2b53-46a6-a2db-02bb9e9a577c`; command characteristic `61adcd67-20e9-4c38-b1d0-879445c5b732` (READ | WRITE); notify characteristic `89f7c2ca-89b5-4234-905c-d4a931feaa3b` (currently commented out on the firmware side). Stack: NimBLE-Arduino 2.x + webmonkey ESP32_NIMBLE_Keyboard. Full reference: Helix `docs/reference/firmware.md`, `docs/superpowers/ble-communication/spec.md`, `ISSUES.md` #2–#5.
-- The current external sketch sets no explicit bonding (`setSecurityAuth`/`setSecurityIOCap`); whether paired reconnect holds is unverified.
+- **Bonding must be re-added to the firmware.** The HID input report needs an encrypted link (`READ_ENC`, NimBLE-Arduino `NimBLEHIDDevice.cpp:181`), and without a bond on the board side every paired reconnect is killed by Windows ~270 ms in (Helix `ISSUES.md` #3). Helix fixed this with `setSecurityAuth(true, false, true)` + `setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT)` (user-verified 2026-06-11, Helix commit `3544179`), but that firmware copy was later removed and the current external sketch sets no security. Separately, Python only reaches the custom characteristics after pair → reset → reconnect, not straight after a fresh pair (Helix `ISSUES.md` #4, root cause not investigated).
 - Python side: `bleak`, with the existing "event loop on a daemon thread + blocking bridge" pattern in `src/ble/`. `src/ble/ble.py` doesn't parse; `bleV2.py` connects at import time. Both are experiments to replace, not APIs to preserve.
 - Helix's earlier design chose strict lock-step (one command, confirm on screen, next). That is a movement-layer concern for Feature B; this layer just has to deliver key events reliably and report failures.
 
@@ -44,6 +46,23 @@ This feature also owns **how human-like the timing is**, because every keypress 
 - **A keystroke listener on this PC** that records which key events arrive from the HID keyboard and their timing, into a focused test window — game not running.
 - From that: every command type (single, hold, chord) arrives correctly, ordered, with no drops, over a long run (thousands of commands).
 - **Timing realism** checked statistically against the chosen human-timing model (distributions, no two identical sequences, no fixed rhythm).
+
+## Reliability targets
+
+*Set by Claude; the user can override any of them.* All are measured offline, game not running.
+
+| What | Target |
+|---|---|
+| Delivery | 0 dropped, extra, or out-of-order key events over a soak of ≥10,000 commands mixing single presses, holds and chords (0 in 10,000 bounds the true error rate below 0.03% at 95% confidence). |
+| Failures are visible | Every injected fault (board reset mid-soak, PC Bluetooth off) is reported to the caller within 1 s. 0 silent losses. |
+| Latency | p99 from command sent to key-down seen by the PC listener ≤ 100 ms. Provisional: re-set once first measured. |
+| Holds | Measured hold within ±20 ms of the duration the timing layer chose, for ≥95% of holds. |
+| Timing realism | Each timing type (hold, gap, chord offset, reaction) fits its model (KS test, α = 0.01, ≥1,000 samples each). No run of ≥5 consecutive gaps repeats anywhere in the soak. |
+| Connection | Session start connects 20/20 times without re-pairing, including after a board reset and after the PC's Bluetooth is toggled. A connected session holds 2 h with no drop. |
+
+## Shipping
+
+Only code that really works is merged (user, 2026-10-21). Branch `p1a-input` off `master`. A's checks run on the real board, over the real Bluetooth link, into a real window, so passing them shows it works: merge to `master` once the targets above pass, then push to `origin`. That the game accepts the keys is confirmed in B's first supervised session.
 
 ## Left to the builder
 

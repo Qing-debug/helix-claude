@@ -10,7 +10,7 @@ The core of the bot is moving around a map along a route. The route graph exists
 
 1. On **Fossil Foundry 2** (`maps/fossil_foundry_2.csv`, minimap 162×82) with **Kanna**, the bot cycles through the blue nodes in file order, forever, passing through orange nodes as needed, until stopped.
 2. It moves with Kanna's abilities and **chooses which to use**:
-   - **Teleport**: arrow + `E`, any of the four directions. Measured reach: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`, user-measured).
+   - **Teleport**: arrow + `E`, any of the four directions. Measured reach: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`, user-measured), on an earlier map, **not on Fossil Foundry 2**. The user's working assumption is that reach in minimap pixels is the same on every map. That's unverified: FF2's minimap (162×82) differs in size from the older test maps (186×74), which could just mean a differently sized map at the same scale, or a different scale. Reach is measured on FF2 in the first supervised session, which settles it. Until then, 19/23 is used, and reach stays a single number in one place (`classes.py`), so a different measurement is a one-line change. Per-map reach is built only if the measurement shows it's needed.
    - **Walk**: hold an arrow, for short distances.
    - **Drop through a platform**: `Down` + `Alt`, only where the node has `can_fall = TRUE`.
    - Teleport-down vs drop is the bot's choice when both are possible.
@@ -39,6 +39,7 @@ These are test cases, not things to fix by editing the map.
 - Character: Kanna. Map: Fossil Foundry 2. Keys as above.
 - Extra user-set configuration may turn out to be needed for smooth movement; that's decided **after** testing shows what's missing, not designed up front.
 - The bot is **not run in the game while the user is away**. In-game runs are short, supervised sessions.
+- **Passive screen capture is allowed while the game runs and the user is away**: no input of any kind, with Kanna left logged in on Fossil Foundry 2 on the second monitor. It's for real minimap frames, rune-spawn appearance (Feature C), and gameplay negatives (Feature D) (user, 2026-10-21).
 
 ## Constraints and facts
 
@@ -51,8 +52,24 @@ These are test cases, not things to fix by editing the map.
 ## Verification (first guess — tried early, gaps filled by Claude first)
 
 - **Offline:** a simulated character on this map (teleport reach known; walk/drop/teleport timings and variance estimated) driving the real planner and control loop, so planning, terrain inference, and recovery are tested without the game. Target: many consecutive simulated laps with every leg completed and no stalls.
-- **Real minimap frames of Fossil Foundry 2** to test character detection and the sim's realism. None exist yet — Claude first tries to obtain them itself; otherwise they come from the first supervised session.
+- **Real minimap frames of Fossil Foundry 2** to test character detection and the sim's realism. `data/recordings/ff2_2026-10-21/` has 307 full-screen frames (character standing still; every 5th frame checked, all show a valid 162×82 minimap). More come from passive capture. Frames with the character moving come from the first supervised session.
 - **In-game:** supervised short runs with the user for sign-off.
+
+## Reliability targets
+
+*Set by Claude; the user can override any of them.*
+
+| What | Target |
+|---|---|
+| Simulated laps | 1,000 consecutive laps on FF2 with every leg completed and 0 stalls (no progress toward the target for >10 s), with noise on: landing error, overshoot, and ≥5% of moves silently not happening. |
+| Known cases | Both no-path legs above completed in every simulated lap. |
+| Recovery | After an injected error, the bot reaches the leg's target within 3 extra moves in ≥99% of cases. |
+| Character detection | On real FF2 frames, the character is found within ±1 px of a hand-checked position in ≥99.5% of frames, and never reported >3 px away. A miss is acceptable; a wrong position isn't. |
+| In-game sign-off (supervised, later) | 10 consecutive laps with no manual intervention. |
+
+## Shipping
+
+Only code that really works is merged (user, 2026-10-21). Branch `p1b-route-walking` off `master` after Feature A is merged, and push the branch to `origin`. It **merges to `master` only after the in-game sign-off passes**, which needs the user. Passing the offline targets makes it ready for sign-off, not ready to merge. The FF2 reach measurement happens in the same supervised session.
 
 ## Left to the builder
 

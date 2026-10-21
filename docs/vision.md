@@ -47,7 +47,7 @@ The bot, on that map:
 2. Knows how far each movement skill travels. Kanna's main movement ability (teleport) is already measured by the user: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`). A calibration step is only needed for any other movement skills Phase 1 ends up using.
 3. Walks the map's route (the blue-node rotation from a map-editor CSV) reliably, using the character's movement abilities. No attacking yet.
 4. Notices a rune has spawned and, **once it finishes the node it is currently travelling to** (the "good stopping point"), goes to the rune, interacts with it, reads it (static and spinning arrows), and inputs the answer.
-5. Recognises when a lie detector or a GM whisper appears, saves a screenshot and a timestamped log entry for the user to review later, and handles it as below. The user won't always be there when it happens.
+5. Recognises when a lie detector or a whisper appears, saves a screenshot and a timestamped log entry for the user to review later, and handles it as below. The user won't always be there when it happens.
 
 ### Phase 2 — combat and routines: kill mobs well
 
@@ -99,7 +99,7 @@ Decided by the user 2026-10-21. The user will see the aftermath when they get ba
 | Event | What the bot does |
 |---|---|
 | Lie detector appears | Save a screenshot + log entry, then stop all input (go AFK). |
-| GM whisper / white room | Save a screenshot + log entry, then stop all input (go AFK). |
+| Any whisper (GM or not) / white room | Save a screenshot + log entry, then stop all input (go AFK). |
 | Rune solve fails | Wait 8 seconds, then retry. |
 | Stuck, character dies, connection drops | Nothing special in Phase 1. The user deals with it when back; Phase 3 adds recovery. |
 

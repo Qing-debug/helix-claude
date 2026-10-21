@@ -31,6 +31,8 @@ A rune left on the map curses it after a few minutes: mobs stop giving XP and dr
   2. the classical base-and-tip method in Helix `debugging_scripts/opus5.5-2026-09-23-stageb-on-spinning/` (`keypoints.py`; unaudited) and `docs/learning/rune-cv-workflow/workflow-3-arrow-base-tip.md`;
   3. the idea in `pipeline.py`'s TODO: across a burst, the arrow briefly moves against its spin direction, and that angle is the real direction.
   Or a combination, if it measures better.
+- **If spinning-arrow ground truth can't be established without the user, ship the best-measuring method flagged "accuracy unverified"** (in the code and in each session log), relying on the 8 s retry (user, 2026-10-21).
+- Passive screen capture while the user is away is allowed (no input; see Feature B), including to see what a rune spawn looks like.
 
 ## Constraints and facts
 
@@ -45,9 +47,25 @@ A rune left on the map curses it after a few minutes: mobs stop giving XP and dr
 ## Verification (first guess — tried early, gaps filled by Claude first)
 
 - **Static arrows:** Stage A/B test splits with known answers — end-to-end panel → arrow sequence.
-- **Spinning arrows:** real spinning bursts with known correct answers. **This is the expected gap**: existing bursts have no recorded answers and the base/tip swipe audit was never done. Claude first tries to establish ground truth itself (e.g. frames in a burst where the arrow is momentarily readable, agreement across independent methods, checked by eye on a sample); if it can't reach a trustworthy set, it asks the user — e.g. noting the accepted answer when solving runes by hand.
-- **Spawn detection:** full screenshots from the Helix datasets that show a rune on the minimap / on screen, and ones that don't.
+- **Spinning arrows:** real spinning bursts with known correct answers. **This is the expected gap**: existing bursts have no recorded answers and the base/tip swipe audit was never done. Claude first tries to establish ground truth itself (e.g. frames in a burst where the arrow is momentarily readable, agreement across independent methods, checked by eye on a sample). If it can't reach a trustworthy set, it ships flagged "accuracy unverified" (above) and accuracy is measured in supervised sessions instead.
+- **Spawn detection:** full screenshots from the Helix datasets that show a rune on the minimap / on screen, and ones that don't, plus FF2 frames from passive capture.
 - **In-game:** supervised sessions for sign-off.
+
+## Reliability targets
+
+*Set by Claude; the user can override any of them.*
+
+| What | Target |
+|---|---|
+| Static arrows | ≥99% of test-split panels with no spinning arrows read fully correct end to end (Stage A → Stage B → 4-arrow sequence). |
+| Spinning arrows | ≥95% per arrow on ground-truth bursts. Without ground truth: flagged "accuracy unverified", measured in supervised sessions. |
+| Spawn detection | ≥99% of rune-present frames detected; ≤0.1% false detections on rune-free frames. |
+| Solve result | Success/failure read correctly on every collected example. |
+| In-game sign-off (supervised, later) | Every rune that spawns in sign-off sessions (≥10 runes) solved within 2 min of spawning, retries included. |
+
+## Shipping
+
+Only code that really works is merged (user, 2026-10-21). C needs B's movement, and B isn't merged until its sign-off, so branch `p1c-runes` off `p1b-route-walking` and push it to `origin`. If B changes during its sign-off, C is rebased onto it. C **merges to `master` only after B has merged and C's own in-game sign-off passes**.
 
 ## Left to the builder
 
