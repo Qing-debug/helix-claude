@@ -1,0 +1,8 @@
+opencv-python==4.13.0.92
+numpy==2.5.1
+bettercam==1.0.0
+networkx==3.6.1
+returns==0.27.0
+Pillow==12.2.0
+matplotlib==3.11.0rc2
+bleak==3.0.2
