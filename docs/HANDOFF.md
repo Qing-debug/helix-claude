@@ -17,7 +17,7 @@
 
 ## The user's goal
 
-The user wanted **all of Phase 1 designed up front so they can set Claude off and leave.** The specs are approved; Claude now plans and builds while the user is away, stopping only for things that change in-game behaviour.
+The user wanted **all of Phase 1 designed up front so they can set Claude off and leave.** The specs are approved; Claude now plans and builds while the user is away, deciding as the user would on everything and contacting them only as H9 (`docs/decisions.md`) allows; its hard rules are unchanged.
 
 ## Answered by the user 2026-10-21 (folded into the specs)
 
