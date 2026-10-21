@@ -22,7 +22,7 @@ The user won't always be there. When something happens — a lie detector, a GM 
 ## Decided by the user
 
 - Lie detector, whisper, white room → screenshot + log, then AFK.
-- **Any whisper stops the bot**, not only confirmed-GM ones. A false stop is preferred to a missed GM whisper (user, 2026-10-21). Claude applies the same leaning to the lie detector and the white room.
+- **Any whisper stops the bot**, not only confirmed-GM ones. A false stop is preferred to a missed GM whisper (user, 2026-10-21). Claude applies the same leaning to the lie detector and the white room (fine for now, user, 2026-10-21).
 - Stuck / death / disconnect → nothing special; the user deals with it when back.
 - Claude may **download the ~10 Reddit screenshots** of the GMS lie detector found in research (thread r/Maplestory `1tu542t`) for use as test images.
 - The user has **no GM-whisper screenshot**; Claude finds what whispers and the white room look like itself, **researched inline** (not through the `deep-research-interactive` gate), with sources cited in this spec (user, 2026-10-21).
