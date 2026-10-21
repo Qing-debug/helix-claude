@@ -62,6 +62,6 @@ Keep them in sync when changing the format. Map CSVs live in `maps/`, which is g
 
 ## Repo conventions
 
-The upstream `.gitignore` keeps only what's needed to run the project. `docs/`, `scripts/`, `debugging_scripts/`, `data/`, `modeltraining/`, `runs/`, `maps/`, and root status docs (`RESUME.md`, `ISSUES.md`, `CLAUDE.md`, etc.) are untracked. Code comments sometimes cite those files (e.g. `docs/superpowers/map-editor/spec.md`, `ISSUES.md`). They aren't present in this clone.
+The upstream `.gitignore` keeps only what's needed to run the project. `scripts/`, `debugging_scripts/`, `data/`, `modeltraining/`, `runs/`, `maps/`, and root status docs (`RESUME.md`, `ISSUES.md`, etc.) are untracked. Unlike upstream, this repo **tracks `CLAUDE.md` and `docs/`**, so the vision doc, specs, and plans live in git history. Code comments sometimes cite upstream-only files (e.g. `docs/superpowers/map-editor/spec.md`, `ISSUES.md`). They aren't present in this clone.
 
 Commit messages use conventional-commit style with a scope, e.g. `feat(editor): ...`, `fix(vision): ...`.

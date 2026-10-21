@@ -27,7 +27,6 @@ maps/
 data/
 scripts/
 debugging_scripts/
-docs/
 modeltraining/
 runs/
 /RESUME.md
