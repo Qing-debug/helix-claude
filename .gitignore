@@ -38,3 +38,5 @@ runs/
 
 # Firmware build output (arduino-cli --output-dir)
 firmware/build/
+# arduino-cli 1.5.1 also exports binaries into <sketch>/build/<fqbn>/ on every compile
+firmware/Helix_BLE/build/
