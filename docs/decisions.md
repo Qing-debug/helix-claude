@@ -69,7 +69,7 @@ Hard rules unchanged: no bot in the game while Hong is away; live keystrokes onl
 
 Affects: how the orchestrator and its agents make decisions for the rest of the Phase 1 build; git actions (see H8).
 
-The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `8faa312` unless the entry names another commit (PA-D2, PA-D3, PA-D4, PA-D5 and the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c`, `-fix3d`, `-fix3e` = raised in fix units PA-fix1c, PA-fix3d, PA-fix3e, `-rev3a` = raised in review PA-rev3a).
+The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `6d4f677` unless the entry names another commit (the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c`, `-fix3d`, `-fix3e` = raised in fix units PA-fix1c, PA-fix3d, PA-fix3e, `-rev3a` = raised in review PA-rev3a).
 
 ## PAr-D1 (2026-10-21): Timing-realism tests run on the values the timing layer chose
 
@@ -89,7 +89,7 @@ Reason: the adjudicator confirmed every load-bearing claim (no `src/input` exist
 
 Affects: module boundaries for A and everything B–D import; plan A task C3 and the Files lines P1–D1.
 
-Ruling as Hong under H9; undo: one `git mv` plus an import rewrite after P1, and the same for `firmware/`. The undo list, with plan lines as of `75dd45e`: C3 (:203-292); the Files lines of P1–P5 and H1–D1 (:621, :762, :798, :823, :981, :1025, :1079, :1140, :1213, :1278, :1320, :1390); the command and import lines (H1's `$PY -m src.input.harness.listener` :1070, P4's logger and import text `src.input.link` :864, :901, :939, G1's test layout rule :434); tasks V1–V3 and D1; and the `firmware/` half: C1's shared `firmware/test/vectors.json` line (:179), F1 (:450-461), F2 (:468-497), F3 (:503 and its flash command :526-527), F4 (:572-573 and its compile and g++ commands :610, :613), F5 (:639 and its flash command :738), P1's vectors test (:623), V1's probe build (:1100-1101), H2's `firmware/README.md` reference (:1166), V3's reflash (:1347-1349) and D1 (:1390, :1397). `grep -nE 'src[./]input|firmware/' <plan>` lists every site.
+Ruling as Hong under H9; undo: one `git mv` plus an import rewrite after P1, and the same for `firmware/`. The undo list, with plan lines as of `6d4f677`: C3 (:203-296); the Files lines of P1–P5 and H1–D1 (:647, :788, :825, :853, :1027, :1071, :1136, :1206, :1306, :1380, :1423, :1498); the command and import lines (H1's `$PY -m src.input.harness.listener` :1127, P4's logger and import text `src.input.link` :896, :934, :979, G1's test layout rule :456); tasks V1–V3 and D1; and the `firmware/` half: C1's shared `firmware/test/vectors.json` line (:179), F1 (:472-483), F2 (:490-523), F3 (:529 and its flash command :552-553), F4 (:598-599 and its compile and g++ commands :636, :639), F5 (:665 and its flash command :764), P1's vectors test (:649), V1's probe build (:1159-1160), H2's `firmware/README.md` reference (:1237), V3's reflash (:1450-1452) and D1 (:1498, :1505). `grep -nE 'src[./]input|firmware/' <plan>` lists every site except G1's test layout rule (it names `tests/input/`).
 
 ## PA-D6 (2026-10-21): Timing model documented in spec A as built
 
@@ -99,7 +99,7 @@ Reason: it meets spec A's requirement that the timing model's sources be cited i
 
 Affects: spec A (new section at D1), plan A tasks D1, P2 and S1.
 
-Ruling as Hong under H9; undo: drop the D1 bullet 3 (plan lines 838–839), drop P2 Step 0, and restore the S1 precondition line (plan line 844).
+Ruling as Hong under H9; undo: drop the D1 bullet 3 (:1506-1530), drop P2 Step 0 (:790-798), and restore the S1 precondition line (:1535-1536).
 
 ## PA-adj2-D1 (2026-10-21): release_all() pre-empts a play() in flight from another thread
 
@@ -149,7 +149,7 @@ Reason: B gets feedback release through `walk(dir, upper_bound)` plus `release_a
 
 Affects: protocol validation rules and the firmware state model; how B releases arrows (supervised session to check that lifting the arrow between moves does not hurt movement).
 
-Ruling as Hong under H9; undo: if B's supervised session shows lifting the arrow between moves hurts movement, add op 0x04 PLAY_OPEN behind the version and op bytes (1–2 tasks, plus re-running A's hardware checks). Plan lines to revert, as of `75dd45e`: C1's "last mask is 0" rule :132-133, its closed-schedules paragraph :139-142 and the schedule-rule rejects :183; F4's reject-vector list :597-598; P1's invalid-schedule test :623-624; P3's validate and ends-all-up test :809-811; F5's `loop()` abort and all-up text :715-719; P4's shape-rule REJECTED text and test :863, :938; and the feedback-release text that rests on closed schedules (C3 :274, P5 :987, P5's test :1014). `grep -n "PA-D5\|last mask" <plan>` lists them (plus a reflash).
+Ruling as Hong under H9; undo: if B's supervised session shows lifting the arrow between moves hurts movement, add op 0x04 PLAY_OPEN behind the version and op bytes (1–2 tasks, plus re-running A's hardware checks). Plan lines to revert, as of `6d4f677`: C1's "last mask is 0" rule :132-133, its closed-schedules paragraph :139-142 and the schedule-rule rejects :183; F4's reject-vector list :623-624; P1's invalid-schedule test :649-650; P3's validate and ends-all-up test :839-841; F5's `loop()` abort and all-up text :741-745; P4's shape-rule REJECTED text and test :895, :978; and the feedback-release text that rests on closed schedules (C3 :275, P5 :1033, P5's test :1060). `grep -n "PA-D5\|last mask\|invalid schedule\|all-up" <plan>` lists them, with a few other all-up lines (plus a reflash).
 
 ## PA-adj1b-D1 (2026-10-21): InputLayer sends one release_all() after an uncertain failure
 
@@ -169,7 +169,7 @@ Reason: all 15 claims checked out. `sendReport` coalesces key-down and key-up (`
 
 Affects: firmware send path and the dependency use; plan A task F5.
 
-Ruling as Hong under H9; undo: about half a task to switch; revert F5 step 4's HID input-report lookup bullet (:652-665) and send-path bullet (:681-687), plan lines as of `75dd45e`, and reflash. The subscription-tracking bullet between them (:666-680, PA-adj1c-D1) uses the lookup's `inputReport` pointer and changes with it.
+Ruling as Hong under H9; undo: about half a task to switch; revert F5 step 4's HID input-report lookup bullet (:678-691) and send-path bullet (:707-713), plan lines as of `6d4f677`, and reflash. The subscription-tracking bullet between them (:692-706, PA-adj1c-D1) uses the lookup's `inputReport` pointer and changes with it.
 
 ## PA-adj1c-D1 (2026-10-21): Board tracks HID subscription and rejects PLAY if not subscribed
 
@@ -179,7 +179,7 @@ Reason: NimBLE's notify does not check subscription, so a report sent before Win
 
 Affects: the reject-code table and PONG flags in the protocol; the connect contract; firmware F5; plan A tasks C1 and P4.
 
-Ruling as Hong under H9; undo: C1 tables (plan lines 123–135), `vectors.json`, `protocol.h`, `protocol.py` and the P4 check. If Windows never sets the CCCD as expected, `connect()` fails loudly and V1 measures it.
+Ruling as Hong under H9; undo: C1 tables (:144-171), `vectors.json`, `protocol.h`, `protocol.py` and the P4 check. If Windows never sets the CCCD as expected, `connect()` fails loudly and V1 measures it.
 
 ## PA-D3 (2026-10-21): Python 3.14 venv and pinned dependency files
 
@@ -189,7 +189,7 @@ Reason: every file A ships is then installed and tested by A (H4). All pins have
 
 Affects: dependency files and the venv created by plan A task G1 (spec A "Left to the builder": groundwork).
 
-Ruling as Hong under H9; undo: four small plan edits, all in G1 (plan lines as of `75dd45e`). Item 1: restore the step 3 rune paragraph (:410-412, which now says no `requirements-rune.txt` is created) and list `requirements-rune.txt` in the Files line (:397), the note under the heading (:398) and the step 7 commit (:441). Item 2: revert step 2's expected `Python 3.14.0` line (:402-405). Item 3: drop the freeze sentence (step 7, :442-444). Item 4: drop the winrt pin (step 4, :415-417). H2 (:1174-1175) cross-refers to the pin and D1 (:1392-1394) repeats the Python 3.14.0 and rune-dependency facts, so both change with them.
+Ruling as Hong under H9; undo: four small plan edits, all in G1 (plan lines as of `6d4f677`). Item 1: restore the step 3 rune paragraph (:432-434, which now says no `requirements-rune.txt` is created) and list `requirements-rune.txt` in the Files line (:419), the note under the heading (:420) and the step 7 commit (:463). Item 2: revert step 2's expected `Python 3.14.0` line (:424-427). Item 3: drop the freeze sentence (step 7, :464-466). Item 4: drop the winrt pin (step 4, :437-439). H2 (:1245-1246) cross-refers to the pin and D1 (:1500-1502) repeats the Python 3.14.0 and rune-dependency facts, so both change with them.
 
 ## PA-D7 (2026-10-21): Harness listener blocks the bot's keys by default
 
@@ -199,7 +199,7 @@ Reason: it is the only option that keeps keys out of other windows if focus chan
 
 Affects: where harness keystrokes land; what a person at the PC can type during a run (arrows, E, Alt and Space are blocked system-wide while a run is on). Does not remove the check that MapleStory is not running (the hook is no barrier against the game's Raw Input; H7).
 
-Ruling as Hong under H9; undo: plan task H1 blocking bullet (plan lines 657–659) to default off, plus its default-flag test; no re-run of V1–V3.
+Ruling as Hong under H9; undo: plan task H1 blocking bullet (:1091-1101) to default off, plus its default-flag test; no re-run of V1–V3.
 
 ## PA-fix1c-D1 (2026-10-21): SendReport.accepted is None for RELEASE_ALL
 
@@ -223,7 +223,7 @@ Affects: data behaviour (the C5 timing fields), the log format and the `SendRepo
 
 Cost if wrong: two unused fields on the facade.
 
-Ruling as Hong under H9; undo: delete the two fields at C3 (:244-245), the field names and the Failure sentence at C5 (:334-338), and the test clause (:933-934). The M7 split at V1, H3 and V3 then loses its `accepted_ns` terms.
+Ruling as Hong under H9; undo: delete the two fields at C3 (:244-245) and C5 (:334, :336), and the test clause (:933-934).
 
 ## PA-fix3d-D1 (2026-10-21): faults.jsonl records each fault's stamps, and an entry with a null stamp FAILs H3 Faults
 
