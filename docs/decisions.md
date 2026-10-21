@@ -279,11 +279,11 @@ Keep as applied the harness-only C5 `FOCUS_LOST` row and `session.json` `focus_p
 
 Reason: the opus-xhigh adjudicator (PA-rev3b2) found that C3's InputError is unchanged and specs B–D don't read the row. Option B leaves recovered pauses untraceable (extras typed during a pause look like link faults), and option C leaves V3's invalid-run rule nothing to key on.
 
-Affects: the log format (C5 `commands.jsonl` and `session.json`), read only by the harness; plan A tasks C5, H1, H2, H3, H4, V2 and V3. m-e and m-f applied in `a488f00` and `bab0d3d`; cited in C5 by m-i in `6d4f677`.
+Affects: the log format (C5 `commands.jsonl` and `session.json`), read only by the harness; plan A tasks C5, H1, H2, H3, H4, V1, V2 and V3. Applied in `0ef978c`; m-e and m-f applied in `a488f00` and `bab0d3d`; cited in C5 by m-i in `6d4f677`.
 
 Cost if wrong: one unread diagnostic field (`focus_pauses`).
 
-Ruling as Hong under H9; undo: revert C5 :346-351 and :369-372 and the uses at H1 :1103-1104, H2 :1220-1224 / :1289-1294, H3 :1329-1331 / :1371-1373, V2 :1437 and V3 :1460-1465 (lines as of `6d4f677`; the ruling gave them as of `95ae0ed`).
+Ruling as Hong under H9; undo: revert C5 :346-351 and :369-371 and the uses at H1 :1103-1104, H2 :1220-1224 / :1289-1294, H3 :1329-1331 / :1371-1373, V2 :1437 and V3 :1460-1465 (lines as of `6d4f677`; the ruling gave them as of `95ae0ed`).
 
 ## PA-fix4b-D1 (2026-10-21): link.log stamps perf_counter_ns on every record; session.json has no clock_anchor
 
