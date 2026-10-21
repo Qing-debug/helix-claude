@@ -45,7 +45,7 @@ This feature also owns **how human-like the timing is**, because every keypress 
 - **Serial log** from the board over USB: what it received and when.
 - **A keystroke listener on this PC** that records which key events arrive from the HID keyboard and their timing, into a focused test window — game not running.
 - From that: every command type (single, hold, chord) arrives correctly, ordered, with no drops, over a long run (thousands of commands).
-- **Timing realism** checked statistically against the chosen human-timing model (distributions, no two identical sequences, no fixed rhythm).
+- **Timing realism** checked statistically against the chosen human-timing model (distributions, no two identical sequences, no fixed rhythm), on the values the timing layer chose; what arrives at the PC is compared with those values separately.
 
 ## Reliability targets
 
@@ -56,8 +56,8 @@ This feature also owns **how human-like the timing is**, because every keypress 
 | Delivery | 0 dropped, extra, or out-of-order key events over a soak of ≥10,000 commands mixing single presses, holds and chords (0 in 10,000 bounds the true error rate below 0.03% at 95% confidence). |
 | Failures are visible | Every injected fault (board reset mid-soak, PC Bluetooth off) is reported to the caller within 1 s. 0 silent losses. |
 | Latency | p99 from command sent to key-down seen by the PC listener ≤ 100 ms. Provisional: re-set once first measured. |
-| Holds | Measured hold within ±20 ms of the duration the timing layer chose, for ≥95% of holds. |
-| Timing realism | Each timing type (hold, gap, chord offset, reaction) fits its model (KS test, α = 0.01, ≥1,000 samples each). No run of ≥5 consecutive gaps repeats anywhere in the soak. |
+| Delivered timing | Each hold, chord offset and gap within one action, as measured at the PC listener, is within ±20 ms of the value the timing layer chose, for ≥95% of each type. The second key of every chord is never seen before the first. |
+| Timing realism | Each timing type (hold, gap, chord offset, reaction) fits its model (KS test, α = 0.01, ≥1,000 samples each), tested on the values the timing layer chose, not on times measured at the PC (the Bluetooth connection interval puts those on a grid; the Delivered timing row checks them). No run of ≥5 consecutive chosen gaps repeats anywhere in the soak. |
 | Connection | Session start connects 20/20 times without re-pairing, including after a board reset and after the PC's Bluetooth is toggled. A connected session holds 2 h with no drop. |
 
 ## Shipping
