@@ -69,7 +69,7 @@ Hard rules unchanged: no bot in the game while Hong is away; live keystrokes onl
 
 Affects: how the orchestrator and its agents make decisions for the rest of the Phase 1 build; git actions (see H8).
 
-The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `6d4f677` unless the entry names another commit (the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c`, `-fix3d`, `-fix3e` = raised in fix units PA-fix1c, PA-fix3d, PA-fix3e, `-rev3a` = raised in review PA-rev3a).
+The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `6d4f677` unless the entry names another commit (the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c`, `-fix3d`, `-fix3e`, `-fix4b` = raised in fix units PA-fix1c, PA-fix3d, PA-fix3e, PA-fix4b, `-rev3a` = raised in review PA-rev3a).
 
 ## PAr-D1 (2026-10-21): Timing-realism tests run on the values the timing layer chose
 
@@ -284,3 +284,15 @@ Affects: the log format (C5 `commands.jsonl` and `session.json`), read only by t
 Cost if wrong: one unread diagnostic field (`focus_pauses`).
 
 Ruling as Hong under H9; undo: revert C5 :346-351 and :369-372 and the uses at H1 :1103-1104, H2 :1220-1224 / :1289-1294, H3 :1329-1331 / :1371-1373, V2 :1437 and V3 :1460-1465 (lines as of `6d4f677`; the ruling gave them as of `95ae0ed`).
+
+## PA-fix4b-D1 (2026-10-21): link.log stamps perf_counter_ns on every record; session.json has no clock_anchor
+
+How a `link.log` time is tied to `perf_counter_ns`, the clock of every other C5 file: B. Drop `session.json` `clock_anchor`. A `logging.Filter` on H2's `link.log` handler sets `record.perf_ns = time.perf_counter_ns()` on every record, and C5's `link.log` format prints it. H2 Step 1 gains one test clause: a record logged through the handler carries a `perf_ns` that lies between two `perf_counter_ns()` reads taken before and after the log call. The other options were A (`clock_anchor`, one `[time_ns, perf_counter_ns]` pair read before `connect()`, applied provisionally in `5de889f`) and A′ (A plus a second pair at run end).
+
+Reason: the opus-xhigh adjudicator (PA-rev4a) showed that B is exact by construction and survives a wall-clock step and a hard crash over an unattended ≥2 h soak, and that no program parses `link.log`, so the line-format change breaks nothing.
+
+Affects: the log format (C5 `link.log` and `session.json`), read only by a person offline; plan A tasks C5 and H2. Plan lines as of `5af1e74`: C5 `session.json` :369-374, `link.log` :375-382; H2 "Log C5 files" :1227-1229, link log :1230-1234, Step 1 test :1276-1277. Applied in `5af1e74`.
+
+Cost if wrong: one extra number per `link.log` line.
+
+Ruling as Hong under H9; undo: revert the fix-round hunks (`5af1e74`: C5 :371-374 and :377-379; H2 :1227, :1231-1234 and :1276-1277) and restore `5de889f`'s m-c hunks (C5 `session.json`, C5 `link.log`, H2).
