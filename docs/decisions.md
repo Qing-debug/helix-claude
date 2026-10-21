@@ -69,7 +69,7 @@ Hard rules unchanged: no bot in the game while Hong is away; live keystrokes onl
 
 Affects: how the orchestrator and its agents make decisions for the rest of the Phase 1 build; git actions (see H8).
 
-The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `8faa312` and drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication).
+The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `8faa312` and drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c` = raised in fix unit PA-fix1c).
 
 ## PAr-D1 (2026-10-21): Timing-realism tests run on the values the timing layer chose
 
@@ -200,3 +200,27 @@ Reason: it is the only option that keeps keys out of other windows if focus chan
 Affects: where harness keystrokes land; what a person at the PC can type during a run (arrows, E, Alt and Space are blocked system-wide while a run is on). Does not remove the check that MapleStory is not running (the hook is no barrier against the game's Raw Input; H7).
 
 Ruling as Hong under H9; undo: plan task H1 blocking bullet (plan lines 657–659) to default off, plus its default-flag test; no re-run of V1–V3.
+
+## PA-fix1c-D1 (2026-10-21): SendReport.accepted is None for RELEASE_ALL
+
+C3's `SendReport.accepted` is `Accepted | None`, with None for RELEASE_ALL. This matches the protocol as built: RELEASE_ALL gets no ACCEPTED (PA-D1).
+
+Reason: nothing reads the field from a release report; the report keeps `sent_ns` and `written_ns` for V1's release-all measurement; and the alternative (option B) would slow, and add a false-failure mode to, D's stop path.
+
+Affects: the `SendReport` interface that B, C and D see; plan A tasks C3 and P4. Plan lines as of `75dd45e`: C3 `SendReport` :244-245; P4 `release_all` bullet :868 and its test :949 (the "raised as PA-fix1c-D1" parenthesis is gone). Applied in the PA-rev fix round (`f57a844`).
+
+Cost if wrong: a later consumer dereferences `.accepted` on a release report (an AttributeError, which the tests catch), or a type checker demands narrowing on play reports.
+
+Ruling as Hong under H9; undo: revert the one C3 line (:244), or move to option C (about 5 plan lines).
+
+## PA-fix1c-D1-adj-D1 (2026-10-21): SendReport records accepted_ns and done_ns so a latency miss can be split
+
+`SendReport` gains `accepted_ns: int | None` and `done_ns: int` (both `perf_counter_ns`). P4's notify callback records them when it decodes an ACCEPTED or a DONE, on the loop thread; release reports have `accepted_ns=None`. P4's test checks `sent_ns ≤ written_ns ≤ accepted_ns ≤ done_ns`. C5 adds "for a Failure the timing fields are null; `status`/`error` carry the InputError". The M7 split is defined at V1's M7 bullet.
+
+Reason: V3 reports a latency miss "with the M7 split", which needs `accepted_ns`; recording is free on the loop thread and additive; and the alternative (option B) would force another soak of at least 2 h to split a latency miss.
+
+Affects: data behaviour (the C5 timing fields), the log format and the `SendReport` interface that B to D see; plan A tasks C3, C5, P4, V1, H3 and V3. Plan lines as of `75dd45e`: C3 :244-245; C5 :334-338; P4 notify callback :855 and :906-907, `release_all` :868, tests :933-934 and :949; V1 M7 split :1114-1118; H3 Latency :1245 and its test :1259; V3 step 6 :1377. Applied in the PA-rev fix round (`6d48485`).
+
+Cost if wrong: two unused fields on the facade.
+
+Ruling as Hong under H9; undo: delete the two fields at C3 (:244-245), the field names and the Failure sentence at C5 (:334-338), and the test clause (:933-934). The M7 split at V1, H3 and V3 then loses its `accepted_ns` terms.
