@@ -69,7 +69,7 @@ Hard rules unchanged: no bot in the game while Hong is away; live keystrokes onl
 
 Affects: how the orchestrator and its agents make decisions for the rest of the Phase 1 build; git actions (see H8).
 
-The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `8faa312` unless the entry names another commit (PA-D2, PA-D3, PA-D4, PA-D5 and the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c` = raised in fix unit PA-fix1c).
+The entries below are rulings made as Hong under H9, each after an opus-xhigh adjudicator's read of the options. "Plan A" is `docs/superpowers/plans/2026-10-21-p1a-input.md`; plan line numbers in the undo steps are as of commit `8faa312` unless the entry names another commit (PA-D2, PA-D3, PA-D4, PA-D5 and the two PA-fix1c entries are as of `75dd45e`), and they drift once the plan is edited. Ids are the orchestrator's decision ids (PA = plan A, PAr = timing-model research, `-adj` = adjudication, `-fix1c`, `-fix3d`, `-fix3e` = raised in fix units PA-fix1c, PA-fix3d, PA-fix3e, `-rev3a` = raised in review PA-rev3a).
 
 ## PAr-D1 (2026-10-21): Timing-realism tests run on the values the timing layer chose
 
@@ -215,7 +215,7 @@ Ruling as Hong under H9; undo: revert the one C3 line (:244), or move to option 
 
 ## PA-fix1c-D1-adj-D1 (2026-10-21): SendReport records accepted_ns and done_ns so a latency miss can be split
 
-`SendReport` gains `accepted_ns: int | None` and `done_ns: int` (both `perf_counter_ns`). P4's notify callback records them when it decodes an ACCEPTED or a DONE, on the loop thread; release reports have `accepted_ns=None`. P4's test checks `sent_ns ≤ written_ns ≤ accepted_ns ≤ done_ns`. C5 adds "for a Failure the timing fields are null; `status`/`error` carry the InputError". The M7 split is defined at V1's M7 bullet.
+`SendReport` gains `accepted_ns: int | None` and `done_ns: int` (both `perf_counter_ns`). P4's notify callback records them when it decodes an ACCEPTED or a DONE, on the loop thread; release reports have `accepted_ns=None`. P4's test checks `sent_ns ≤ written_ns ≤ accepted_ns ≤ done_ns` (amended by PA-rev3a-D1, below: no order between `written_ns` and `accepted_ns`). C5 adds "for a Failure the timing fields are null; `status`/`error` carry the InputError". The M7 split is defined at V1's M7 bullet.
 
 Reason: V3 reports a latency miss "with the M7 split", which needs `accepted_ns`; recording is free on the loop thread and additive; and the alternative (option B) would force another soak of at least 2 h to split a latency miss.
 
@@ -224,3 +224,63 @@ Affects: data behaviour (the C5 timing fields), the log format and the `SendRepo
 Cost if wrong: two unused fields on the facade.
 
 Ruling as Hong under H9; undo: delete the two fields at C3 (:244-245), the field names and the Failure sentence at C5 (:334-338), and the test clause (:933-934). The M7 split at V1, H3 and V3 then loses its `accepted_ns` terms.
+
+## PA-fix3d-D1 (2026-10-21): faults.jsonl records each fault's stamps, and an entry with a null stamp FAILs H3 Faults
+
+Keep as applied: C5 `faults.jsonl` gains `launch_ns`, `fault_seen_ns` and `failure_ns`, and H3's Faults check fails an entry whose `injected_ns` or `reported_ns` is null. PA-rev3b's G1–G4 are additive clarifications (about 4 plan lines) for the fix round.
+
+Reason: the opus-xhigh adjudicator (PA-rev3b piece 1) found that reverting re-opens PA-rev I5, and a null entry would then crash the check or pass silently.
+
+Affects: the log format (C5 `faults.jsonl`) and H3's Faults check; plan A tasks C5, H2 and H3. Plan lines as of `6d4f677`: C5 `faults.jsonl` :358-368; H3 Faults :1341-1344. Applied in `0146783`; G1–G4 applied in `5de889f`, and cited in C5 by m-i in `6d4f677`.
+
+Cost if wrong: one more field set in a log that no consumer outside H3 reads.
+
+Ruling as Hong under H9; undo: revert the C5 `faults.jsonl` line (:358-368) and the H3 Faults null-entry sentence (:1343-1344) in `0146783`.
+
+## PA-rev3a-D1 (2026-10-21): P4's test does not order written_ns against accepted_ns (amends PA-fix1c-D1-adj-D1's test clause)
+
+P4's test asserts `sent_ns ≤ written_ns` and `sent_ns ≤ accepted_ns ≤ done_ns`, with no order between `written_ns` and `accepted_ns`, using a fake that sends the notification before the write completes: one early-notification test covers PONG, ACCEPTED, PLAY DONE and RELEASE_ALL DONE, shared with PA-rev3a N1. The M7 split's second part becomes `accepted_ns − sent_ns`. P4's ACCEPTED-wait wording is fixed (ACCEPTED within 300 ms of the write's completion; one that arrived while the write was in progress counts). This amends PA-fix1c-D1-adj-D1's test clause `sent_ns ≤ written_ns ≤ accepted_ns ≤ done_ns`; every field that ruling added stays.
+
+Reason: NimBLE runs `onWrite` before it sends the Write Response (`ble_att_svr.c:2345` → `:2353`, confirmed by the adjudicator), so the hardware does not order written against accepted.
+
+Affects: P4's test and its ACCEPTED wait; the M7 split defined at V1 and printed by H3; plan A tasks P4, V1 and H3. Plan lines as of `6d4f677`: P4 `play()` :884-886, tests :972-975 and the early-notification test :980-983; V1 M7 split :1173-1179; H3 Step 1 test :1355-1356. Applied in `c491d7e`.
+
+Cost if wrong: about zero (C5 logs all four stamps, so any split can be recomputed offline).
+
+Ruling as Hong under H9; undo: restore the clause at P4 (:972-974) and the V1 split (:1174-1176).
+
+## PA-rev3a-D2 (2026-10-21): close() fails pending commands with NOT_CONNECTED; connect() on a live session fails
+
+`close()` fails pending commands with NOT_CONNECTED (not a fault), and `connect()` on a live session returns `Failure("already connected")`. Wording added with it: `close()` with no session is a no-op; a PLAY parked at `_before_write` is never written after `close()`; H2 and V2 reconnect with `close()` then `connect()`; one C3 bullet states both.
+
+Reason: NOT_CONNECTED is the only existing InputError that is neither a fault nor a feedback signal. Option B's ABORTED would read as "arrived", and option C's LINK_LOST could false-PASS H3 Faults. Without the reconnect wording, V2's `reset_board()` rows false-FAIL.
+
+Affects: the `BleLink` session contract that B to D see (C3); plan A tasks C3, P4, H2 and V2. Plan lines as of `6d4f677`: C3 "Session end" :284-286; P4 abort seam :917-922, Session state :957-967, test :1005-1007; V2 steps 3-4 :1429-1434. Applied in `c491d7e`.
+
+Cost if wrong: one new InputError value later.
+
+Ruling as Hong under H9; undo: drop the C3 bullet (:284-286) and the P4/H2/V2 sentences (P4 :919-921, :957-959, :963 and :965-967, the last naming H2's soak driver; V2 :1430-1431, :1433-1434).
+
+## PA-rev3a-D3 (2026-10-21): Sample carries its steps and wire value; TimingType gains HOLD_CLIPPED
+
+A amended: C3 `Sample` gains `step_from: int | None`, `step_to: int | None` and `wire_100us: int | None` (None only for REACTION). `TimingType` gains `HOLD_CLIPPED = "hold_clipped"`, which is not a `MODEL` key (P2 says "for each MODEL type"). C5 drops `first_key`, which has had no producer or reader since `8faa312`.
+
+Reason: P3, C5 and H4's gated delivered-timing check already use these fields, and `ActionRecord.reaction` is a REACTION Sample with no steps.
+
+Affects: the C3 contract that B to D see and the C5 log format; plan A tasks C3, C5, P2, P3 and P5. Plan lines as of `6d4f677`: C3 :224-226 and the `MODEL` comment :231; C5 `commands.jsonl` :338-341; P2 :801-802; P3 :834-838; P5 :1050. Applied in `c491d7e`.
+
+Cost if wrong: one C3 edit; no code exists yet.
+
+Ruling as Hong under H9; undo: revert the C3 Sample/TimingType lines (:224-226) and restore `first_key` in C5 (:338-341).
+
+## PA-fix3e-D1 (2026-10-21): The soak log keeps a harness-only FOCUS_LOST row and session.json focus_pauses
+
+Keep as applied the harness-only C5 `FOCUS_LOST` row and `session.json` `focus_pauses`, completed by PA-rev3b's m-e and m-f text fixes.
+
+Reason: the opus-xhigh adjudicator (PA-rev3b2) found that C3's InputError is unchanged and specs B–D don't read the row. Option B leaves recovered pauses untraceable (extras typed during a pause look like link faults), and option C leaves V3's invalid-run rule nothing to key on.
+
+Affects: the log format (C5 `commands.jsonl` and `session.json`), read only by the harness; plan A tasks C5, H1, H2, H3, H4, V2 and V3. m-e and m-f applied in `a488f00` and `bab0d3d`; cited in C5 by m-i in `6d4f677`.
+
+Cost if wrong: one unread diagnostic field (`focus_pauses`).
+
+Ruling as Hong under H9; undo: revert C5 :346-351 and :369-372 and the uses at H1 :1103-1104, H2 :1220-1224 / :1289-1294, H3 :1329-1331 / :1371-1373, V2 :1437 and V3 :1460-1465 (lines as of `6d4f677`; the ruling gave them as of `95ae0ed`).
