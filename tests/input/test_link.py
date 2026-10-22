@@ -903,3 +903,54 @@ def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults
         assert fault_errors(lk) == faults
     finally:
         lk.close()
+
+
+# ---------------------------------------------------------------- a write blocked at session end (A-P4-R I2, P4 :1084-1086)
+
+
+@pytest.mark.parametrize("call", ["play", "release_all"])
+def test_command_blocked_in_its_write_fails_at_once_on_link_lost(link, board, call):
+    blocked = []
+
+    async def block_ping(client, seq, data):
+        blocked.append(time.perf_counter())
+        await asyncio.Event().wait()
+
+    board.ping = block_ping
+    board.play = board.release = hang
+    assert wait_until(lambda: blocked)
+    time.sleep(0.3)  # the keepalive miss lands 0.5 s after the first blocked PING: this command is mid-write by then
+    bg = Bg(link.play, tap_steps()) if call == "play" else Bg(link.release_all)
+    assert wait_until(lambda: link.faults(), timeout=1.5)
+    fault_s = link.faults()[0][0] / 1e9  # perf_counter and perf_counter_ns share a clock
+    assert bg.join().failure() == InputError.LINK_LOST
+    assert bg.t_end - fault_s < 0.1  # not the 0.5 s WRITE_TIMEOUT_S
+
+
+@pytest.mark.parametrize("end", ["close", "drop"])
+def test_play_blocked_in_its_write_fails_at_once_when_the_session_ends(link, board, end):
+    board.play = hang
+    bg = Bg(link.play, tap_steps())
+    assert wait_until(lambda: board.ops(OP_PLAY))
+    t = time.perf_counter()
+    board.client.drop() if end == "drop" else link.close()
+    assert bg.join().failure() == (InputError.LINK_LOST if end == "drop" else InputError.NOT_CONNECTED)
+    assert bg.t_end - t < 0.1
+
+
+def test_session_end_while_a_write_timeout_is_expiring(link, board):
+    """The write's own timeout has fired (task cancelled, not yet unwound) when the session ends: still a clean end."""
+    board.play = hang
+    bg = Bg(link.play, tap_steps())
+    assert wait_until(lambda: board.ops(OP_PLAY))
+
+    async def expire_then_end():
+        (cm,) = link._session.writes
+        cm.reschedule(link._loop.time())  # runs the timeout handler on the next loop iteration ...
+        link._loop.call_soon(link._end_session, InputError.LINK_LOST)  # ... and this right after it, before the task unwinds
+
+    asyncio.run_coroutine_threadsafe(expire_then_end(), link._loop).result(2.0)
+    assert bg.join().failure() == InputError.LINK_LOST
+    assert wait_until(lambda: board.client.disconnect_calls == 1)
+    assert fault_errors(link) == [InputError.LINK_LOST]
+    assert link.play(tap_steps()).failure() == InputError.NOT_CONNECTED

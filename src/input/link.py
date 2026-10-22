@@ -101,6 +101,7 @@ class _Session:
     start: float  # loop.time() at connect()'s Success
     keepalive: asyncio.Task | None = None
     tasks: set = field(default_factory=set)
+    writes: set = field(default_factory=set)  # asyncio.Timeout of each PLAY / RELEASE_ALL write in progress
 
 
 def _unmet(pong: Pong) -> list[str]:
@@ -279,6 +280,9 @@ class BleLink:
             self._fault(fault)
             log.warning("link fault: %s", fault)
         session.keepalive.cancel()
+        for cm in list(session.writes):  # a write blocked on a vanished peer must not hold its command (P4 :1086)
+            if not cm.expired():  # one whose own timeout has fired is already unwinding; reschedule() would raise
+                cm.reschedule(self._loop.time())
         for entry in list(self._pending.values()):
             self._resolve(entry, Failure(fault or InputError.NOT_CONNECTED))
         self._disconnect_task = self._loop.create_task(self._disconnect(session.client))
@@ -411,10 +415,16 @@ class BleLink:
             self._fault(InputError.ACK_TIMEOUT)
         return r
 
-    async def _write(self, entry: _Pending, client, data: bytes) -> bool:
-        """Write with response inside WRITE_TIMEOUT_S. False if the command is already resolved or the write failed."""
+    async def _write(self, entry: _Pending, session: _Session, data: bytes) -> bool:
+        """Write with response inside WRITE_TIMEOUT_S, cut short when the session ends (A-P4-R I2); kept inline, so it
+        has started when write_started is set. False if the command is already resolved or the write failed."""
         try:
-            await asyncio.wait_for(client.write_gatt_char(CMD_UUID, data, response=True), WRITE_TIMEOUT_S)
+            async with asyncio.timeout(WRITE_TIMEOUT_S) as cm:
+                session.writes.add(cm)
+                try:
+                    await session.client.write_gatt_char(CMD_UUID, data, response=True)
+                finally:
+                    session.writes.discard(cm)
         except Exception as e:  # noqa: BLE001 - TimeoutError included: both are WRITE_FAILED
             log.debug("%s seq=%d write failed: %r", entry.kind, entry.seq, e)
             self._resolve(entry, Failure(InputError.WRITE_FAILED))  # no-op if a fault or answer resolved it first
@@ -456,7 +466,7 @@ class BleLink:
                 return entry.final.result()
             entry.sent_ns = time.perf_counter_ns()
             entry.write_started = True
-            if (await self._write(entry, session.client, encoded.unwrap())
+            if (await self._write(entry, session, encoded.unwrap())
                     and await self._await_stage(entry, entry.accepted_evt, ACCEPT_TIMEOUT_S)
                     and await self._await_stage(entry, entry.done_evt, sum(deltas) / 10_000 + DONE_MARGIN_S)):
                 self._resolve(entry, Success(SendReport(seq, entry.sent_ns, entry.written_ns, entry.accepted_ns,
@@ -478,7 +488,7 @@ class BleLink:
                 self._resolve(other, Failure(InputError.ABORTED))
         entry.sent_ns = time.perf_counter_ns()
         entry.write_started = True
-        if (await self._write(entry, session.client, encode_release_all(entry.seq))
+        if (await self._write(entry, session, encode_release_all(entry.seq))
                 and await self._await_stage(entry, entry.done_evt, DONE_MARGIN_S)):
             self._resolve(entry, Success(SendReport(entry.seq, entry.sent_ns, entry.written_ns, None, entry.done_ns,
                                                     None, entry.done)))
