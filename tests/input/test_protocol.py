@@ -35,7 +35,7 @@ VECTORS = json.loads(VECTORS_PATH.read_text(encoding="utf-8"))
 SCHEDULE_REJECT_RULE = {
     "reject_n_0": "step count",
     "reject_n_17": "step count",  # also breaks "last mask": step count comes first
-    "reject_bit7_set": "bit 7",  # also changes no key among bits 0-6: bit 7 comes first
+    "reject_bit7_set": "bit 7",  # breaks only bit 7 (the XOR counts bit 7 as the changed bit, as protocol.h:72 does)
     "reject_two_keys_one_step": "exactly one key",
     "reject_step_changes_no_key": "exactly one key",
     "reject_last_mask_not_0": "last mask",
@@ -246,3 +246,10 @@ def test_transitions_of_teleport_vector():
 def test_transitions_tap():
     steps = [Step(0, Key.E), Step(800, Key(0))]
     assert transitions(steps) == [(0, Key.E, True), (800, Key.E, False)]
+
+
+def test_rule_order_for_multi_rule_schedules():
+    # A-F4-R choice 2: bit 7, then per-step delta, then one key; last mask before total delta.
+    assert "bit 7" in failure_msg(validate_schedule([Step(65536, Key(0x81)), Step(0, Key(0))]))
+    assert "per-step delta" in failure_msg(validate_schedule([Step(65536, Key(0x11)), Step(0, Key(0))]))
+    assert "last mask" in failure_msg(validate_schedule([Step(65535, Key.E), Step(65535, Key.LEFT | Key.E), Step(0, Key.E)]))
