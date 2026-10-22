@@ -156,7 +156,8 @@ class ProbeLink:
 
 class ProbeSink:
     """H1's Listener stand-in: in front unless `away_from_command` (1-based run_command count) is reached; stop()
-    writes the shared key log into <run dir>/keys.jsonl. `click` False: the start wait never sees the sink."""
+    appends the shared key log to <run dir>/keys.jsonl (the real listener opens it with "a", listener.py:254).
+    `click` False: the start wait never sees the sink."""
 
     def __init__(self, run_dir, keys, click=True, away_from_check=None):
         self.run_dir = run_dir
@@ -177,7 +178,7 @@ class ProbeSink:
 
     def stop(self):
         self.stopped = True
-        with open(self.run_dir / "keys.jsonl", "w", encoding="utf-8", newline="\n") as fh:
+        with open(self.run_dir / "keys.jsonl", "a", encoding="utf-8", newline="\n") as fh:
             for row in self.keys:
                 fh.write(json.dumps(row) + "\n")
 
@@ -354,6 +355,28 @@ def test_probe_streams_depend_on_the_seed_and_the_probe_name_only():
         return [g.integers(1 << 30) for g in probe.probe_streams(seed, name)]
     assert draw(5, "two") == draw(5, "two")
     assert draw(5, "two") != draw(6, "two") and draw(5, "two") != draw(5, "one")
+
+
+def test_exit_codes_blocked_and_stop_are_3_and_4_and_distinct_from_the_soaks():
+    # the run sheet and the operator rely on these literals (A-V1-Ra m2)
+    assert probe.EXIT_BLOCKED == 3 and probe.EXIT_STOP == 4
+    soak_codes = {soak.EXIT_OK, soak.EXIT_ABORT, soak.EXIT_REFUSED, soak.EXIT_INTERRUPTED}
+    assert soak_codes == {0, 1, 2, 130} and not soak_codes & {probe.EXIT_BLOCKED, probe.EXIT_STOP}
+
+
+def test_a_reused_run_dir_starts_each_probes_keys_jsonl_fresh(tmp_path, clock, two_dummies):
+    # A-V1-Ra m1: the listener appends to keys.jsonl; after a reboot the old qpc_ns can be larger than this run's,
+    # so stale lines would land in the last windows as extras / dropped deliveries
+    stale = json.dumps({"qpc_ns": 10**18, "vk": 69, "down": True, "injected": False, "tick_ms": 0, "repeat": False})
+    for name in ("one", "two"):
+        d = tmp_path / "run" / name
+        d.mkdir(parents=True)
+        (d / "keys.jsonl").write_text(stale + "\n", encoding="utf-8")
+    code, _ = _run(tmp_path, clock, probes=("one", "two"))
+    assert code == probe.EXIT_OK
+    for name in ("one", "two"):
+        text = (tmp_path / "run" / name / "keys.jsonl").read_text(encoding="utf-8")
+        assert stale not in text and len(text.splitlines()) == 4  # this run's two taps: down + up each
 
 
 def test_review_items_print_and_a_stop_ends_the_run(tmp_path, clock, monkeypatch, capsys):
@@ -713,6 +736,20 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
                             out.index("--output-dir $REPO/firmware/build $REPO"))
     assert i_off < i_run < i_head
     assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process") == 2
+
+
+def test_run_sheet_states_its_preconditions(capsys):
+    # A-V1-Ra m4 / Rb m2-m4: the printed sheet is what the operator follows
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    # run from the main tree (it has the .venv) with p1a-v1 merged
+    assert "the main tree, which has the .venv, with p1a-v1 merged into its branch" in out
+    assert "run from the main tree (REPO) with p1a-v1 merged into its branch" in out
+    # the board must already run HEAD's firmware, else steps 2e-2g (MapleStory check, PORT lookup, flash) first
+    assert "running HEAD's firmware (else do steps 2e-2g first)" in out
+    # step 2 only after step 1 exited 0; otherwise stop and report
+    assert "Only after step 1 exited 0; on exit 1, 3 or 4 stop and report" in out
+    assert out.index("before step 1") < out.index("1. Probes on HEAD's firmware") < out.index("2. M2 with START_JITTER")
 
 
 # ---- piece 3: raw plans through the InputLayer -------------------------------------------------------------

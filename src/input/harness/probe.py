@@ -58,7 +58,7 @@ from src.input.timing import TimingModel, TimingType, truncated_cdf
 _clock = time.perf_counter_ns
 _sleep = time.sleep
 
-EXIT_BLOCKED = 3  # a precondition failed (MapleStory, board port, sink never in front); nothing was sent
+EXIT_BLOCKED = 3  # a precondition failed (MapleStory, board port, sink never in front); nothing was sent in that probe
 EXIT_STOP = 4  # a probe's report asked to stop (plan V1: "stop and report")
 
 PROBE_ROOT = Path("data/probe")
@@ -856,8 +856,8 @@ def default_probes() -> tuple[str, ...]:
 # ---- the V1 live run sheet (printed, never executed) -----------------------------------------------
 
 PLAN_VARS = (
-    "REPO=/c/Users/Qing_programming/Desktop/helix-claude-clone   # plan A's value; use the checkout of the branch "
-    "under test",
+    "REPO=/c/Users/Qing_programming/Desktop/helix-claude-clone   # plan A's value: the main tree, which has the "
+    ".venv, with p1a-v1 merged into its branch (p1a-input) before the run",
     "PY=$REPO/.venv/Scripts/python.exe",
     'CLI="/c/Users/Qing_programming/AppData/Local/Programs/Arduino IDE/resources/app/lib/backend/resources/'
     'arduino-cli.exe"',
@@ -885,11 +885,13 @@ def run_sheet() -> list[str]:
     first = default_probes()
     lines = [
         "V1 live run sheet (printed by probe.py --run-sheet; probe.py executes none of it)",
-        "Shell: Git Bash at the repo root of the branch under test, except the PowerShell MapleStory check. Variables "
+        "Shell: Git Bash at the repo root of $REPO (below), except the PowerShell MapleStory check. Variables "
         "(plan A):",
         *[f"  {v}" for v in PLAN_VARS],
-        "Operator before step 1: MapleStory closed; board on its native USB port; 'Guiness' paired; session "
-        "unlocked; nothing else will take the foreground; type no secrets (keys.jsonl logs every key).",
+        "Operator before step 1: run from the main tree (REPO) with p1a-v1 merged into its branch; MapleStory "
+        "closed; board on its native USB port and running HEAD's firmware (else do steps 2e-2g first); 'Guiness' "
+        "paired; session unlocked; nothing else will take the foreground; type no secrets (keys.jsonl logs every "
+        "key).",
         "1. Probes on HEAD's firmware (probe.py runs the MapleStory check and the board-port lookup itself; exit 3 = "
         "BLOCKED, stop):",
         f"   {_probe_call(first)}",
@@ -899,7 +901,8 @@ def run_sheet() -> list[str]:
         "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
         "stop (m6: a silent drop; release_ordering: the writes can reorder; the probes after it are not run). "
         "Reports: data/probe/$RUN/<probe>/report.txt.",
-        "2. M2 with START_JITTER off (PA-rev I8), after step 1's m2 ran on HEAD's firmware:",
+        "2. M2 with START_JITTER off (PA-rev I8). Only after step 1 exited 0; on exit 1, 3 or 4 stop and report (the "
+        "board is still on HEAD's firmware):",
         f"   a. {MAPLE_CHECK}",
         f"   b. {PORT_LOOKUP}",
         f"   c. {FLASH_NOJITTER}   # probe-only image; expected exit 0 (~1-2 min)",
@@ -948,6 +951,7 @@ def _run_probe(p: Probe, cfg: ProbeConfig, link: BleLink, start_sink: Callable[[
                     _check_processes(writer)
                     last_check_ns = _clock()
 
+            (writer.run_dir / listener.KEYS_FILE).write_bytes(b"")  # the listener appends: start on a fresh file
             try:
                 sink = start_sink(writer.run_dir)
             except OSError as e:
