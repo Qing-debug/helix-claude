@@ -196,6 +196,28 @@ def test_walk_with_the_real_model_rejects_nonsense_without_raising():
     assert not is_successful(r)
 
 
+@pytest.mark.parametrize("huge", [13107.2, 1e9, 1e160, 1e300])
+def test_walk_with_an_intended_ms_that_cannot_fit_a_step_is_a_failure_without_drawing(huge):
+    # every WALK draw is >= intended_ms / 2 (C4), so above 2 x 6553.55 ms it exceeds the per-step cap anyway;
+    # 1e160 and up would make TimingModel.walk raise OverflowError at intended_ms ** 2.
+    m = StubModel(walk=500.0)
+    r = walk(m, Key.LEFT, huge)
+    assert not is_successful(r)
+    assert m.draws == 0
+
+
+@pytest.mark.parametrize("huge", [13107.2, 1e160, 1e300])
+def test_walk_with_the_real_model_rejects_a_huge_intended_ms_without_raising(huge):
+    r = walk(TimingModel(np.random.default_rng(1)), Key.LEFT, huge)
+    assert not is_successful(r)
+
+
+def test_walk_at_the_largest_intended_ms_is_still_drawn():
+    m = StubModel(walk=6553.5)
+    assert is_successful(walk(m, Key.LEFT, 13107.1))
+    assert m.draws == 1
+
+
 # ---------------------------------------------------------------- sequence
 
 
@@ -317,6 +339,20 @@ def test_sequence_clips_a_non_adjacent_repeat_too():
     assert p.samples[0].type is TimingType.HOLD_CLIPPED
     assert span_sum(p, p.samples[0]) == 1850
     assert_plan_ok(p)
+
+
+def test_sequences_over_three_keys_validate_with_every_hold_and_gap_at_its_extreme():
+    # Longest hold (250 ms) and shortest gap (60 ms) maximise overlap. Every key list of length 1-8 over three keys
+    # (9 840 lists) must still be valid: the clip must cover non-adjacent repeats (A-P3-D1), not only adjacent ones.
+    clipped = 0
+    for n in range(1, 9):
+        for keys in itertools.product([Key.LEFT, Key.RIGHT, Key.UP], repeat=n):
+            r = sequence(StubModel(hold=250.0, gap=60.0), list(keys))
+            assert is_successful(r), (keys, r)
+            plan = r.unwrap()
+            assert_plan_ok(plan)
+            clipped += sum(s.type is TimingType.HOLD_CLIPPED for s in plan.samples)
+    assert clipped > 0
 
 
 # ---------------------------------------------------------------- property tests, real model
