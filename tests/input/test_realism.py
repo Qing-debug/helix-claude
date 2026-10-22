@@ -357,3 +357,14 @@ def test_cli_survives_a_cp1252_stdout(tmp_path, monkeypatch):
     realism.main([str(write_run(tmp_path, rows, events_for(rows[0])))])
     sys.stdout.flush()
     assert "≥" in buf.getvalue().decode("utf-8")
+
+
+def test_stray_key_before_sent_ns_does_not_skew_reaction_residual_or_measured_reaction(tmp_path):
+    """A-H3-R m4 carried into H4 (A-H4 concern 3): the first key-down is taken at or after sent_ns."""
+    tap = actions.tap(model(), Key.E)
+    rows = [plan_row(1, tap, reaction_ms=200.0, waited_ms=150.0)]
+    keys = [e for r in rows for e in events_for(r)]
+    stray = {"qpc_ns": rows[0]["sent_ns"] - 20 * MS, "vk": 0x41, "down": True, "injected": False,
+             "tick_ms": 0, "repeat": False}
+    out = realism.realism(write_run(tmp_path, rows, keys + [stray]))
+    assert "p50 -30.000 ms" in by_name(out, "Reaction residual").summary     # not -70 ms (the stray 20 ms before sent)

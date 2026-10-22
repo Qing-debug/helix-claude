@@ -511,3 +511,95 @@ def test_cli_prints_targets_verbatim_through_a_cp1252_stdout(tmp_path, monkeypat
 @pytest.mark.parametrize("verdict", ["INFO", "n/a"])
 def test_non_gating_verdicts_do_not_fail(verdict):
     assert not analyze.Check("x", verdict, "s").failed
+
+
+# ---- H3 review minors m1-m5 (A-H34-fix) ---------------------------------------------
+
+def test_m1_failed_command_inside_a_dead_stretch_does_not_make_earlier_silent_commands_drops(tmp_path):
+    cmds, _ = perfect(10)
+    cmds[4] = failed_cmd(5)                              # a Failure among the silent OK commands
+    keys = [e for c in cmds[:2] for e in events_for(c)]  # listener dies after seq 2
+    res = checks(write_run(tmp_path, cmds, keys))
+    assert f"LISTENER_DEAD from seq 3 (last listener event qpc_ns {keys[-1]['qpc_ns']})" in text(res["Listener liveness"])
+    assert "dropped 0 extra 0 out-of-order 0" in text(res["Delivery"])
+    assert "unmeasured 8" in text(res["Delivery"])
+
+
+def test_m1_a_failure_still_breaks_the_run_of_five(tmp_path):
+    cmds, _ = perfect(10)
+    cmds[3] = failed_cmd(4)
+    cmds[8] = failed_cmd(9)                              # OK runs in the silent tail: seq 3, seq 5-8 (4), seq 10: never 5 in a row
+    keys = [e for c in cmds[:2] for e in events_for(c)]
+    res = checks(write_run(tmp_path, cmds, keys))
+    assert res["Listener liveness"].verdict == "PASS"
+
+
+def fault_lines(c: analyze.Check) -> list[str]:
+    return [d for d in c.details if d.startswith("fault ")]
+
+
+def test_m2_silent_loss_after_the_later_fault_does_not_fail_the_earlier_fault(tmp_path):
+    cmds, keys = perfect(7)
+    keys = [e for e in keys if not 5 * S <= e["qpc_ns"] < 6 * S]          # command 6 lost
+    faults = [fault(1 * S, 1 * S + 10 * MS), fault(4 * S, 4 * S + 10 * MS)]
+    res = checks(write_run(tmp_path, cmds, keys, faults=faults))["Faults"]
+    assert res.verdict == "FAIL"
+    f1, f2 = fault_lines(res)
+    assert ": PASS" in f1 and ": FAIL" in f2
+    assert text(res).count("silent loss after fault: seq 6") == 1
+    assert "1/2 faults pass" in res.summary
+
+
+def test_m2_silent_loss_between_two_faults_fails_only_the_earlier_one(tmp_path):
+    cmds, keys = perfect(7)
+    keys = [e for e in keys if not 2 * S <= e["qpc_ns"] < 3 * S]          # command 3 lost (done 2.6 s)
+    faults = [fault(1 * S, 1 * S + 10 * MS), fault(4 * S, 4 * S + 10 * MS)]
+    res = checks(write_run(tmp_path, cmds, keys, faults=faults))["Faults"]
+    f1, f2 = fault_lines(res)
+    assert ": FAIL" in f1 and ": PASS" in f2
+    assert "1/2 faults pass" in res.summary
+
+
+def test_m3_extra_events_are_printed_with_their_vk(tmp_path):
+    cmds, keys = perfect(3)
+    t = cmds[1]["sent_ns"] + 300 * MS
+    keys += [key(t, 0x41, True), key(t + MS, 0x41, False),              # non-bot A inside seq 2's window
+             key(50 * MS, 0x0D, True),                                  # non-bot Enter before the first window
+             key(cmds[2]["sent_ns"] + 300 * MS, VK[Key.E], True)]      # a bot key
+    res = text(checks(write_run(tmp_path, cmds, keys))["Delivery"])
+    assert "0x41 down (not a bot key)" in res and "0x41 up (not a bot key)" in res
+    assert "extra outside any command window: 1" in res and "0x0D down (not a bot key)" in res
+    assert "E 0x45 down" in res and "E 0x45 down (not a bot key)" not in res
+    assert "extra 4" in res                                              # totals unchanged: 2 + 1 outside + 1
+
+
+def test_m4_stray_key_before_sent_ns_is_not_the_first_down(tmp_path):
+    cmds, keys = perfect(3)
+    keys.append(key(cmds[1]["sent_ns"] - 50 * MS, 0x41, True))           # inside seq 2's window, before it was sent
+    dm = analyze.match_delivery(analyze.load_run(write_run(tmp_path, cmds, keys)))
+    m = dm.commands[1]
+    assert m.first_down_ns == cmds[1]["sent_ns"] + LATENCY
+    assert all(x.first_down_ns - x.row["sent_ns"] >= 0 for x in dm.commands)
+    assert analyze.m7_split(dm.commands)["total"] == (20.0, 20.0)
+
+
+def test_m4_command_with_only_a_pre_send_key_down_has_no_first_down(tmp_path):
+    cmds, keys = perfect(2)
+    keys = [e for e in keys if e["qpc_ns"] < SPACING] + [key(cmds[1]["sent_ns"] - 50 * MS, 0x41, True)]
+    dm = analyze.match_delivery(analyze.load_run(write_run(tmp_path, cmds, keys)))
+    assert dm.commands[1].first_down_ns is None
+
+
+SPEC = Path(__file__).resolve().parents[2] / "docs" / "superpowers" / "specs" / "2026-10-21-p1a-input-over-bluetooth-design.md"
+
+
+@pytest.mark.parametrize("name", ["TARGET_DELIVERY", "TARGET_FAULTS", "TARGET_LATENCY"])
+def test_m5_gated_targets_appear_verbatim_in_the_spec(name):
+    assert f"| {getattr(analyze, name)} |" in SPEC.read_text(encoding="utf-8")   # the whole table cell
+
+
+def test_m5_printed_checks_carry_the_trailing_spec_text(tmp_path):
+    cmds, keys = perfect(2)
+    res = checks(write_run(tmp_path, cmds, keys))
+    assert "bounds the true error rate below 0.03% at 95% confidence)." in text(res["Delivery"])
+    assert "Provisional: re-set once first measured." in text(res["Latency"])

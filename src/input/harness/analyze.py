@@ -30,7 +30,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 from src.input.harness.listener import BOT_VKS, VK_BY_KEY
 from src.input.protocol import Key, Step, transitions
@@ -50,10 +50,11 @@ KEY_BY_VK: dict[int, Key] = {vk: k for k, vk in VK_BY_KEY.items()}
 
 # spec docs/superpowers/specs/2026-10-21-p1a-input-over-bluetooth-design.md, targets table (L56-L61)
 TARGET_DELIVERY = ("0 dropped, extra, or out-of-order key events over a soak of ≥10,000 commands mixing single "
-                   "presses, holds and chords")
+                   "presses, holds and chords (0 in 10,000 bounds the true error rate below 0.03% at 95% confidence).")
 TARGET_FAULTS = ("Every injected fault (board reset mid-soak, PC Bluetooth off) is reported to the caller within "
                  "1 s. 0 silent losses.")
-TARGET_LATENCY = "p99 from command sent to key-down seen by the PC listener ≤ 100 ms."
+TARGET_LATENCY = ("p99 from command sent to key-down seen by the PC listener ≤ 100 ms. Provisional: re-set once "
+                  "first measured.")
 TARGET_STARTS = ("Session start connects 20/20 times without re-pairing, including after a board reset and after "
                  "the PC's Bluetooth is toggled.")
 TARGET_DROPS = "A connected session holds 2 h with no drop."
@@ -118,6 +119,7 @@ class Alignment:
     extra: int
     out_of_order: int
     pairs: dict[int, int]             # expected index -> observed index, for the 'equal' opcodes
+    extra_events: tuple[tuple[int, bool], ...] = ()   # the (vk, down) counted in `extra`, in observed order
 
 
 def align(expected: Sequence[tuple[int, bool]], observed: Sequence[tuple[int, bool]]) -> Alignment:
@@ -133,7 +135,9 @@ def align(expected: Sequence[tuple[int, bool]], observed: Sequence[tuple[int, bo
             missing.update(expected[i1:i2])
             surplus.update(observed[j1:j2])
     moved = sum((missing & surplus).values())
-    return Alignment(sum(missing.values()) - moved, sum(surplus.values()) - moved, moved, pairs)
+    extras = surplus - missing
+    return Alignment(sum(missing.values()) - moved, sum(surplus.values()) - moved, moved, pairs,
+                     tuple(extras.elements()))
 
 
 # ---- listener liveness and delivery matching --------------------------------------------
@@ -149,14 +153,17 @@ def listener_liveness(commands: Sequence[Row], windows: Sequence[tuple[int, floa
     """LISTENER_DEAD: >= 5 consecutive DONE OK commands with no keys.jsonl event from the first one's window
     start to the end of the log (PA-rev I4: silence followed by any event is not a dead hook)."""
     last = keys[-1]["qpc_ns"] if keys else None
-    run_start, run_len = 0, 0
+    first_ok, run_len = None, 0      # first DONE OK command of the silent tail; DONE OK run length in it
     for i, (row, (start, _)) in enumerate(zip(commands, windows)):
-        if (last is None or start > last) and is_ok(row):
-            if run_len == 0:
-                run_start = i
+        if last is not None and start <= last:
+            first_ok, run_len = None, 0
+        elif is_ok(row):
+            first_ok = i if first_ok is None else first_ok
             run_len += 1
             if run_len >= LISTENER_DEAD_N:
-                return Liveness(run_start, commands[run_start]["seq"], last)
+                # A Failure inside the silent tail breaks the run of 5 but not the silence: the DONE OK commands
+                # before it are as unmeasured as the ones after (A-H3-R m1).
+                return Liveness(first_ok, commands[first_ok]["seq"], last)
         else:
             run_len = 0
     return Liveness(None, None, last)
@@ -169,7 +176,7 @@ class CommandMatch:
     window: tuple[int, float]
     observed: list[Row]               # listener transitions in the window, by qpc_ns
     alignment: Alignment | None       # None for a failed command
-    first_down_ns: int | None         # first observed key-down in the window
+    first_down_ns: int | None         # first observed key-down in the window at or after sent_ns (A-H3-R m4)
 
 
 @dataclass(frozen=True)
@@ -197,7 +204,8 @@ def match_delivery(run: RunLog) -> DeliveryMatch:
     for i in range(n_measured):
         row, obs = cmds[i], per[i]
         al = align(expected_transitions(row), [(e["vk"], e["down"]) for e in obs]) if is_ok(row) else None
-        first_down = next((e["qpc_ns"] for e in obs if e["down"]), None)
+        sent = row["sent_ns"]      # a Failure may have no sent_ns; nothing bot-made goes down before it is sent
+        first_down = next((e["qpc_ns"] for e in obs if e["down"] and (sent is None or e["qpc_ns"] >= sent)), None)
         matches.append(CommandMatch(row["seq"], row, windows[i], obs, al, first_down))
     return DeliveryMatch(matches, cmds[n_measured:], outside, live)
 
@@ -252,6 +260,15 @@ def _seqs(rows: Sequence[Row]) -> str:
     return ", ".join(str(r["seq"]) for r in rows)
 
 
+def _events(events: Iterable[tuple[int, bool]]) -> str:
+    """``E 0x45 down`` for a bot key, ``0x41 down (not a bot key)`` for any other (an operator or the OS)."""
+    out = []
+    for vk, down in events:
+        label = f"0x{vk:02X} {'down' if down else 'up'}"
+        out.append(f"{KEY_BY_VK[vk].name} {label}" if vk in KEY_BY_VK else f"{label} (not a bot key)")
+    return ", ".join(out)
+
+
 def check_liveness(dm: DeliveryMatch) -> Check:
     live = dm.liveness
     if live.dead_from_seq is None:
@@ -274,9 +291,11 @@ def check_delivery(run: RunLog, dm: DeliveryMatch) -> Check:
     no_fault = not run.faults
     details = [f"seq {m.seq}: dropped {m.alignment.dropped} extra {m.alignment.extra} "
                f"out-of-order {m.alignment.out_of_order}"
+               + (f" (extra: {_events(m.alignment.extra_events)})" if m.alignment.extra_events else "")
                for m in ok if m.alignment.dropped or m.alignment.extra or m.alignment.out_of_order]
     if dm.outside:
-        details.append(f"extra outside any command window: {len(dm.outside)}")
+        details.append(f"extra outside any command window: {len(dm.outside)} "
+                       f"({_events((e['vk'], e['down']) for e in dm.outside)})")
     if injected:
         details.append(f"injected events: {injected} (every observed event must have injected=false)")
     if failed:
@@ -319,6 +338,7 @@ def check_faults(run: RunLog, dm: DeliveryMatch) -> Check:
     if not run.faults:
         return Check("Faults", "n/a", "no faults.jsonl entries (no injected fault)")
     details, bad = [], 0
+    injected = sorted(f["injected_ns"] for f in run.faults if f["injected_ns"] is not None)
     for n, f in enumerate(run.faults, 1):
         inj, rep = f["injected_ns"], f["reported_ns"]
         if inj is None or rep is None:
@@ -327,8 +347,10 @@ def check_faults(run: RunLog, dm: DeliveryMatch) -> Check:
                            "(fault moment not observed, or fault never reported)")
             continue
         late = rep - inj > FAULT_REPORT_LIMIT_NS
+        # "after the fault" ends where the next fault is injected: a loss after fault k+1 is fault k+1's (A-H3-R m2)
+        until = next((t for t in injected if t > inj), math.inf)
         lost = [m.row for m in dm.commands if m.alignment is not None and m.alignment.dropped
-                and m.row["done_ns"] is not None and m.row["done_ns"] > inj]
+                and m.row["done_ns"] is not None and inj < m.row["done_ns"] <= until]
         bad += bool(late or lost)
         details.append(f"fault {n} {f['kind']}: {'FAIL' if late or lost else 'PASS'} reported after "
                        f"{(rep - inj) / NS_PER_MS:.3f} ms ({f['error']})")
