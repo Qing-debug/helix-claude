@@ -21,23 +21,39 @@ sends nothing and pauses: once a second, at most 10 times, it repeats the bring-
 `Listener.bring_sink_to_foreground()`, whose return value is a fresh `GetForegroundWindow()` check). Sink back: the
 pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not back: the command's row is the
 `FOCUS_LOST` row and the caller takes the abort path (`release_all()`, close the writer, non-zero exit).
+
+Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (MapleStory check at start
+and every 60 s, the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
+command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C), `main` the CLI:
+
+    python -m src.input.harness.soak --commands 10000 --seed 1 [--min-hours H] [--out DIR] [--short]
+                                     [--faults reset_board=5,bluetooth_off_on=5]
 """
 from __future__ import annotations
 
+import argparse
+import csv
+import datetime
 import json
 import logging
 import subprocess
+import sys
 import time
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
+import numpy as np
 from returns.pipeline import is_successful
-from returns.result import Result
+from returns.result import Failure, Result, Success
 
-from src.input.input_layer import ActionRecord
-from src.input.link import InputError, SessionInfo
-from src.input.protocol import Pong, encode_play
+from src.input.harness import faults, listener
+from src.input.input_layer import ActionRecord, InputLayer
+from src.input.link import BleLink, InputError, SessionInfo
+from src.input.protocol import Key, Pong, encode_play
+from src.input.timing import TimingModel, TimingType
 
 # Seams the tests monkeypatch (as input_layer.py); _clock is perf_counter_ns, the clock of every C5 file.
 _clock = time.perf_counter_ns
@@ -320,3 +336,349 @@ def run_command(writer: RunWriter, sink: Sink, seq: int, action: str,
     writer.write_command(row)
     writer.drain()
     return CommandOutcome(row, result, returned_ns)
+
+
+# ---- command mix (plan H2) -----------------------------------------------------------------------
+
+ARROWS = (Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN)
+TAP_KEYS = ARROWS + (Key.E, Key.SPACE, Key.ALT)  # Alt only alone: a tap (or jump / drop), never in a sequence
+WALK_KEYS = (Key.LEFT, Key.RIGHT)  # walking is horizontal; the plan names no walk direction
+SEQUENCE_KEYS = ARROWS + (Key.E, Key.SPACE)  # no Alt, so never Alt with Space
+MIX = (("tap", 0.25), ("walk", 0.20), ("teleport", 0.25), ("drop", 0.10), ("jump", 0.05), ("sequence", 0.15))
+WALK_T_MS = (300.0, 3000.0)  # T ~ U(300, 3000) ms
+SEQUENCE_LEN = (2, 5)  # inclusive, uniform, keys drawn with repeats
+
+KS_TYPES = (TimingType.HOLD, TimingType.GAP, TimingType.CHORD_OFFSET, TimingType.RELEASE_LAG, TimingType.REACTION,
+            TimingType.WALK)
+MIN_SAMPLES_PER_TYPE = 1000  # per KS type, for a run H4 judges (A-PF I6)
+
+
+@dataclass(frozen=True)
+class Command:
+    action: str  # the InputLayer method: tap, walk, teleport, drop, jump, sequence
+    keys: tuple[Key, ...] = ()  # tap key, walk / teleport direction, or the sequence
+    intended_ms: float | None = None  # a walk's T
+
+
+def _streams(seed: int) -> list[np.random.Generator]:
+    """Independent generators for the mix, the timing model and the fault indexes, all from one seed."""
+    return [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(3)]
+
+
+def command_mix(rng: np.random.Generator) -> Iterator[Command]:
+    """The plan's mix, one command at a time, without end (a `--min-hours` run can outlast N)."""
+    names = [a for a, _ in MIX]
+    weights = [w for _, w in MIX]
+    while True:
+        action = names[rng.choice(len(names), p=weights)]
+        if action == "tap":
+            yield Command(action, (TAP_KEYS[rng.integers(len(TAP_KEYS))],))
+        elif action == "walk":
+            yield Command(action, (WALK_KEYS[rng.integers(len(WALK_KEYS))],), float(rng.uniform(*WALK_T_MS)))
+        elif action == "teleport":
+            yield Command(action, (ARROWS[rng.integers(len(ARROWS))],))
+        elif action == "sequence":
+            n = int(rng.integers(SEQUENCE_LEN[0], SEQUENCE_LEN[1] + 1))
+            yield Command(action, tuple(SEQUENCE_KEYS[i] for i in rng.integers(len(SEQUENCE_KEYS), size=n)))
+        else:
+            yield Command(action)
+
+
+def plan_mix(seed: int, n: int) -> list[Command]:
+    """The first `n` commands of the mix for `seed` (the ones a run issues first)."""
+    mix = command_mix(_streams(seed)[0])
+    return [next(mix) for _ in range(n)]
+
+
+def sample_counts(commands: list[Command]) -> Counter:
+    """Chosen samples per TimingType that `commands` draw (a clipped sequence hold counts as the HOLD it draws)."""
+    counts: Counter = Counter()
+    for c in commands:
+        counts[TimingType.REACTION] += 1  # every command has a stimulus
+        if c.action in ("tap", "jump"):
+            counts[TimingType.HOLD] += 1
+        elif c.action == "walk":
+            counts[TimingType.WALK] += 1
+        elif c.action in ("teleport", "drop"):
+            counts.update((TimingType.CHORD_OFFSET, TimingType.HOLD, TimingType.RELEASE_LAG))
+        elif c.action == "sequence":
+            counts[TimingType.HOLD] += len(c.keys)
+            counts[TimingType.GAP] += len(c.keys) - 1
+    return counts
+
+
+def dispatch(layer: InputLayer, cmd: Command, stimulus_ns: int) -> Result[ActionRecord, InputError]:
+    if cmd.action == "tap":
+        return layer.tap(cmd.keys[0], stimulus_ns)
+    if cmd.action == "walk":
+        return layer.walk(cmd.keys[0], cmd.intended_ms, stimulus_ns)
+    if cmd.action == "teleport":
+        return layer.teleport(cmd.keys[0], stimulus_ns)
+    if cmd.action == "drop":
+        return layer.drop(stimulus_ns)
+    if cmd.action == "jump":
+        return layer.jump(stimulus_ns)
+    return layer.sequence(cmd.keys, stimulus_ns)
+
+
+# ---- faults ----------------------------------------------------------------------------------------
+
+FAULT_KINDS = ("reset_board", "bluetooth_off_on")
+BT_OFF_SECONDS = 5.0  # V2 step 4's fault soak runs bluetooth_off_on(5) (plan Task V2)
+
+# Seam: the tests replace these with fakes. Each takes a fresh FaultStamps and fills it (faults.py).
+INJECTORS: dict[str, Callable[[faults.FaultStamps], Result[None, str]]] = {
+    "reset_board": lambda stamps: faults.reset_board(stamps),
+    "bluetooth_off_on": lambda stamps: faults.bluetooth_off_on(BT_OFF_SECONDS, stamps),
+}
+
+
+def fault_indexes(seed: int, n: int, counts: dict[str, int]) -> dict[int, str]:
+    """Seeded, distinct command indexes in 1..n-1 (the fault is injected just before that command) -> kind."""
+    pool = _streams(seed)[2].permutation(np.arange(1, n))
+    out: dict[int, str] = {}
+    pos = 0
+    for kind in FAULT_KINDS:
+        k = counts.get(kind, 0)
+        for idx in pool[pos:pos + k]:
+            out[int(idx)] = kind
+        pos += k
+    return out
+
+
+def fault_row(kind: str, stamps: faults.FaultStamps, link_faults: list[tuple[int, InputError]],
+              failure: tuple[int, InputError] | None) -> dict:
+    """A C5 `faults.jsonl` row. `failure` is (returned ns, InputError) of the first command Failure after the
+    injection, if any. A null `injected_ns` nulls `fault_seen_ns`, `failure_ns`, `reported_ns`, `error` (G2)."""
+    row = {"injected_ns": stamps.injected_ns, "kind": kind, "reported_ns": None, "error": None,
+           "launch_ns": stamps.launch_ns, "fault_seen_ns": None, "failure_ns": None}
+    injected = stamps.injected_ns
+    if injected is None:
+        return row
+    seen = next(((ns, err) for ns, err in link_faults if ns > injected), None)
+    failed = failure if failure is not None and failure[0] > injected else None
+    first = min((x for x in (seen, failed) if x is not None), key=lambda x: x[0], default=None)
+    row.update(fault_seen_ns=seen[0] if seen else None, failure_ns=failed[0] if failed else None,
+               reported_ns=first[0] if first else None, error=str(first[1]) if first else None)
+    return row
+
+
+# ---- MapleStory check (hard rule 2) ----------------------------------------------------------------
+
+PROCESS_CHECK_PERIOD_NS = 60 * 1_000_000_000
+
+
+def _process_names() -> Result[list[str], str]:
+    """Image names of every running process (`tasklist /FO CSV /NH`)."""
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, errors="replace",
+                             timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return Failure(f"tasklist failed: {e}")
+    if out.returncode != 0:
+        return Failure(f"tasklist exited {out.returncode}: {out.stderr.strip()}")
+    return Success([row[0] for row in csv.reader(out.stdout.splitlines()) if row])
+
+
+def maple_check() -> tuple[bool, str]:
+    """(ok, result text). Not ok if a process name contains 'maple' (any case) or the list cannot be read."""
+    names = _process_names()
+    if not is_successful(names):
+        return False, f"process check failed: {names.failure()}"
+    found = [n for n in names.unwrap() if "maple" in n.lower()]
+    if found:
+        return False, f"MapleStory running: {found}"
+    return True, "no MapleStory process"
+
+
+# ---- the driver --------------------------------------------------------------------------------------
+
+EXIT_OK, EXIT_ABORT, EXIT_REFUSED, EXIT_INTERRUPTED = 0, 1, 2, 130
+NS_PER_H = 3600 * 1_000_000_000
+
+
+@dataclass(frozen=True)
+class SoakConfig:
+    commands: int
+    out: Path
+    seed: int
+    short: bool = False
+    min_hours: float = 0.0
+    faults: dict[str, int] = field(default_factory=dict)
+
+
+class _Abort(Exception):
+    pass
+
+
+class _SoakSink(Sink, Protocol):
+    def stop(self) -> None: ...
+
+
+def _check_processes(writer: RunWriter) -> None:
+    ok, text = maple_check()
+    writer.session["process_check"] = text
+    if not ok:
+        raise _Abort(text)
+
+
+def _command(writer: RunWriter, sink: Sink, layer: InputLayer, seq: int, cmd: Command) -> CommandOutcome:
+    return run_command(writer, sink, seq, cmd.action, lambda s: dispatch(layer, cmd, s), cmd.intended_ms)
+
+
+def _fault_then_command(writer: RunWriter, sink: Sink, layer: InputLayer, link: BleLink, seq: int, cmd: Command,
+                        kind: str) -> CommandOutcome:
+    """Inject, run the next command, write the faults.jsonl row, then close() + connect() (PA-rev3a-D2)."""
+    stamps = faults.FaultStamps()
+    outcome = None
+    try:
+        injected = INJECTORS[kind](stamps)
+        if not is_successful(injected):
+            print(f"fault {kind} before seq {seq}: {injected.failure()}", file=sys.stderr, flush=True)
+        outcome = _command(writer, sink, layer, seq, cmd)
+    finally:  # every injection attempt writes its entry (C5 G2)
+        failure = None
+        if outcome is not None and outcome.result is not None and not is_successful(outcome.result):
+            failure = (outcome.returned_ns, outcome.result.failure())
+        writer.write_fault(fault_row(kind, stamps, link.faults(), failure))
+    if outcome.focus_lost:
+        return outcome
+    link.close()
+    reconnected = link.connect()
+    if not is_successful(reconnected):
+        raise _Abort(f"reconnect after {kind} failed: {reconnected.failure()}")
+    return outcome
+
+
+def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakSink]) -> int:
+    """One soak run into `cfg.out`; returns the exit code. `start_sink(run_dir)` starts H1's listener."""
+    mix_rng, timing_rng, _ = _streams(cfg.seed)
+    layer = InputLayer(link, TimingModel(timing_rng))
+    fault_at = fault_indexes(cfg.seed, cfg.commands, cfg.faults)
+    target_ns = cfg.min_hours * NS_PER_H
+    sink = None
+    ended = False
+    with RunWriter(cfg.out, link, seed=cfg.seed) as writer:  # opened before connect(): link.log gets its WARNINGs
+        try:
+            _check_processes(writer)  # before the listener blocks any key and before connect (hard rule 2)
+            try:
+                sink = start_sink(writer.run_dir)
+            except OSError as e:
+                raise _Abort(f"listener did not start: {e}") from e
+            if not sink.bring_sink_to_foreground():
+                print(f"the sink did not take the foreground; click the window titled '{listener.SINK_TITLE}' "
+                      f"(the first command waits up to {FOCUS_RECHECKS} s for it)", file=sys.stderr, flush=True)
+            connected = link.connect()
+            if not is_successful(connected):
+                raise _Abort(f"connect failed: {connected.failure()}")
+            writer.record_connect(connected.unwrap())
+            last_check_ns = _clock()
+            mix = command_mix(mix_rng)
+            seq, first_stimulus_ns, last_done_ns = 0, None, None
+            while seq < cfg.commands or (last_done_ns or 0) - (first_stimulus_ns or 0) < target_ns:
+                if _clock() - last_check_ns >= PROCESS_CHECK_PERIOD_NS:
+                    _check_processes(writer)
+                    last_check_ns = _clock()
+                cmd = next(mix)
+                if seq in fault_at:
+                    outcome = _fault_then_command(writer, sink, layer, link, seq, cmd, fault_at[seq])
+                else:
+                    outcome = _command(writer, sink, layer, seq, cmd)
+                if outcome.focus_lost:
+                    raise _Abort(f"FOCUS_LOST at seq {seq}: the sink was not back after {FOCUS_RECHECKS} s")
+                if first_stimulus_ns is None:
+                    first_stimulus_ns = outcome.row["stimulus_ns"]
+                if outcome.row["done_ns"] is not None:
+                    last_done_ns = outcome.row["done_ns"]
+                seq += 1
+            ended = True
+            print(f"soak done: {seq} commands -> {writer.run_dir}", flush=True)
+            return EXIT_OK
+        except _Abort as e:
+            print(f"soak aborted: {e}", file=sys.stderr, flush=True)
+            return EXIT_ABORT
+        except KeyboardInterrupt:
+            print("soak interrupted (Ctrl-C)", file=sys.stderr, flush=True)
+            return EXIT_INTERRUPTED
+        finally:
+            if not ended:  # any abort, Ctrl-C or unexpected error: lift every key first
+                released = layer.release_all()
+                if not is_successful(released):
+                    print(f"release_all: {released.failure()}", file=sys.stderr, flush=True)
+            link.close()
+            if sink is not None:
+                sink.stop()
+
+
+# ---- CLI ---------------------------------------------------------------------------------------------
+
+# Seams: the tests replace these with fakes.
+_new_link: Callable[[], BleLink] = BleLink
+
+
+def _start_sink(run_dir: Path) -> _SoakSink:
+    return listener.start(run_dir)
+
+
+def _faults_arg(text: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for part in text.split(","):
+        kind, sep, n = part.partition("=")
+        if kind not in FAULT_KINDS or not sep or not n.isdigit():
+            raise argparse.ArgumentTypeError(f"{part!r}: expected <kind>=<count>, kind one of {FAULT_KINDS}")
+        out[kind] = int(n)
+    return out
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="python -m src.input.harness.soak",
+                                description="Soak the input layer on the board; C5 logs in the run dir.")
+    p.add_argument("--commands", type=int, required=True, help="commands to issue (at least)")
+    p.add_argument("--min-hours", type=float, default=0.0,
+                   help="also keep going until H3's connected span (first stimulus -> last done) reaches H hours")
+    p.add_argument("--seed", type=int, default=None, help="mix, timing and fault seed (default: a fresh one, logged)")
+    p.add_argument("--out", default=None, help="run directory (default data/soak/<YYYYmmdd-HHMMSS>)")
+    p.add_argument("--short", action="store_true",
+                   help=f"allow a run with fewer than {MIN_SAMPLES_PER_TYPE} samples per KS type (dry run, fault "
+                        "soak; H4 does not judge it)")
+    p.add_argument("--faults", type=_faults_arg, default={},
+                   help="e.g. reset_board=5,bluetooth_off_on=5: injected before seeded random command indexes")
+    return p.parse_args(argv)
+
+
+def config_from_args(args: argparse.Namespace) -> SoakConfig:
+    seed = args.seed if args.seed is not None else int(np.random.SeedSequence().entropy)
+    out = Path(args.out) if args.out else Path("data/soak") / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return SoakConfig(commands=args.commands, out=out, seed=seed, short=args.short, min_hours=args.min_hours,
+                      faults=args.faults)
+
+
+def validate(cfg: SoakConfig) -> str | None:
+    """Why the run is refused, or None. Checked before any link, listener or run dir exists."""
+    if cfg.commands < 1:
+        return f"--commands must be at least 1, got {cfg.commands}"
+    if not cfg.short:
+        counts = sample_counts(plan_mix(cfg.seed, cfg.commands))
+        low = {str(t): counts[t] for t in KS_TYPES if counts[t] < MIN_SAMPLES_PER_TYPE}
+        if low:
+            return (f"refused: --commands {cfg.commands} gives fewer than {MIN_SAMPLES_PER_TYPE} chosen samples for "
+                    f"{low}; pass --short for a dry run or fault soak (H4 does not judge it)")
+    n_faults = sum(cfg.faults.values())
+    if n_faults > cfg.commands - 1:
+        return f"refused: {n_faults} faults need at least {n_faults + 1} commands (never before the first)"
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    cfg = config_from_args(parse_args(argv))
+    refusal = validate(cfg)
+    if refusal is not None:
+        print(refusal, file=sys.stderr, flush=True)
+        return EXIT_REFUSED
+    print(f"soak: {cfg.commands} commands, min {cfg.min_hours:g} h, seed {cfg.seed}, faults {cfg.faults or 'none'}"
+          f" -> {cfg.out}", flush=True)
+    return run_soak(cfg, _new_link(), _start_sink)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
