@@ -21,12 +21,15 @@ A run is ``data/probe/<run>/``; each probe writes a complete C5 run dir ``data/p
    may carry `[review]` items and a `stop` (e.g. a silent drop): a stop ends the run after that probe (exit 4).
 
 Run: ``python -m src.input.harness.probe [--probes delivery,...] [--run NAME | --out DIR] [--seed N] [--cli EXE]``
+or ``python -m src.input.harness.probe --run-sheet`` (prints the V1 live run sheet; runs nothing).
 """
 from __future__ import annotations
 
 import argparse
+import bisect
 import datetime
 import json
+import math
 import subprocess
 import sys
 import time
@@ -34,18 +37,19 @@ import zlib
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
+from scipy import stats
 
-from src.input.harness import analyze, listener, soak
+from src.input.harness import analyze, listener, realism, soak
 from src.input.harness.soak import (EXIT_ABORT, EXIT_INTERRUPTED, EXIT_OK, EXIT_REFUSED, FOCUS_RECHECKS,
                                     START_WAIT_S, Command, CommandOutcome, RunWriter)
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import BleLink, InputError, SessionInfo
-from src.input.timing import TimingModel
+from src.input.timing import TimingModel, TimingType, truncated_cdf
 
 # Seam the tests monkeypatch (as soak.py); _clock is perf_counter_ns, the clock of every C5 file.
 _clock = time.perf_counter_ns
@@ -160,6 +164,7 @@ class Probe:
     commands: Callable[[ProbeContext], None]
     report: Callable[[Path], ProbeReport]  # runs on the closed probe dir
     model: Callable[[np.random.Generator], TimingModel] = TimingModel
+    duration: str = ""  # expected duration for the run sheet (inferred)
 
 
 def probe_streams(seed: int, name: str) -> tuple[np.random.Generator, np.random.Generator]:
@@ -210,9 +215,328 @@ def delivery_report(run_dir: Path) -> ProbeReport:
     return ProbeReport(lines, review)
 
 
+# ---- shared report helpers ------------------------------------------------------------------------
+
+def summary(values: Sequence[float], unit: str = " ms") -> str:
+    """n, min, p50, p99 (H3's nearest-rank percentile), max."""
+    if not values:
+        return "n/a n 0"
+    p = analyze.percentile
+    return (f"n {len(values)} min {min(values):.3f}{unit} p50 {p(values, 50):.3f}{unit} p99 {p(values, 99):.3f}{unit} "
+            f"max {max(values):.3f}{unit}")
+
+
+def histogram(title: str, values: Sequence[float], lo: float, hi: float, bins: int, unit: str = " ms") -> list[str]:
+    """A text histogram over [lo, hi] in `bins` equal bins (numpy's: the last bin includes hi), plus the counts
+    outside the range."""
+    if not values:
+        return [f"{title}: n/a n 0"]
+    v = np.asarray(values, dtype=float)
+    counts, edges = np.histogram(v, bins=bins, range=(lo, hi))
+    peak = max(int(counts.max()), 1)
+    lines = [f"{title}: {summary(values, unit)}; below {lo:g}: {int((v < lo).sum())}, above {hi:g}: "
+             f"{int((v > hi).sum())}"]
+    for i, c in enumerate(counts):
+        close = "]" if i == len(counts) - 1 else ")"
+        lines.append(f"  [{edges[i]:8.3f}, {edges[i + 1]:8.3f}{close} {int(c):5d} {'#' * round(40 * int(c) / peak)}")
+    return lines
+
+
+def _pongs(run_dir: Path) -> list[analyze.Row]:
+    path = run_dir / soak.PONGS_FILE
+    return sorted(analyze.read_jsonl(path), key=lambda p: p["qpc_ns"]) if path.exists() else []
+
+
+def ci_ms_at(pongs: Sequence[analyze.Row], ns: int) -> float | None:
+    """The CI in force at `ns`: the last PONG at or before it (else the first), in ms (C1's 1.25 ms units)."""
+    if not pongs:
+        return None
+    i = bisect.bisect_right([p["qpc_ns"] for p in pongs], ns) - 1
+    return pongs[max(i, 0)]["itvl_units"] * realism.CI_UNIT_MS
+
+
+# ---- probes M2 (jitter on / off): delivered-minus-chosen histograms and the phase -------------------
+
+M2_N = 100
+M2_SEQUENCE_LEN = 3
+PHASE_PONG_WINDOW_NS = 5_000_000_000  # PONGs within ±5 s of a command's sent_ns map its board time to the PC
+PHASE_KS_ALPHA = 0.01
+_U32 = 1 << 32
+
+
+def m2_commands(ctx: ProbeContext) -> None:
+    """100 commands cycling tap, teleport, sequence of 3 distinct keys, drop: holds, chord offsets and in-action
+    gaps. Fixed (no draws from the probe's generator), so `m2` and `m2_nojitter` send the same commands."""
+    keys = soak.SEQUENCE_KEYS
+    for i in range(M2_N):
+        k = i // 4
+        if i % 4 == 0:
+            ctx.issue(Command("tap", (keys[k % len(keys)],)))
+        elif i % 4 == 1:
+            ctx.issue(Command("teleport", (soak.ARROWS[k % len(soak.ARROWS)],)))
+        elif i % 4 == 2:
+            ctx.issue(Command("sequence", tuple(keys[(k + j) % len(keys)] for j in range(M2_SEQUENCE_LEN))))
+        else:
+            ctx.issue(Command("drop"))
+
+
+def _wrap_us(d: int) -> int:
+    """A difference of two u32 board times (esp_timer_get_time() truncated to 32 bits) as a signed int."""
+    return (d + (1 << 31)) % _U32 - (1 << 31)
+
+
+def board_send_ns(row: analyze.Row, pongs: Sequence[analyze.Row]) -> int | None:
+    """PC-clock time the board sent the command's first key report: board time ``t0_us`` + the first step's delta +
+    ``late_us[0]``, aligned through the PONGs within ±5 s of ``sent_ns`` as the minimum over them of
+    ``qpc_ns + (send_us - board_us)`` (each PONG's ``qpc_ns`` is late by its own delivery delay >= 0, so the
+    minimum is the tightest). None without ``t0_us``, ``late_us`` or such a PONG."""
+    late = row.get("late_us") or []
+    if row.get("t0_us") is None or not late or not row.get("steps") or row.get("sent_ns") is None:
+        return None
+    send_us = row["t0_us"] + row["steps"][0][0] * 100 + late[0]
+    near = [p for p in pongs if abs(p["qpc_ns"] - row["sent_ns"]) <= PHASE_PONG_WINDOW_NS]
+    if not near:
+        return None
+    return min(p["qpc_ns"] + _wrap_us(send_us - p["board_us"]) * 1_000 for p in near)
+
+
+@dataclass(frozen=True)
+class PhaseSample:
+    seq: int
+    latency_ms: float  # first key-down - board send (PC clock)
+    ci_ms: float
+
+    @property
+    def fraction(self) -> float:
+        """(latency mod CI) / CI, in [0, 1)."""
+        return (self.latency_ms % self.ci_ms) / self.ci_ms
+
+
+def phase_samples(dm: analyze.DeliveryMatch, pongs: Sequence[analyze.Row]) -> tuple[list[PhaseSample], int]:
+    """One per measured DONE OK command with a key-down seen; the count of those with no board send time."""
+    out, skipped = [], 0
+    for m in dm.commands:
+        if m.alignment is None or m.first_down_ns is None:
+            continue
+        send = board_send_ns(m.row, pongs)
+        if send is None:
+            skipped += 1
+            continue
+        out.append(PhaseSample(m.seq, (m.first_down_ns - send) / analyze.NS_PER_MS, ci_ms_at(pongs, m.row["sent_ns"])))
+    return out, skipped
+
+
+def m2_report(run_dir: Path, jitter: bool = True) -> ProbeReport:
+    """Measured - chosen histograms (realism's pairing) for holds, chord offsets and in-action gaps; measured hold
+    mod CI; the phase (first key-down - board send) mod CI against the U(0, CI) lattice model (KS) and its
+    concentration (mean resultant length R: 0 uniform, 1 locked to one point of the connection event)."""
+    run = analyze.load_run(run_dir)
+    dm = analyze.match_delivery(run)
+    pairs = realism.pair_samples(dm)
+    pongs = _pongs(run_dir)
+    state = "on (HEAD firmware)" if jitter else "off (probe-only -DSTART_JITTER=0 image, as flashed by the operator)"
+    lines = [f"M2, START_JITTER {state}: {len(analyze.commands_of(run))} commands, measured {len(dm.commands)}"]
+    T = TimingType
+    for t in (T.HOLD, T.CHORD_OFFSET, T.GAP):
+        mine = [p for p in pairs if p.type == t]
+        diffs = [p.measured_ms - p.reference_ms for p in mine if p.measured_ms is not None]
+        lines += histogram(f"measured - chosen {t.value} (unpaired {len(mine) - len(diffs)})", diffs, -40.0, 40.0, 16)
+    ci_of = {m.seq: ci_ms_at(pongs, m.row["sent_ns"]) for m in dm.commands if m.alignment is not None}
+    hold_frac = [(p.measured_ms % ci_of[p.seq]) / ci_of[p.seq] for p in pairs
+                 if p.type == T.HOLD and p.measured_ms is not None and ci_of.get(p.seq)]
+    lines += histogram("measured hold mod CI (fraction of CI)", hold_frac, 0.0, 1.0, 10, unit="")
+    phases, skipped = phase_samples(dm, pongs)
+    review = []
+    if phases:
+        fr = np.array([s.fraction for s in phases])
+        lines += histogram("phase: (first key-down - board send) mod CI (fraction of CI)", list(fr), 0.0, 1.0, 10,
+                           unit="")
+        lines.append("board send -> first key-down: " + summary([s.latency_ms for s in phases]))
+        ks = stats.kstest(fr, "uniform", args=(0.0, 1.0))
+        r = float(abs(np.mean(np.exp(2j * np.pi * fr))))
+        lines.append(f"phase vs U(0, CI): KS D {ks.statistic:.4f} p {ks.pvalue:.4g}; mean resultant length R {r:.3f}; "
+                     f"no board send time: {skipped} (reported, not gated)")
+        if jitter and ks.pvalue < PHASE_KS_ALPHA:
+            review.append(f"phase with START_JITTER on is not U(0, CI): KS p {ks.pvalue:.4g} < {PHASE_KS_ALPHA:g}, "
+                          f"R {r:.3f} over {len(phases)} commands")
+    else:
+        lines.append(f"phase: n/a (no DONE OK command with a key-down, t0_us, late_us and a PONG within 5 s; "
+                     f"skipped {skipped})")
+    return ProbeReport(lines, review)
+
+
+# ---- probe M4: fixed chord offsets ------------------------------------------------------------------
+
+M4_OFFSETS_MS = (2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0)
+M4_N = 50
+M4_COLLAPSE_SHARE = 0.5  # "most model offsets collapse" (plan V1 M4)
+
+
+class FixedChordModel(TimingModel):
+    """Probe-only (M4): `chord_offset()` calls the base draw first, so `draws` still advances (C3), then returns the
+    next fixed offset, cycling M4_OFFSETS_MS."""
+
+    def __init__(self, rng: np.random.Generator) -> None:
+        super().__init__(rng)
+        self._k = 0
+
+    def chord_offset(self) -> float:
+        super().chord_offset()
+        value = M4_OFFSETS_MS[self._k % len(M4_OFFSETS_MS)]
+        self._k += 1
+        return value
+
+
+def m4_commands(ctx: ProbeContext) -> None:
+    """7 offsets x 50 teleports, interleaved (the model cycles the offsets), direction cycling the 4 arrows."""
+    for i in range(M4_N * len(M4_OFFSETS_MS)):
+        ctx.issue(Command("teleport", (soak.ARROWS[i % len(soak.ARROWS)],)))
+
+
+def m4_model_mass() -> dict[float, float]:
+    """Mass of the model's CHORD_OFFSET distribution nearest each fixed offset (bins split at the midpoints)."""
+    cdf = truncated_cdf(TimingType.CHORD_OFFSET)
+    v = M4_OFFSETS_MS
+    edges = [-math.inf] + [(a + b) / 2 for a, b in zip(v, v[1:])] + [math.inf]
+    return {x: float(cdf(np.array(edges[i + 1])) - cdf(np.array(edges[i]))) for i, x in enumerate(v)}
+
+
+def m4_expected_collapse(shares: dict[float, float]) -> float | None:
+    """The collapse share the model's own offsets would see: sum of mass x measured collapse share per fixed
+    offset; None if an offset has no measured pair."""
+    mass = m4_model_mass()
+    if any(x not in shares for x in mass):
+        return None
+    return sum(mass[x] * shares[x] for x in mass)
+
+
+def m4_report(run_dir: Path) -> ProbeReport:
+    """Observed offset per commanded one (realism's pairing); `[review]` against spec:L15 if most of the model's
+    offsets (median 25 ms) would collapse into one connection event (measured < realism.COLLAPSE_MS)."""
+    run = analyze.load_run(run_dir)
+    dm = analyze.match_delivery(run)
+    pairs = [p for p in realism.pair_samples(dm) if p.type == TimingType.CHORD_OFFSET]
+    lines = [f"M4: {len(analyze.commands_of(run))} teleports, fixed chord offsets {', '.join(f'{x:g}' for x in M4_OFFSETS_MS)} ms"]
+    shares: dict[float, float] = {}
+    for x in M4_OFFSETS_MS:
+        mine = [p for p in pairs if math.isclose(p.reference_ms, x)]
+        got = [p.measured_ms for p in mine if p.measured_ms is not None]
+        n_c = sum(v < realism.COLLAPSE_MS for v in got)
+        if got:
+            shares[x] = n_c / len(got)
+        pct = f"{100 * n_c / len(got):.1f}%" if got else "n/a"
+        lines.append(f"commanded {x:g} ms: collapsed (< {realism.COLLAPSE_MS:g} ms) {n_c}/{len(got)} ({pct}), "
+                     f"unpaired {len(mine) - len(got)}; measured {summary(got)}")
+    lines += realism.check_chord_order(dm).render()
+    expected = m4_expected_collapse(shares)
+    review = []
+    if expected is None:
+        lines.append("model-weighted collapse share: n/a (an offset has no measured pair)")
+    else:
+        mass = m4_model_mass()
+        lines.append(f"model-weighted collapse share: {100 * expected:.1f}% (each offset's share weighted by the "
+                     "model's CHORD_OFFSET mass nearest it: " + ", ".join(f"{x:g} ms {100 * m:.1f}%"
+                                                                          for x, m in mass.items()) + ")")
+        if expected > M4_COLLAPSE_SHARE:
+            review.append(f"against spec:L15 (chord offsets: the two keys never land in the same instant): "
+                          f"{100 * expected:.1f}% of the model's chord offsets (median 25 ms) would collapse into one "
+                          "connection event (PAr §7)")
+    return ProbeReport(lines, review)
+
+
+# ---- probe M7 (first look): latency and its split ---------------------------------------------------
+
+M7_N = 100
+
+
+def m7_commands(ctx: ProbeContext) -> None:
+    """100 taps cycling the 7 tap keys."""
+    for i in range(M7_N):
+        ctx.issue(Command("tap", (soak.TAP_KEYS[i % len(soak.TAP_KEYS)],)))
+
+
+def m7_report(run_dir: Path) -> ProbeReport:
+    """H3's Latency check (sent_ns -> first key-down p99 against the provisional target) with analyze.m7_split's
+    write / board accept / board to listener / total p50/p99 (reported, not gated)."""
+    dm = analyze.match_delivery(analyze.load_run(run_dir))
+    check = analyze.check_latency(dm)
+    review = [f"Latency {check.verdict}: {check.summary}"] if check.failed else []
+    return ProbeReport(check.render(), review)
+
+
 PROBES: dict[str, Probe] = {
-    "delivery": Probe("delivery", delivery_commands, delivery_report),
+    "delivery": Probe("delivery", delivery_commands, delivery_report, duration="~3-4 min"),
+    "m2": Probe("m2", m2_commands, m2_report, duration="~1-1.5 min"),
+    "m2_nojitter": Probe("m2_nojitter", m2_commands, lambda d: m2_report(d, jitter=False), duration="~1-1.5 min"),
+    "m4": Probe("m4", m4_commands, m4_report, model=FixedChordModel, duration="~3 min"),
+    "m7": Probe("m7", m7_commands, m7_report, duration="~45 s"),
 }
+RUN_ALONE = ("m2_nojitter",)  # needs the probe-only flash before and the HEAD reflash after (plan V1 M2)
+
+
+def default_probes() -> tuple[str, ...]:
+    """Every registered probe, in order, except those that must run alone."""
+    return tuple(n for n in PROBES if n not in RUN_ALONE)
+
+
+# ---- the V1 live run sheet (printed, never executed) -----------------------------------------------
+
+PLAN_VARS = (
+    "REPO=/c/Users/Qing_programming/Desktop/helix-claude-clone   # plan A's value; use the checkout of the branch "
+    "under test",
+    "PY=$REPO/.venv/Scripts/python.exe",
+    'CLI="/c/Users/Qing_programming/AppData/Local/Programs/Arduino IDE/resources/app/lib/backend/resources/'
+    'arduino-cli.exe"',
+    "FQBN=esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc",
+    "RUN=v1-<YYYYmmdd>; SEED=<N>   # the same two for every probe.py call below",
+)
+MAPLE_CHECK = ("Get-Process | Where-Object { $_.ProcessName -match 'maple' } | Select-Object ProcessName, Id   "
+               "# PowerShell (hard rule 2); expected: no output, else stop BLOCKED")
+PORT_LOOKUP = ('PORT=$("$CLI" board list --format json | "$PY" -c "import json,sys; print(\' \'.join(p[\'port\']'
+               '[\'address\'] for p in json.load(sys.stdin)[\'detected_ports\'] if (p[\'port\'].get(\'properties\') '
+               'or {}).get(\'vid\',\'\').lower()==\'0x303a\' and p[\'port\'][\'properties\'].get(\'pid\',\'\')'
+               '.lower()==\'0x1001\'))"); echo "PORT=[$PORT]"   # hard rule 3; expected exactly one port, else stop '
+               'BLOCKED and quote "$CLI" board list')
+FLASH_NOJITTER = ('"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build/probe-nojitter '
+                  '--build-property "compiler.cpp.extra_flags=-DSTART_JITTER=0" $REPO/firmware/Helix_BLE')
+FLASH_HEAD = '"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE'
+
+
+def _probe_call(names: Sequence[str]) -> str:
+    return f'"$PY" -m src.input.harness.probe --probes {",".join(names)} --run "$RUN" --seed "$SEED"'
+
+
+def run_sheet() -> list[str]:
+    """The V1 live run sheet: order, commands, expected duration per probe, operator actions."""
+    first = default_probes()
+    lines = [
+        "V1 live run sheet (printed by probe.py --run-sheet; probe.py executes none of it)",
+        "Shell: Git Bash at the repo root of the branch under test, except the PowerShell MapleStory check. Variables "
+        "(plan A):",
+        *[f"  {v}" for v in PLAN_VARS],
+        "Operator before step 1: MapleStory closed; board on its native USB port; 'Guiness' paired; session "
+        "unlocked; nothing else will take the foreground; type no secrets (keys.jsonl logs every key).",
+        "1. Probes on HEAD's firmware (probe.py runs the MapleStory check and the board-port lookup itself; exit 3 = "
+        "BLOCKED, stop):",
+        f"   {_probe_call(first)}",
+        "   Per probe a sink window opens; if the console prints '>>> CLICK the window ...', click it once and touch "
+        "no key until the probe's report prints. Expected durations (inferred, not measured; each plus ~10-30 s "
+        "connect and start wait): " + ", ".join(f"{n} {PROBES[n].duration or 'n/a'}" for n in first) + ".",
+        "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
+        "stop. Reports: data/probe/$RUN/<probe>/report.txt.",
+        "2. M2 with START_JITTER off (PA-rev I8), after step 1's m2 ran on HEAD's firmware:",
+        f"   a. {MAPLE_CHECK}",
+        f"   b. {PORT_LOOKUP}",
+        f"   c. {FLASH_NOJITTER}   # probe-only image; expected exit 0 (~1-2 min)",
+        f"   d. {_probe_call(RUN_ALONE)}   # {PROBES['m2_nojitter'].duration}; click the sink as in step 1",
+        f"   e. {MAPLE_CHECK}",
+        f"   f. {PORT_LOOKUP}",
+        f"   g. {FLASH_HEAD}   # reflash HEAD (V3 step 3's command) before any other probe; expected exit 0",
+        "   Whatever d exits with, do e-g before anything else: the board must not keep the probe-only image. "
+        "Nothing is committed (firmware/build is gitignored).",
+    ]
+    return lines
+
 
 
 # ---- the runner --------------------------------------------------------------------------------
@@ -331,12 +655,14 @@ def _start_sink(run_dir: Path) -> soak._SoakSink:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m src.input.harness.probe",
                                 description="V1 measurement probes on the board; one C5 run dir per probe.")
-    p.add_argument("--probes", default=",".join(PROBES),
-                   help=f"comma-separated, run in this order (default: {','.join(PROBES)})")
+    p.add_argument("--probes", default=",".join(default_probes()),
+                   help=f"comma-separated, run in this order (default: {','.join(default_probes())}; "
+                        f"{', '.join(RUN_ALONE)} only alone)")
     p.add_argument("--run", default=None, help="run name: data/probe/<run>/ (default: YYYYmmdd-HHMMSS)")
     p.add_argument("--out", default=None, help="run directory (overrides --run)")
     p.add_argument("--seed", type=int, default=None, help="timing and probe seed (default: a fresh one, logged)")
     p.add_argument("--cli", default=CLI_DEFAULT, help="arduino-cli.exe for the board-port check (hard rule 3)")
+    p.add_argument("--run-sheet", action="store_true", help="print the V1 live run sheet and exit (runs nothing)")
     return p.parse_args(argv)
 
 
@@ -351,10 +677,20 @@ def config_from_args(args: argparse.Namespace) -> ProbeConfig:
 
 
 def main(argv: list[str] | None = None) -> int:
-    cfg = config_from_args(parse_args(argv))
+    args = parse_args(argv)
+    if args.run_sheet:
+        for line in run_sheet():
+            print(line, flush=True)
+        return EXIT_OK
+    cfg = config_from_args(args)
     unknown = [n for n in cfg.probes if n not in PROBES]
     if unknown or not cfg.probes:
         print(f"refused: unknown probe(s) {unknown}; known: {', '.join(PROBES)}", file=sys.stderr, flush=True)
+        return EXIT_REFUSED
+    alone = [n for n in cfg.probes if n in RUN_ALONE]
+    if alone and len(cfg.probes) > 1:
+        print(f"refused: {', '.join(alone)} runs alone (a probe-only flash comes before it and the HEAD reflash after "
+              "it; see --run-sheet)", file=sys.stderr, flush=True)
         return EXIT_REFUSED
     print(f"probes: {', '.join(cfg.probes)}, seed {cfg.seed} -> {cfg.out}", flush=True)
     return run_probes(cfg, _new_link, _start_sink)

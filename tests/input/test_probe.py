@@ -11,7 +11,7 @@ import pytest
 from returns.result import Failure, Success
 
 from src.input import input_layer
-from src.input.harness import probe, soak
+from src.input.harness import analyze, probe, soak
 from src.input.harness.listener import VK_BY_KEY
 from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done, Key, Pong, transitions
@@ -39,19 +39,25 @@ class FakeClock:
         self.now += int(s * 1e9)
 
 
-def _pong(itvl=12):
+def _pong(itvl=12, board_us=123_456):
     return Pong(seq=1, itvl_units=itvl, latency=0, timeout_units=100, mtu=247, bonded=True, encrypted=True,
-                authenticated=False, subscribed=True, board_us=123_456)
+                authenticated=False, subscribed=True, board_us=board_us)
 
 
 class ProbeLink:
     """A BleLink stand-in. play() takes the schedule's duration + 20 ms of fake time and logs the listener
     transitions of its steps (1 ms after the send, at the scheduled offsets) into `keys`, unless the transition's
-    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`."""
+    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`.
+
+    Board clock (M2 phase): with `board_offset_ns` set, the board's u32 microsecond clock reads
+    (qpc_ns - board_offset_ns) / 1000, every play logs a PONG stamped at its send, DONE carries
+    t0_us = board time of the send + `t0_shift_us(play)` and one late_us per step (0). `grid_ns` puts every
+    listener transition on the next multiple of it (the connection-event lattice)."""
 
     MAX_PLAYS = 5000
 
-    def __init__(self, clock, keys, fail_plays=(), fail_error=InputError.LINK_LOST, drop_keys=()):
+    def __init__(self, clock, keys, fail_plays=(), fail_error=InputError.LINK_LOST, drop_keys=(),
+                 board_offset_ns=None, t0_shift_us=lambda play: 0, grid_ns=None, itvl=12):
         self.clock = clock
         self.keys = keys
         self.events = []
@@ -62,12 +68,23 @@ class ProbeLink:
         self.n_transitions = 0
         self.pongs = []
         self.connected = False
+        self.board_offset_ns = board_offset_ns
+        self.t0_shift_us = t0_shift_us
+        self.grid_ns = grid_ns
+        self.itvl = itvl
+
+    def board_us(self, ns):
+        return (ns - self.board_offset_ns) // 1_000 % (1 << 32)
+
+    def _pong_at(self, ns):
+        return _pong(self.itvl, 123_456 if self.board_offset_ns is None else self.board_us(ns))
 
     def connect(self, timeout_s=30.0):
         self.events.append("connect")
         self.connected = True
-        self.pongs.append((self.clock.clock(), _pong()))
-        return Success(SessionInfo("AA:BB", 247, _pong()))
+        now = self.clock.clock()
+        self.pongs.append((now, self._pong_at(now)))
+        return Success(SessionInfo("AA:BB", 247, self._pong_at(now)))
 
     def close(self):
         self.events.append("close")
@@ -88,16 +105,25 @@ class ProbeLink:
             self.clock.now += 5 * MS
             return Failure(self.fail_error)
         sent = self.clock.clock()
+        t0_us, late_us = 0, ()
+        if self.board_offset_ns is not None:
+            self.pongs.append((sent, self._pong_at(sent)))
+            t0_us = (self.board_us(sent) + self.t0_shift_us(self.plays)) % (1 << 32)
+            late_us = (0,) * len(steps)
         for t_100us, key, down in transitions(steps):
+            qpc = sent + MS + t_100us * 100_000
+            if self.grid_ns:
+                qpc = -(-qpc // self.grid_ns) * self.grid_ns
             if self.n_transitions not in self.drop_keys:
-                self.keys.append({"qpc_ns": sent + MS + t_100us * 100_000, "vk": VK_BY_KEY[key], "down": down,
+                self.keys.append({"qpc_ns": qpc, "vk": VK_BY_KEY[key], "down": down,
                                   "injected": False, "tick_ms": 0, "repeat": False})
             self.n_transitions += 1
         self.clock.now += sum(s.delta_100us for s in steps) * 100_000 + 20 * MS
         n = self.clock.clock()
         return Success(SendReport(seq=self.plays, sent_ns=sent, written_ns=sent + 1_000, accepted_ns=sent + 2_000,
                                   done_ns=n, accepted=Accepted(self.plays, 0),
-                                  done=Done(seq=self.plays, status=0, fail_step=None, rc=0, t0_us=0, late_us=())))
+                                  done=Done(seq=self.plays, status=0, fail_step=None, rc=0, t0_us=t0_us,
+                                            late_us=late_us)))
 
     def release_all(self):
         self.events.append("release_all")
@@ -463,7 +489,7 @@ def test_delivery_is_seeded(tmp_path, clock):
 
 def test_cli_defaults_and_probe_selection():
     cfg = probe.config_from_args(probe.parse_args(["--seed", "3"]))
-    assert cfg.probes == tuple(probe.PROBES) and cfg.seed == 3
+    assert cfg.probes == probe.default_probes() == ("delivery", "m2", "m4", "m7") and cfg.seed == 3
     assert cfg.out.parent == probe.PROBE_ROOT and cfg.cli == probe.CLI_DEFAULT
     cfg = probe.config_from_args(probe.parse_args(["--probes", "delivery", "--run", "r1", "--cli", "x.exe"]))
     assert cfg.probes == ("delivery",) and cfg.out == probe.PROBE_ROOT / "r1" and cfg.cli == "x.exe"
@@ -482,3 +508,182 @@ def test_main_runs_the_selected_probes(tmp_path, clock, monkeypatch):
     monkeypatch.setattr(probe, "PROBES", {"one": _dummy("one"), "two": _dummy("two")})
     assert probe.main(["--probes", "two", "--out", str(tmp_path / "x"), "--seed", "1"]) == probe.EXIT_OK
     assert (tmp_path / "x" / "two" / "report.txt").exists() and not (tmp_path / "x" / "one").exists()
+
+
+# ---- piece 2: shared helpers --------------------------------------------------------------------------
+
+def test_histogram_bins_counts_and_out_of_range():
+    lines = probe.histogram("h", [-1.0, 0.0, 0.5, 1.0, 2.0, 5.0], 0.0, 2.0, 2)
+    assert lines[0].startswith("h: n 6") and "below 0: 1, above 2: 1" in lines[0]
+    assert lines[1].split()[2:4] == ["1.000)", "2"] and lines[2].split()[2:4] == ["2.000]", "2"]
+    assert probe.histogram("h", [], 0.0, 1.0, 4) == ["h: n/a n 0"]
+
+
+def _p(qpc_ns, board_us, itvl=12):
+    return {"qpc_ns": qpc_ns, "board_us": board_us, "itvl_units": itvl}
+
+
+def test_board_send_ns_takes_the_tightest_pong_across_the_u32_wrap():
+    sent = 10_000 * MS
+    # board time of `sent` is 2^32 - 100 us; t0 is 300 us later (past the wrap), first step 0, late 50 us
+    row = {"sent_ns": sent, "t0_us": 200, "late_us": [50, 0], "steps": [[0, 1], [500, 0]]}
+    pongs = [_p(sent, (1 << 32) - 100),                    # on time: send = sent + 350 us
+             _p(sent + 2 * MS, (1 << 32) - 100 + 1_000),   # 1 ms delivery delay: would say sent + 1.35 ms
+             _p(sent + 6_000 * MS, 5)]                     # outside the 5 s window
+    assert probe.board_send_ns(row, pongs) == sent + 350_000
+    assert probe.board_send_ns({**row, "late_us": []}, pongs) is None
+    assert probe.board_send_ns(row, pongs[2:]) is None
+
+
+def test_ci_ms_at_uses_the_last_pong_at_or_before():
+    pongs = [_p(10, 0, itvl=6), _p(20, 0, itvl=12)]
+    assert probe.ci_ms_at(pongs, 5) == 7.5 and probe.ci_ms_at(pongs, 15) == 7.5 and probe.ci_ms_at(pongs, 20) == 15.0
+    assert probe.ci_ms_at([], 5) is None
+
+
+# ---- piece 2: M2 (jitter on / off) ------------------------------------------------------------------------
+
+def _board_rig(clock, **kw):
+    # the board's u32 microsecond clock wraps 50 ms after the fake clock starts
+    return Rig(clock, link_kw={"board_offset_ns": clock.now - ((1 << 32) - 50_000) * 1_000, **kw})
+
+
+def _report(tmp_path, name):
+    return (tmp_path / "run" / name / "report.txt").read_text(encoding="utf-8")
+
+
+def test_m2_and_m2_nojitter_send_the_same_100_commands_of_holds_chords_and_gaps(tmp_path, clock):
+    code, _ = _run(tmp_path / "a", clock, probes=("m2",))
+    assert code == probe.EXIT_OK
+    code, _ = _run(tmp_path / "b", clock, probes=("m2_nojitter",))
+    assert code == probe.EXIT_OK
+    a = _rows(tmp_path / "a" / "run" / "m2" / "commands.jsonl")
+    b = _rows(tmp_path / "b" / "run" / "m2_nojitter" / "commands.jsonl")
+    # same action and the same keys pressed in the same order (the step masks differ only by the drawn timings)
+    shape = [[(r["action"], [vk for vk, down in analyze.expected_transitions(r) if down]) for r in rows]
+             for rows in (a, b)]
+    assert len(a) == probe.M2_N and shape[0] == shape[1]
+    assert {r["action"] for r in a} == {"tap", "teleport", "sequence", "drop"}
+    types = {s["type"] for r in a for s in r["samples"]}
+    assert {"hold", "chord_offset", "gap"} <= types and "hold_clipped" not in types
+
+
+def test_m2_phase_locked_to_one_point_is_a_review_item_with_jitter_on(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m2",), rig=_board_rig(clock))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m2")
+    assert "START_JITTER on" in rep and "measured - chosen hold (unpaired 0): n " in rep
+    assert "measured - chosen chord_offset (unpaired 0): n 50" in rep
+    assert "measured - chosen gap (unpaired 0): n 50" in rep
+    # perfect board: key-down 1 ms after the send, CI 15 ms -> every phase is 1/15 of the CI
+    assert "board send -> first key-down: n 100 min 1.000 ms p50 1.000 ms" in rep
+    assert "mean resultant length R 1.000" in rep
+    assert "[review] m2: phase with START_JITTER on is not U(0, CI)" in rep
+
+
+def test_m2_phase_spread_over_the_ci_passes_and_jitter_off_never_reviews(tmp_path, clock):
+    spread = {"t0_shift_us": lambda play: (play * 7_919) % 15_000}
+    code, _ = _run(tmp_path / "on", clock, probes=("m2",), rig=_board_rig(clock, **spread))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path / "on", "m2")
+    assert "phase vs U(0, CI): KS D" in rep and "[review]" not in rep
+    code, _ = _run(tmp_path / "off", clock, probes=("m2_nojitter",), rig=_board_rig(clock))
+    rep = _report(tmp_path / "off", "m2_nojitter")
+    assert "START_JITTER off" in rep and "R 1.000" in rep and "[review]" not in rep
+
+
+def test_m2_hold_mod_ci_on_the_connection_event_lattice(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m2",), rig=_board_rig(clock, grid_ns=15 * MS))
+    assert code == probe.EXIT_OK
+    head = next(line for line in _report(tmp_path, "m2").splitlines() if line.startswith("measured hold mod CI"))
+    assert "max 0.000" in head  # every measured hold is a whole number of 15 ms connection events
+
+
+def test_m2_phase_is_na_without_board_times(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m2",))
+    assert code == probe.EXIT_OK and "phase: n/a" in _report(tmp_path, "m2")
+
+
+# ---- piece 2: M4 (fixed chord offsets) ------------------------------------------------------------------
+
+def test_fixed_chord_model_calls_the_base_draw_first_then_cycles_the_offsets():
+    import numpy as np
+    from src.input.timing import TimingModel
+    fixed, base = probe.FixedChordModel(np.random.default_rng(1)), TimingModel(np.random.default_rng(1))
+    got = [fixed.chord_offset() for _ in range(8)]
+    for _ in range(8):
+        base.chord_offset()
+    assert got == list(probe.M4_OFFSETS_MS) + [probe.M4_OFFSETS_MS[0]]
+    assert fixed.draws == base.draws == 8 and fixed.hold() == base.hold()  # same stream position (C3)
+
+
+def test_m4_teleports_fifty_per_fixed_offset(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m4",))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "m4" / "commands.jsonl")
+    offs = [s["chosen_ms"] for r in rows for s in r["samples"] if s["type"] == "chord_offset"]
+    assert {r["action"] for r in rows} == {"teleport"} and len(rows) == 350
+    assert {x: offs.count(x) for x in set(offs)} == {x: 50 for x in probe.M4_OFFSETS_MS}
+    rep = _report(tmp_path, "m4")
+    assert "commanded 2 ms: collapsed (< 1 ms) 0/50 (0.0%), unpaired 0" in rep
+    assert "model-weighted collapse share: 0.0%" in rep and "Chord order: PASS" in rep and "[review]" not in rep
+
+
+def test_m4_reviews_against_spec_l15_when_most_model_offsets_collapse(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m4",), rig=Rig(clock, link_kw={"grid_ns": 100 * MS}))
+    assert code == probe.EXIT_OK
+    assert "[review] m4: against spec:L15" in _report(tmp_path, "m4")
+
+
+def test_m4_expected_collapse_weights_by_the_model_mass():
+    mass = probe.m4_model_mass()
+    assert abs(sum(mass.values()) - 1) < 1e-9 and mass[2.0] == mass[5.0] == 0.0  # the model's offsets are >= 8 ms
+    assert probe.m4_expected_collapse({x: 1.0 for x in probe.M4_OFFSETS_MS}) == pytest.approx(1.0)
+    only_small = {x: (1.0 if x <= 15 else 0.0) for x in probe.M4_OFFSETS_MS}
+    assert probe.m4_expected_collapse(only_small) == pytest.approx(mass[10.0] + mass[15.0])
+    assert probe.m4_expected_collapse({2.0: 1.0}) is None
+
+
+# ---- piece 2: M7 -----------------------------------------------------------------------------------
+
+def test_m7_prints_latency_and_the_m7_split(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m7",))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "m7" / "commands.jsonl")
+    assert len(rows) == probe.M7_N and {r["action"] for r in rows} == {"tap"}
+    rep = _report(tmp_path, "m7")
+    assert "Latency: PASS p99 1.000 ms over 100 commands" in rep
+    for part in ("write", "board accept", "board to listener", "total"):
+        assert f"M7 {part} p50" in rep
+    assert "[review]" not in rep
+
+
+# ---- piece 2: CLI and the run sheet --------------------------------------------------------------------
+
+def test_m2_nojitter_runs_alone(monkeypatch, capsys):
+    monkeypatch.setattr(probe, "run_probes", lambda *a: pytest.fail("must refuse before running"))
+    assert probe.main(["--probes", "m2,m2_nojitter"]) == probe.EXIT_REFUSED
+    assert "m2_nojitter runs alone" in capsys.readouterr().err
+    assert "m2_nojitter" not in probe.default_probes()
+
+
+def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
+    def boom(*a, **k):
+        pytest.fail("the run sheet must execute nothing")
+    monkeypatch.setattr(probe.subprocess, "run", boom)
+    monkeypatch.setattr(probe, "run_probes", boom)
+    monkeypatch.setattr(probe, "_new_link", boom)
+    monkeypatch.setattr(probe, "_start_sink", boom)
+    monkeypatch.setattr(soak, "_process_names", boom)
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert '--probes delivery,m2,m4,m7 --run "$RUN" --seed "$SEED"' in out
+    assert ('"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build/probe-nojitter '
+            '--build-property "compiler.cpp.extra_flags=-DSTART_JITTER=0" $REPO/firmware/Helix_BLE') in out
+    assert '"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE' in out
+    assert "build.extra_flags" not in out
+    # order: jitter-off flash, then m2_nojitter, then the HEAD reflash; a MapleStory check and port lookup each flash
+    i_off, i_run, i_head = (out.index("probe-nojitter"), out.index("--probes m2_nojitter"),
+                            out.index("--output-dir $REPO/firmware/build $REPO"))
+    assert i_off < i_run < i_head
+    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process") == 2
