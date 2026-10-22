@@ -620,3 +620,207 @@ Affects: H1 step 3 evidence only (gitignored `scripts/h1c_observer.py` and `data
 Cost if wrong: one more press from Hong.
 
 Undo: none needed; option B (a `--no-block` run) stays available as a control.
+
+## A-D3-LF (2026-10-22): every soak log file ends its lines in LF
+
+Question: C5 had the LF rule for `keys.jsonl` only (A-H1-fix-R Q1). Should every soak log file H2 writes end lines in LF?
+
+Ruling: A, every soak `.jsonl` file (`commands`, `pongs`, `faults`, `keys`, as built also `link_faults`) ends lines in LF, not only `keys.jsonl` (Hong's decision).
+
+Reason: one line terminator across the run dir; `json.loads` and text-mode iteration read either ending, so H3 and H4 need no change. A-H2-2a built it: `session.json` is LF too, and `link.log` stays outside the rule (not JSONL; `logging.FileHandler`).
+
+Affects: plan A C5 header (the rule now sits above the file list; the `keys.jsonl` bullet points to it); `src/input/harness/soak.py` writers (`newline="\n"`, `RunWriter` and `session.json`).
+
+Cost if wrong: none; analysis reads both endings.
+
+Undo: drop `newline="\n"` from the `RunWriter` opens (`soak.py`) and reword the C5 header sentence.
+
+Pointer: ledger.md:516; plan text in `83e5e93`.
+
+## A-H2-D1 (2026-10-22): the fault injectors take an optional `FaultStamps` out-parameter
+
+Question: `reset_board()` and `bluetooth_off_on()` are specified as `-> Result[None, str]`, but the driver needs their stamps (launch, injected). How do the stamps reach it? Option A: keep the return type and add an optional `stamps: FaultStamps` out-parameter that is filled on every path, failures included. (The other options are not recorded in the ledger.)
+
+Ruling: A (Hong's decision).
+
+Reason: the return type stays as the plan wrote it, a bare call from V2 still works, and the times exist even when the injector returns a `Failure` (C5 `faults.jsonl` writes an entry for every attempt).
+
+Affects: `src/input/harness/faults.py` signatures `reset_board(stamps=None, *, on_line=None)` and `bluetooth_off_on(seconds, stamps=None, ...)`; plan A H2 (new "Signatures" paragraph). `on_line` is a later, backward-compatible addition for the G4 check (A-H2-D3). Applied in `cd8199e`; plan text in `83e5e93`.
+
+Cost if wrong: a signature change in `faults.py` and its callers.
+
+Undo: revert `cd8199e`'s signatures (return the stamps another way, e.g. a result object) and update the driver.
+
+Pointer: ledger.md:521 (raised in A-H2, notes/A-H2.md).
+
+## H10 (2026-10-22): Hong is asked only about spec deviations and human-only tasks
+
+Hong's words, as the ledger records them: ask Hong only for (1) implementing something that deviates from the spec, and (2) a non-subjective task the orchestrator and agents cannot do (for example clicking the sink window). Implementation detail that leaves the spec intact (signatures, log formats, internal mechanics) is decided by the orchestrator as a `Ruling [local]`, or, if it touches an interface, an adjudicator first is not required. Push, merge to master and deletes still need his yes.
+
+Scope: the whole Helix project (plans A to D, every orchestrator, Hong present or away); first given for plan A's run and then extended to all of it by Hong, relayed by retired orchestrator 17 in a cross-session message. It replaces agent-rules section 3 for him: agents raise `DECISION NEEDED` only for a spec deviation or a human-only action, and otherwise record `[fyi] ruled: ...`.
+
+Reason: A-D3-LF and A-H2-D1 were implementation detail he did not need to see.
+
+Affects: how agents and orchestrators route decisions for the rest of the build. Entries below that are not Hong's are marked as orchestrator rulings.
+
+Cost if wrong: a decision that mattered to him is made without him; each such ruling is logged with its cost and undo.
+
+Undo: Hong says so; restore agent-rules section 3.
+
+Note: H8 and H9 let the orchestrator push and merge as the specs' Shipping rules allow, without asking; the ledger line for this rule says push, merge to master and deletes still need his yes. The ledger does not say how the two relate, and this entry records only what it says.
+
+Pointer: ledger.md:527 (first statement), ledger.md:548 (whole project); saved to project memory `maximum-autonomy.md`.
+
+## H11 (2026-10-22): the `helix-h34` worktree and `p1a-h34` branch are deleted after the merge
+
+Ruling: after `p1a-h34` was merged into `p1a-input` and the suite passed, delete the worktree `C:/Users/Qing_programming/Desktop/helix-h34` and the branch `p1a-h34` (Hong said yes; a delete needs his yes under H10).
+
+Done: the merge is `117d138`; `git worktree list` and `git branch --list 'p1a*'` no longer show `helix-h34` or `p1a-h34` (checked 2026-10-22 by the docs unit A-H2-docs).
+
+Cost if wrong: none; the commits are on `p1a-input`.
+
+Pointer: ledger.md:564.
+
+## H12 (2026-10-22): helper worktrees and branches are deleted after the merge, and merged into a local feature branch, without asking
+
+Hong's words, as the ledger records them: yes, delete the `helix-docs`, `helix-v1` and `helix-v2` worktrees and branches after each is merged and the suite passes; and, as a standing rule for the whole project, deleting orchestrator-created helper worktrees and branches after their work is merged into the local feature branch and the suite passes, and merging them into a local feature branch (not `master`), need no ask ("another example of something you dont need my permission for").
+
+Scope: the whole Helix project. It narrows the H10 line that deletes still need his yes: that line no longer applies to orchestrator-created helper worktrees and branches that meet both conditions (merged into the local feature branch, suite green). A merge to `master`, a push and a delete of anything else still follow H8 to H10.
+
+Reason: these deletes lose nothing; the commits stay on the feature branch (see H11).
+
+Affects: how the orchestrator closes helper worktrees such as `helix-docs`, `helix-v1` and `helix-v2` and their branches.
+
+Cost if wrong: none while the merge is on the feature branch; an unmerged branch would lose work, so the merge and a green suite are checked first.
+
+Undo: Hong says so; ask again before deleting.
+
+Pointer: ledger.md:581; saved to project memory `maximum-autonomy.md`.
+
+## A-H3-D1 (2026-10-22): commands.jsonl writes `"error": null` and `status` `"OK"` on a success row
+
+Question: C5 names `status` and `error` but not what a Success row holds. Which value marks success?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): a Success row has `error` `null` and `status` `"OK"`. The id was given by the docs unit; the ledger line has none.
+
+Reason: H3 (`analyze.py`) and H4 (`realism.py`) count a command as a success iff `error` is null, so this matches the readers. `status` `"OK"` was chosen by A-H2-2a (the plan does not fix it) and is only a label; the readers key off `error`. A-H3-R Q1 and A-H2-R Q5 confirmed it (KEEP).
+
+Affects: plan A C5 `commands.jsonl`; `soak.py` `command_row` (`8d69417`). Plan text in `83e5e93`.
+
+Cost if wrong: one field change in H2 or H3.
+
+Undo: change `command_row` and the reader's success test together.
+
+Pointer: ledger.md:518 (ruling), A-H3 DONE (the [review] it answers), notes/A-H2.md (2a, "status OK").
+
+## A-H2-D2 (2026-10-22): the PnP fallback is two PowerShell processes, the off period timed in Python
+
+Question: how does the `Disable-PnpDevice`/`Enable-PnpDevice` fallback of `bluetooth_off_on` keep the adapter off for `seconds`? The plan says only "fall back to Disable-PnpDevice/Enable-PnpDevice".
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A, two PowerShell processes, one per step; the off period is timed in Python, and each step's failure is reported separately. A-H2-R confirmed it (KEEP).
+
+Reason: internal to the fallback path, reversible, and the plan states neither.
+
+Affects: `src/input/harness/faults.py` (`_pnp_off_cmd`, `_pnp_on_cmd`, `PNP_ON_DONE`; `cd8199e`); plan A H2 `faults.py` bullet.
+
+Cost if wrong: about 250 ms of PowerShell start-up per call and a small rewrite.
+
+Undo: drop the `PNP_ON` step and run one process that disables, sleeps and enables.
+
+Pointer: ledger.md:522.
+
+## A-H2-2a-D1 (2026-10-22): `commands.jsonl` `bytes` is the hex of the PLAY command
+
+Question: C5 lists a `bytes` field and nothing defines it. What does it hold? Options: A. the hex of the PLAY command re-encoded with `encode_play(report.seq, steps)`. B. a byte count.
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A.
+
+Reason: nothing reads it, and it carries the exact bytes sent (`encode_play` is pure, so the re-encoding equals what the link wrote; A-H2-R checked `link.py:465` and `:480`).
+
+Affects: plan A C5 `commands.jsonl`; `soak.py` `command_row` (`8d69417`).
+
+Cost if wrong: none.
+
+Undo: change one line in `command_row`.
+
+Pointer: ledger.md:529.
+
+## A-H2-D3 (2026-10-22): the soak starts by waiting for the operator's click; G4 is a standalone script run after the dry run
+
+Question: the agent-launched sink window never gets the foreground, so how does a soak start? And how is G4 (is esptool's reset line read before it exits) checked "during the dry run"?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's; the id was given by the docs unit): the CLI waits for the operator to click the sink, before `connect()`, for at most 120 s, polling `GetForegroundWindow()` every 0.25 s after one bring-to-foreground call; on a timeout it aborts with exit 1, writes `session.json` and never opens BLE. The MapleStory 60 s check also runs during the wait. G4 is a standalone script, `g4_check.py`, run in the same sitting right after the dry run: it judges the spread from the first esptool line to the reset line (500 ms or more is `READ_BEFORE_EXIT`) and prints, without judging, exit minus `injected_ns`.
+
+Reason: neither the spec nor the plan fixes the start behaviour (so no spec deviation); starting before `connect()` means a timeout leaves the board untouched; the click is the human-only task H10 allows. The bot's keys stay blocked through the wait because the listener reads `block` once at start, and shortening that would be an H1 change, out of scope. A-H2-3b's dry run used it: Hong's click at 48.3 s, 200 commands OK; G4 exit 0 (spread 2166 ms, unbuffered).
+
+Affects: `soak.py` (`wait_for_click`, `START_WAIT_S`), `faults.reset_board(on_line=...)`, new `src/input/harness/g4_check.py`, plan A H2 (new "Start" bullet, step 3). Applied in `ff2f72d`; plan text in `83e5e93`. Plan step 3's "stop BLOCKED" is now only for a timeout (A-H2-R M4).
+
+Cost if wrong: a small CLI revert.
+
+Undo: revert `ff2f72d`'s `wait_for_click` call in `run_soak` (the first command then waits up to 10 s for focus, as in `daa3270`).
+
+Pointer: ledger.md:545 (ruling), ledger.md:549 (A-H2-3a), ledger.md:556 (M4).
+
+## A-H2-R-D1 (2026-10-22): session.json `connected_ns`; H3 ignores key events before it
+
+Question: the operator's keys pressed before `connect()` (for example during the click wait) count as Delivery extras in H3. How are they kept out without weakening Delivery?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A. H2 writes `connected_ns` to `session.json`, a `perf_counter_ns` stamp taken right after the first `connect()` succeeds (null if it never does). H3 counts a transition before the first command's window as an extra only if `qpc_ns >= connected_ns`; earlier ones are ignored and printed as `ignored before connect: N`. A run without `connected_ns` keeps the old behaviour. A-H2-fix-R confirmed it (KEEP; the listener runs in the soak process, so one clock).
+
+Reason: the board sends nothing before `connect()`, so nothing before it can be a delivery error. It is a C5 field plus one `analyze.py` rule, the spec's Delivery target is unchanged, and it is the smallest change.
+
+Affects: C5 `session.json`; H2 (`RunWriter.record_connect`, `482e0bb`); H3 (`load_run`, `DeliveryMatch.pre_connect`, `c1974d2`); plan A C5, H2, H3. Plan text in `83e5e93`.
+
+Cost if wrong: one field and one H3 rule reverted.
+
+Undo: revert `482e0bb` and `c1974d2`; pre-connect keys count as extras again, so the operator must not touch the keyboard before the connect.
+
+Pointer: ledger.md:557.
+
+## A-H2-R-D2 (2026-10-22): a soak aborts on a link loss outside an injected fault
+
+Question: when a command returns `NOT_CONNECTED` or `LINK_LOST` and no fault was injected, nothing reconnects, so the run goes on failing (with `--min-hours` it never ends). What should the driver do?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A. Abort through the normal abort path (`release_all()`, `session.json`, exit 1) when a command returns `NOT_CONNECTED` or `LINK_LOST` outside the one command that follows an injected fault. Only the command at a `--faults` index is exempt (also when its injector failed); a loss on a later command after the reconnect aborts. A-H2-fix-R confirmed it (KEEP).
+
+Reason: a drop already fails the Connection target (spec:L61) and the abort removes the hang. It is a plan gap, not a spec deviation (A-H2-R).
+
+Affects: `soak.py` `run_soak` (`LINK_LOSS`; `5b58b9f`); plan A H2. Plan text in `83e5e93`.
+
+Cost if wrong: about 10 lines.
+
+Undo: delete the new `if` block in `run_soak`.
+
+Pointer: ledger.md:558; ledger.md:567 (the fix).
+
+## A-H2-fix-R-D1 (2026-10-22): after N commands, abort after K = 10 consecutive failed commands
+
+Question: a `--min-hours` run that has had one success and then only non-link failures (`ACK_TIMEOUT`, `REJECTED`) never ends (the span check never completes). Options: A. let it run. B. once `seq >= N`, abort via the normal abort path (exit 1) after K = 10 consecutive failed commands.
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): B. Implemented in A-H2-fix3 (`505dd64`): the abort fires only while the `--min-hours` span is still short (`span_short()`), the streak counts failures from before N, and K is `MAX_CONSECUTIVE_FAILURES` in `soak.py:77`; a run without `--min-hours`, or whose span is already met, still ends at N with exit 0.
+
+Reason: such a run can no longer grow its connected span and has already failed its target; it matches A-H2-R-D2 and Q3 (a plan gap, not a spec deviation, per the reviewer).
+
+Affects: `soak.py` `run_soak`; plan A H2 (same bullet as A-H2-R-D2). Plan text in `83e5e93`.
+
+Cost if wrong: about 10 lines.
+
+Undo: remove the consecutive-failure counter in `run_soak`.
+
+Pointer: ledger.md:572; ledger.md:573 (A-H2-fix3).
+
+## A-H2-fix-R-m2 (2026-10-22): keys.jsonl starts fresh on a reused `--out` dir, like link.log
+
+Question: the listener opens `keys.jsonl` in append mode, so a reused `--out` dir mixes runs (A-H2-fix-R m2). Should each run start with an empty file?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): yes, fresh per run, as A-H2-R M1 did for `link.log` (`mode="w"`); implemented in A-H2-fix3 (item 2) in `RunWriter.open`, not in the listener. Waived if plan or spec text said append; the plan says nothing either way.
+
+Reason: stale keys from an earlier run would corrupt H3's Delivery analysis (with A-H2-R-D1 a same-boot earlier run's keys fall before `connected_ns` and are only reported as ignored, but after a reboot the QPC clock restarts and old keys could land inside new windows; A-H2-fix-R m2).
+
+Affects: `src/input/harness/soak.py` (`RunWriter.open` truncates `keys.jsonl` at `:216`, before `start_sink`); `listener.py` is unchanged and still appends (`:254`), so the standalone listener CLI keeps appending; plan A C5 `keys.jsonl` and `link.log` bullets. Plan text in `83e5e93`.
+
+Cost if wrong: one small revert.
+
+Undo: remove the truncate in `RunWriter.open` (`soak.py:216`) and its test.
+
+Pointer: ledger.md:576.
