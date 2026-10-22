@@ -864,3 +864,42 @@ def test_ready_wait_pings_add_no_faults(board, monkeypatch):
     lk = make_link(board)
     assert "no PONG" in lk.connect(timeout_s=5.0).failure()
     assert lk.faults() == []
+
+
+# ---------------------------------------------------------------- public ping() failures (A-P4-D2 -> A', A-P4-R m2)
+
+
+def test_ping_write_failure_is_returned_and_the_session_stays_live(board, monkeypatch):
+    monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)
+    lk = connected_link(board)
+    try:
+        board.ping = write_raises
+        assert lk.ping().failure() == InputError.WRITE_FAILED
+        assert lk.faults() == []  # WRITE_FAILED is not a fault (A-P4-R-D1)
+        board.ping = board.default_ping
+        assert is_successful(lk.ping())
+        assert is_successful(lk.play(tap_steps()))
+        assert board.client.disconnect_calls == 0
+    finally:
+        lk.close()
+
+
+@pytest.mark.parametrize("end,err,faults", [
+    ("drop", InputError.LINK_LOST, [InputError.LINK_LOST]),
+    ("close", InputError.NOT_CONNECTED, []),
+])
+def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults):
+    monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)
+    lk = connected_link(board)
+    try:
+        board.ping = answering()  # the write completes, the PONG never comes
+        n0 = len(board.ops(OP_PING))
+        bg = Bg(lk.ping)
+        assert wait_until(lambda: len(board.ops(OP_PING)) > n0)
+        t = time.perf_counter()
+        board.client.drop() if end == "drop" else lk.close()
+        assert bg.join().failure() == err
+        assert bg.t_end - t < 0.3  # not the 0.5 s ping limit
+        assert fault_errors(lk) == faults
+    finally:
+        lk.close()
