@@ -165,6 +165,7 @@ def run_starts(out: Path, link: BleLink, start_sink: Callable[[Path], soak._Soak
     sink = None
     ended = False
     out.mkdir(parents=True, exist_ok=True)
+    (out / listener.KEYS_FILE).write_bytes(b"")  # the listener appends: start it on a fresh file (A-V2prep-R m2)
     with open(out / STARTS_FILE, "w", encoding="utf-8", newline="\n") as fh:
         try:
             _check_processes()  # before the listener blocks any key, before any reset or connect (hard rule 2)

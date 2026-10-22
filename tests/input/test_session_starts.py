@@ -242,6 +242,18 @@ def test_reset_board_repeats_the_port_lookup_on_every_start(tmp_path, clock, mon
     assert "connect" not in link.events
 
 
+def test_a_reused_out_starts_keys_jsonl_fresh(tmp_path, clock, monkeypatch):
+    # A-V2prep-R m2: the listener appends to keys.jsonl; stale E lines from an earlier run (after a reboot their
+    # qpc_ns can be larger than this run's) must not make an unseen tap "seen"
+    run = tmp_path / "starts"
+    run.mkdir()
+    _keys(run / listener.KEYS_FILE, [(10**18, VK_E, True, False), (10**18 + 1, VK_E, False, False)])
+    code, _, _, _, run = _run(tmp_path, clock, monkeypatch, unseen=range(1, 21))
+    assert code == 0
+    assert [r["error"] for r in _rows(run)] == ["TAP_NOT_SEEN"] * 20
+    assert (run / listener.KEYS_FILE).read_text(encoding="utf-8") == ""
+
+
 def test_unseen_tap_gives_tap_not_seen(tmp_path, clock, monkeypatch):
     _, _, _, _, run = _run(tmp_path, clock, monkeypatch, unseen={4})
     rows = _rows(run)
