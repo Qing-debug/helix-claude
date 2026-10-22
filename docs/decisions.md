@@ -797,7 +797,7 @@ Pointer: ledger.md:558; ledger.md:567 (the fix).
 
 Question: a `--min-hours` run that has had one success and then only non-link failures (`ACK_TIMEOUT`, `REJECTED`) never ends (the span check never completes). Options: A. let it run. B. once `seq >= N`, abort via the normal abort path (exit 1) after K = 10 consecutive failed commands.
 
-Ruling [local] (orchestrator ruling under H10, not Hong's): B. Implemented in A-H2-fix3 (`505dd64`): the abort fires only while the `--min-hours` span is still short (`span_short()`), the streak counts failures from before N, and K is `MAX_CONSECUTIVE_FAILURES` in `soak.py:77`; a run without `--min-hours`, or whose span is already met, still ends at N with exit 0.
+Ruling [local] (orchestrator ruling under H10, not Hong's): B. Implemented in A-H2-fix3 (`505dd64`): the abort fires only while the `--min-hours` span is still short (`span_short()`), the streak counts failures from before N, and K is `MAX_CONSECUTIVE_FAILURES` in `soak.py:79`; a run without `--min-hours`, or whose span is already met, still ends at N with exit 0.
 
 Reason: such a run can no longer grow its connected span and has already failed its target; it matches A-H2-R-D2 and Q3 (a plan gap, not a spec deviation, per the reviewer).
 
