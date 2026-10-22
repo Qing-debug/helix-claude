@@ -6,7 +6,9 @@ perfect keyboard) into a shared key log that `ProbeSink.stop()` writes as the pr
 probe reports run analyze.py / realism.py on real C5 files.
 """
 import asyncio
+import dataclasses
 import json
+import logging
 import math
 import re
 import threading
@@ -1098,3 +1100,42 @@ def test_release_trial_on_a_real_ble_link_aborts_a_written_play(tmp_path):
         assert rel["write_ns"] + 10 * MS <= rel["release_call_ns"] < rel["release_done_ns"]
     finally:
         lk.close()
+
+# ---- --link-debug (A-M6diag) --------------------------------------------------------------------------
+
+def _logging_dummy(name):
+    """A probe that logs one DEBUG and one WARNING record on the link logger between two taps."""
+    def commands(ctx):
+        ctx.issue(soak.Command("tap", (Key.E,)))
+        logging.getLogger(soak.LINK_LOGGER).debug("rx from %s", name)
+        logging.getLogger(soak.LINK_LOGGER).warning("warn from %s", name)
+        ctx.issue(soak.Command("tap", (Key.E,)))
+    return probe.Probe(name, commands, lambda run_dir: probe.ProbeReport([f"{name} ran"]))
+
+
+def test_link_debug_is_off_by_default_and_parsed():
+    assert probe.config_from_args(probe.parse_args([])).link_debug is False
+    assert probe.config_from_args(probe.parse_args(["--link-debug", "--probes", "m6"])).link_debug is True
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_link_debug_writes_each_probes_debug_records_to_its_own_file(tmp_path, clock, monkeypatch, on):
+    monkeypatch.setattr(probe, "PROBES", {"one": _logging_dummy("one"), "two": _logging_dummy("two")})
+    logger = logging.getLogger(soak.LINK_LOGGER)
+    level, handlers = logger.level, list(logger.handlers)
+    cfg = dataclasses.replace(_cfg(tmp_path, ("one", "two")), link_debug=on)
+    rig = Rig(clock)
+    assert probe.run_probes(cfg, rig.new_link, rig.start_sink) == probe.EXIT_OK
+    for name, other in (("one", "two"), ("two", "one")):
+        run_dir = cfg.out / name
+        link_log = (run_dir / soak.LINK_LOG_FILE).read_text(encoding="utf-8")
+        assert f"warn from {name}" in link_log and "rx from" not in link_log  # link.log stays WARNING (C5)
+        debug = run_dir / probe.LINK_DEBUG_FILE
+        assert debug.exists() == on
+        if on:
+            lines = debug.read_text(encoding="utf-8").splitlines()
+            assert any(line.endswith(f"DEBUG rx from {name}") for line in lines)
+            assert any(line.endswith(f"WARNING warn from {name}") for line in lines)
+            assert not any(other in line for line in lines)
+            assert all(int(line.split()[1]) > 0 for line in lines)  # perf_ns stamped, link.log's format
+    assert logger.level == level and logger.handlers == handlers
