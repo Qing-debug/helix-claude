@@ -681,6 +681,22 @@ Cost if wrong: none; the commits are on `p1a-input`.
 
 Pointer: ledger.md:564.
 
+## H12 (2026-10-22): helper worktrees and branches are deleted after the merge, and merged into a local feature branch, without asking
+
+Hong's words, as the ledger records them: yes, delete the `helix-docs`, `helix-v1` and `helix-v2` worktrees and branches after each is merged and the suite passes; and, as a standing rule for the whole project, deleting orchestrator-created helper worktrees and branches after their work is merged into the local feature branch and the suite passes, and merging them into a local feature branch (not `master`), need no ask ("another example of something you dont need my permission for").
+
+Scope: the whole Helix project. It narrows the H10 line that deletes still need his yes: that line no longer applies to orchestrator-created helper worktrees and branches that meet both conditions (merged into the local feature branch, suite green). A merge to `master`, a push and a delete of anything else still follow H8 to H10.
+
+Reason: these deletes lose nothing; the commits stay on the feature branch (see H11).
+
+Affects: how the orchestrator closes helper worktrees such as `helix-docs`, `helix-v1` and `helix-v2` and their branches.
+
+Cost if wrong: none while the merge is on the feature branch; an unmerged branch would lose work, so the merge and a green suite are checked first.
+
+Undo: Hong says so; ask again before deleting.
+
+Pointer: ledger.md:581; saved to project memory `maximum-autonomy.md`.
+
 ## A-H3-D1 (2026-10-22): commands.jsonl writes `"error": null` and `status` `"OK"` on a success row
 
 Question: C5 names `status` and `error` but not what a Success row holds. Which value marks success?
@@ -781,7 +797,7 @@ Pointer: ledger.md:558; ledger.md:567 (the fix).
 
 Question: a `--min-hours` run that has had one success and then only non-link failures (`ACK_TIMEOUT`, `REJECTED`) never ends (the span check never completes). Options: A. let it run. B. once `seq >= N`, abort via the normal abort path (exit 1) after K = 10 consecutive failed commands.
 
-Ruling [local] (orchestrator ruling under H10, not Hong's): B. The behaviour is as ruled; A-H2-fix3 implements it in parallel with this docs unit, so the plan describes the ruled behaviour and the code may differ in detail until that lands.
+Ruling [local] (orchestrator ruling under H10, not Hong's): B. Implemented in A-H2-fix3 (`505dd64`): the abort fires only while the `--min-hours` span is still short (`span_short()`), the streak counts failures from before N, and K is `MAX_CONSECUTIVE_FAILURES` in `soak.py:77`; a run without `--min-hours`, or whose span is already met, still ends at N with exit 0.
 
 Reason: such a run can no longer grow its connected span and has already failed its target; it matches A-H2-R-D2 and Q3 (a plan gap, not a spec deviation, per the reviewer).
 
@@ -797,14 +813,14 @@ Pointer: ledger.md:572; ledger.md:573 (A-H2-fix3).
 
 Question: the listener opens `keys.jsonl` in append mode, so a reused `--out` dir mixes runs (A-H2-fix-R m2). Should each run start with an empty file?
 
-Ruling [local] (orchestrator ruling under H10, not Hong's): yes, fresh per run, as A-H2-R M1 did for `link.log` (`mode="w"`); implemented in A-H2-fix3 (item 2). Waived if plan or spec text said append; the plan says nothing either way.
+Ruling [local] (orchestrator ruling under H10, not Hong's): yes, fresh per run, as A-H2-R M1 did for `link.log` (`mode="w"`); implemented in A-H2-fix3 (item 2) in `RunWriter.open`, not in the listener. Waived if plan or spec text said append; the plan says nothing either way.
 
 Reason: stale keys from an earlier run would corrupt H3's Delivery analysis (with A-H2-R-D1 a same-boot earlier run's keys fall before `connected_ns` and are only reported as ignored, but after a reboot the QPC clock restarts and old keys could land inside new windows; A-H2-fix-R m2).
 
-Affects: `src/input/harness/listener.py` (the open at `:254`); plan A C5 `keys.jsonl` and `link.log` bullets. Plan text in `83e5e93`.
+Affects: `src/input/harness/soak.py` (`RunWriter.open` truncates `keys.jsonl` at `:216`, before `start_sink`); `listener.py` is unchanged and still appends (`:254`), so the standalone listener CLI keeps appending; plan A C5 `keys.jsonl` and `link.log` bullets. Plan text in `83e5e93`.
 
 Cost if wrong: one small revert.
 
-Undo: open `keys.jsonl` with `"a"` again.
+Undo: remove the truncate in `RunWriter.open` (`soak.py:216`) and its test.
 
 Pointer: ledger.md:576.
