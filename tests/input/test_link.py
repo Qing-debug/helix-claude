@@ -227,6 +227,11 @@ def test_import_performs_no_io():
     assert out.stdout.split() == ["1", "5.0", "4096"]
 
 
+def test_input_error_value_is_its_name():
+    assert [e.value for e in InputError] == [e.name for e in InputError]
+    assert str(InputError.LINK_LOST) == "LINK_LOST"
+
+
 # ---------------------------------------------------------------- play
 
 

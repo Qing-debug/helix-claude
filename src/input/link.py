@@ -11,7 +11,7 @@ import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum, auto
+from enum import StrEnum
 
 from bleak import BleakClient, BleakScanner
 from returns.pipeline import is_successful
@@ -40,14 +40,16 @@ _PLAY, _RELEASE, _PING = "play", "release_all", "ping"
 
 
 class InputError(StrEnum):
-    NOT_CONNECTED = auto()
-    WRITE_FAILED = auto()
-    REJECTED = auto()
-    NOTIFY_FAILED = auto()
-    ABORTED = auto()
-    ACK_TIMEOUT = auto()
-    LINK_LOST = auto()
-    TOO_LONG = auto()
+    """Value = name, so str(), .value and .name all serialize as e.g. "LINK_LOST" (C5 link_faults.jsonl)."""
+
+    NOT_CONNECTED = "NOT_CONNECTED"
+    WRITE_FAILED = "WRITE_FAILED"
+    REJECTED = "REJECTED"
+    NOTIFY_FAILED = "NOTIFY_FAILED"
+    ABORTED = "ABORTED"
+    ACK_TIMEOUT = "ACK_TIMEOUT"
+    LINK_LOST = "LINK_LOST"
+    TOO_LONG = "TOO_LONG"
 
 
 @dataclass(frozen=True)
