@@ -73,8 +73,10 @@ class _Streamed:
     tail: list[str]
 
 
-def _stream(cmd: list[str], wanted: list[str]) -> Result[_Streamed, str]:
-    """Run ``cmd``, read its merged output line by line, stamp the first line containing each wanted string."""
+def _stream(cmd: list[str], wanted: list[str],
+            on_line: Callable[[int, str], None] | None = None) -> Result[_Streamed, str]:
+    """Run ``cmd``, read its merged output line by line, stamp the first line containing each wanted string.
+    ``on_line(read_ns, line)`` sees every line as it is read (the G4 check logs them)."""
     launch_ns = time.perf_counter_ns()
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -87,6 +89,8 @@ def _stream(cmd: list[str], wanted: list[str]) -> Result[_Streamed, str]:
     with proc.stdout:
         for line in proc.stdout:
             now = time.perf_counter_ns()
+            if on_line is not None:
+                on_line(now, line.rstrip("\r\n"))
             for w in wanted:
                 if w not in matched and w in line:
                     matched[w] = now
@@ -135,13 +139,15 @@ def _reset_cmd(port: str) -> list[str]:
 
 # ---- reset_board ------------------------------------------------------------------------
 
-def reset_board(stamps: FaultStamps | None = None) -> Result[None, str]:
-    """Reset the board with esptool; ``injected_ns`` is stamped when its reset line is read. Returns after exit."""
+def reset_board(stamps: FaultStamps | None = None, *,
+                on_line: Callable[[int, str], None] | None = None) -> Result[None, str]:
+    """Reset the board with esptool; ``injected_ns`` is stamped when its reset line is read. Returns after exit.
+    ``on_line(read_ns, line)``, if given, sees every esptool output line as it is read (G4 check)."""
     stamps = stamps if stamps is not None else FaultStamps()
     port = find_board_port()
     if not is_successful(port):
         return port
-    streamed = _stream(_reset_cmd(port.unwrap()), [RESET_LINE])
+    streamed = _stream(_reset_cmd(port.unwrap()), [RESET_LINE], on_line)
     if not is_successful(streamed):
         return streamed
     run = streamed.unwrap()

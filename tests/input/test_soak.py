@@ -14,7 +14,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Success
 
 from src.input import actions, input_layer
-from src.input.harness import soak
+from src.input.harness import listener, soak
 from src.input.harness.faults import FaultStamps
 from src.input.harness.soak import (COMMAND_FIELDS, FOCUS_LOST, FOCUS_RECHECKS, KS_TYPES, MIN_SAMPLES_PER_TYPE,
                                     RunWriter, SoakConfig, command_row, fault_indexes, fault_row, focus_lost_row,
@@ -590,8 +590,16 @@ def test_maplestory_found_by_the_60_s_check_aborts_and_calls_release_all(tmp_pat
 
 
 def test_focus_never_back_aborts_with_release_all_and_no_play(tmp_path, driver_clock):
-    sink = DriverSink(away=True, clock=driver_clock)
-    code, link, _ = _run(tmp_path, driver_clock, sink=sink)
+    sink = DriverSink(clock=driver_clock)  # in front at start (the start wait passes), lost once connected
+    link = DriverLink(driver_clock)
+    real_connect = link.connect
+
+    def connect(timeout_s=30.0):
+        sink.away = True
+        return real_connect(timeout_s)
+
+    link.connect = connect
+    code, link, _ = _run(tmp_path, driver_clock, link=link, sink=sink)
     assert code != 0
     assert "play" not in link.events and "release_all" in link.events
     assert len(sink.brings) == 1 + FOCUS_RECHECKS  # the start-up bring, then the 10 re-checks
@@ -620,6 +628,82 @@ def test_ctrl_c_calls_release_all_and_writes_session_json(tmp_path, driver_clock
 def test_connect_failure_aborts(tmp_path, driver_clock):
     code, link, _ = _run(tmp_path, driver_clock, link=DriverLink(driver_clock, connect_ok=False))
     assert code != 0 and "play" not in link.events and "release_all" in link.events
+
+
+# ---- start: wait for the operator's click on the sink (orchestrator ruling 18) ---------------------
+
+class ClickSink(DriverSink):
+    """Not in front (bring_sink_to_foreground() fails, as for an agent-launched process) until the fake clock
+    reaches `click_ns` (the operator's click); `click_ns=None` never clicks."""
+
+    def __init__(self, clock, click_ns=None):
+        super().__init__(away=True, clock=clock)
+        self.click_ns = click_ns
+        self.polls = 0
+
+    def sink_is_foreground(self):
+        self.polls += 1
+        return self.click_ns is not None and self._clock.now >= self.click_ns
+
+
+def test_start_waits_for_the_click_then_connects_and_runs(tmp_path, driver_clock, capsys):
+    click_ns = driver_clock.now + 7 * S
+    sink = ClickSink(driver_clock, click_ns=click_ns)
+    link = DriverLink(driver_clock)
+    connect_at = []
+    real_connect = link.connect
+    sleeps_before_connect = []
+    link.connect = lambda timeout_s=30.0: (connect_at.append(driver_clock.now),
+                                           sleeps_before_connect.extend(driver_clock.sleeps),
+                                           real_connect(timeout_s))[2]
+    code, _, _ = _run(tmp_path, driver_clock, commands=3, link=link, sink=sink)
+    assert code == 0
+    assert len(sink.brings) == 1  # one SetForegroundWindow try; the wait only re-checks GetForegroundWindow
+    assert connect_at[0] >= click_ns  # nothing goes to the board before the click
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert len(rows) == 3 and rows[0]["stimulus_ns"] > click_ns
+    assert link.events == ["connect"] + ["play"] * 3 + ["close"]
+    # polled every START_POLL_S; seen at the first poll after the click
+    assert sleeps_before_connect == [soak.START_POLL_S] * int(7 / soak.START_POLL_S)
+    assert _session(tmp_path / "run")["focus_pauses"] == []  # the start wait is not a command's focus pause
+    err = capsys.readouterr().err
+    assert listener.SINK_TITLE in err and "press no keys" in err and f"{soak.START_WAIT_S:g} s" in err
+
+
+def test_start_wait_times_out_cleanly_without_connecting(tmp_path, driver_clock):
+    sink = ClickSink(driver_clock)  # never clicked
+    start_ns = driver_clock.now
+    code, link, _ = _run(tmp_path, driver_clock, link=DriverLink(driver_clock), sink=sink)
+    assert code == soak.EXIT_ABORT
+    assert "connect" not in link.events and "play" not in link.events
+    assert link.events == ["release_all", "close"]  # the abort path, as for any other abort
+    assert sink.stopped  # the listener (and its key blocking) ends with the run
+    assert _rows(tmp_path / "run" / "commands.jsonl") == []
+    s = _session(tmp_path / "run")
+    assert s["end_ns"] - start_ns >= soak.START_WAIT_S * S
+    assert sum(driver_clock.sleeps) <= soak.START_WAIT_S + soak.START_POLL_S  # bounded: no wait past the timeout
+
+
+def test_start_wait_returns_at_once_when_the_sink_is_already_in_front(tmp_path, driver_clock):
+    code, link, sink = _run(tmp_path, driver_clock, commands=2)
+    assert code == 0 and len(sink.brings) == 1
+    assert driver_clock.sleeps.count(soak.START_POLL_S) == 0
+
+
+def test_maplestory_during_the_start_wait_aborts_before_connect(tmp_path, driver_clock, monkeypatch):
+    checks = []
+
+    def names():
+        checks.append(driver_clock.now)
+        return Success(["MapleStory.exe"] if len(checks) >= 2 else ["System"])
+
+    monkeypatch.setattr(soak, "_process_names", names)
+    sink = ClickSink(driver_clock, click_ns=driver_clock.now + 100 * S)
+    code, link, _ = _run(tmp_path, driver_clock, sink=sink)
+    assert code == soak.EXIT_ABORT
+    assert len(checks) == 2 and 60 * S <= checks[1] - checks[0] < 61 * S  # the 60 s check runs during the wait
+    assert "connect" not in link.events and "release_all" in link.events
+    assert "MapleStory.exe" in _session(tmp_path / "run")["process_check"]
 
 
 # ---- --min-hours: H3's connected span (K3) --------------------------------------------------------

@@ -23,7 +23,8 @@ pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not 
 `FOCUS_LOST` row and the caller takes the abort path (`release_all()`, close the writer, non-zero exit).
 
 Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (MapleStory check at start
-and every 60 s, the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
+and every 60 s, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a clean
+abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
 command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C), `main` the CLI:
 
     python -m src.input.harness.soak --commands 10000 --seed 1 [--min-hours H] [--out DIR] [--short]
@@ -71,6 +72,10 @@ LINK_LOG_FORMAT = "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
 FOCUS_LOST = "FOCUS_LOST"  # a harness status, not an InputError (C5)
 FOCUS_RECHECKS = 10
 FOCUS_RECHECK_PERIOD_S = 1.0
+# Start wait (orchestrator ruling 18): an agent-launched sink cannot take the foreground itself, so the run waits for
+# the operator's click. 120 s bounds the time the listener blocks the bot keys if nobody clicks.
+START_WAIT_S = 120.0
+START_POLL_S = 0.25
 CI_UNIT_MS = 1.25  # PONG itvl is in 1.25 ms units (C1)
 
 COMMAND_FIELDS = ("seq", "action", "intended_ms", "stimulus_ns", "steps", "samples", "reaction_ms", "reaction_index",
@@ -301,6 +306,26 @@ def check_focus(sink: Sink) -> FocusCheck:
         if sink.bring_sink_to_foreground():
             return FocusCheck(True, (start_ns, _clock()))
     return FocusCheck(False, None)
+
+
+def wait_for_click(sink: Sink, tick: Callable[[], None] = lambda: None, timeout_s: float = START_WAIT_S) -> bool:
+    """Before the first command: one bring-to-foreground try; if the sink is not in front, prompt the operator to
+    click it and poll GetForegroundWindow() every START_POLL_S until it is, or `timeout_s` passed (False).
+    `tick()` runs on every poll (the driver's 60 s MapleStory check); an exception from it ends the wait."""
+    if sink.bring_sink_to_foreground():
+        return True
+    print(f"\n>>> CLICK the window titled '{listener.SINK_TITLE}' now, then press no keys. Waiting up to "
+          f"{timeout_s:g} s; nothing is sent to the board before the click. The bot keys (arrows, E, Space, left "
+          f"Alt) are blocked system-wide until the run ends.\n", file=sys.stderr, flush=True)
+    start_ns = _clock()
+    deadline_ns = start_ns + int(timeout_s * 1e9)
+    while _clock() < deadline_ns:
+        _sleep(START_POLL_S)
+        tick()
+        if sink.sink_is_foreground():
+            print(f"sink in front after {(_clock() - start_ns) / 1e9:.1f} s; starting", file=sys.stderr, flush=True)
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -561,24 +586,28 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
     with RunWriter(cfg.out, link, seed=cfg.seed) as writer:  # opened before connect(): link.log gets its WARNINGs
         try:
             _check_processes(writer)  # before the listener blocks any key and before connect (hard rule 2)
+            last_check_ns = _clock()
+
+            def periodic_check() -> None:  # every 60 s from the start check on, the start wait included
+                nonlocal last_check_ns
+                if _clock() - last_check_ns >= PROCESS_CHECK_PERIOD_NS:
+                    _check_processes(writer)
+                    last_check_ns = _clock()
+
             try:
                 sink = start_sink(writer.run_dir)
             except OSError as e:
                 raise _Abort(f"listener did not start: {e}") from e
-            if not sink.bring_sink_to_foreground():
-                print(f"the sink did not take the foreground; click the window titled '{listener.SINK_TITLE}' "
-                      f"(the first command waits up to {FOCUS_RECHECKS} s for it)", file=sys.stderr, flush=True)
+            if not wait_for_click(sink, periodic_check):  # before connect: a timeout leaves the board untouched
+                raise _Abort(f"the sink did not take the foreground within {START_WAIT_S:g} s (no click)")
             connected = link.connect()
             if not is_successful(connected):
                 raise _Abort(f"connect failed: {connected.failure()}")
             writer.record_connect(connected.unwrap())
-            last_check_ns = _clock()
             mix = command_mix(mix_rng)
             seq, first_stimulus_ns, last_done_ns = 0, None, None
             while seq < cfg.commands or (last_done_ns or 0) - (first_stimulus_ns or 0) < target_ns:
-                if _clock() - last_check_ns >= PROCESS_CHECK_PERIOD_NS:
-                    _check_processes(writer)
-                    last_check_ns = _clock()
+                periodic_check()
                 cmd = next(mix)
                 if seq in fault_at:
                     outcome = _fault_then_command(writer, sink, layer, link, seq, cmd, fault_at[seq])
