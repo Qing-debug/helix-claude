@@ -798,6 +798,30 @@ def test_a_run_in_which_no_command_succeeds_ends_after_n_commands(tmp_path, driv
     assert all(r["error"] == "REJECTED" and r["done_ns"] is None for r in rows)
 
 
+@pytest.mark.parametrize("err", [InputError.ACK_TIMEOUT, InputError.REJECTED])
+def test_a_min_hours_run_aborts_after_k_consecutive_failures_past_n(tmp_path, driver_clock, err):
+    # A-H2-fix-R-D1 → B: one success, then only non-link failures past N: the span never grows, so the run
+    # aborts (release_all, session.json, exit 1) after K consecutive failed commands instead of never ending
+    link = DriverLink(driver_clock, fail_plays=range(3, DriverLink.MAX_PLAYS + 1), fail_error=err)
+    code, _, sink = _run(tmp_path, driver_clock, link=link, commands=2, min_hours=5 * S / 3600e9)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == soak.EXIT_ABORT
+    assert len(rows) == 2 + soak.MAX_CONSECUTIVE_FAILURES
+    assert all(r["error"] == str(err) for r in rows[2:])
+    assert link.events[-2:] == ["release_all", "close"] and sink.stopped
+    assert _session(tmp_path / "run")["end_ns"] is not None
+
+
+def test_failures_that_are_not_consecutive_do_not_abort_a_min_hours_run(tmp_path, driver_clock):
+    K = soak.MAX_CONSECUTIVE_FAILURES
+    link = DriverLink(driver_clock, fail_plays={p for p in range(3, 200) if p % K != 0},  # plays 1-2 succeed, then K-1 failures per success
+                      fail_error=InputError.REJECTED)
+    code, _, _ = _run(tmp_path, driver_clock, link=link, commands=2, min_hours=4 * K * S / 3600e9)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == 0 and len(rows) > 2 + K
+    assert _span(rows) >= 4 * K * S
+
+
 # ---- faults during the run ------------------------------------------------------------------------
 
 def _injector(clock, link, calls, seen_after_s=None, set_stamp=True):

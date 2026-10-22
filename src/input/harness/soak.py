@@ -74,6 +74,7 @@ LINK_LOG_FORMAT = "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
 
 FOCUS_LOST = "FOCUS_LOST"  # a harness status, not an InputError (C5)
 LINK_LOSS = (InputError.NOT_CONNECTED, InputError.LINK_LOST)  # a command Failure that aborts the run (D2)
+MAX_CONSECUTIVE_FAILURES = 10  # past N, a --min-hours run that fails this many commands in a row aborts (D1-B)
 FOCUS_RECHECKS = 10
 FOCUS_RECHECK_PERIOD_S = 1.0
 # Start wait (orchestrator ruling 18): an agent-launched sink cannot take the foreground itself, so the run waits for
@@ -611,7 +612,7 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
                 raise _Abort(f"connect failed: {connected.failure()}")
             writer.record_connect(connected.unwrap())
             mix = command_mix(mix_rng)
-            seq, first_stimulus_ns, last_done_ns = 0, None, None
+            seq, first_stimulus_ns, last_done_ns, failed_in_a_row = 0, None, None, 0
 
             def span_short() -> bool:  # H3's connected span; none yet (no Success) is not "short": stop at N
                 return (target_ns > 0 and first_stimulus_ns is not None and last_done_ns is not None
@@ -634,7 +635,12 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
                     first_stimulus_ns = outcome.row["stimulus_ns"]
                 if outcome.row["done_ns"] is not None:
                     last_done_ns = outcome.row["done_ns"]
+                failed_in_a_row = 0 if is_successful(outcome.result) else failed_in_a_row + 1
                 seq += 1
+                if seq >= cfg.commands and failed_in_a_row >= MAX_CONSECUTIVE_FAILURES and span_short():
+                    # A-H2-fix-R-D1 → B: past N only the span keeps the run going, and failures do not grow it
+                    raise _Abort(f"{failed_in_a_row} commands failed in a row at seq {seq - 1} and the "
+                                 f"--min-hours span is still short")
             ended = True
             print(f"soak done: {seq} commands -> {writer.run_dir}", flush=True)
             return EXIT_OK
