@@ -573,6 +573,25 @@ def test_driver_runs_n_commands_and_writes_the_c5_files(tmp_path, driver_clock):
         assert (run / name).exists(), name
 
 
+def test_session_connected_ns_is_stamped_right_after_the_first_connect(tmp_path, driver_clock, monkeypatch):
+    # A-H2-R-D1 → A: H3 starts Delivery's window at the first connect, not at the listener's start
+    link, calls = DriverLink(driver_clock), []
+    real_connect, returned = link.connect, []
+    link.connect = lambda timeout_s=30.0: (r := real_connect(timeout_s), returned.append(driver_clock.now))[0]
+    monkeypatch.setitem(soak.INJECTORS, "reset_board", _injector(driver_clock, link, calls))
+    code, _, _ = _run(tmp_path, driver_clock, link=link, commands=6, faults={"reset_board": 1})
+    assert code == 0 and len(returned) == 2  # the first connect and the reconnect after the fault
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    s = _session(tmp_path / "run")
+    assert returned[0] < s["connected_ns"] < rows[0]["stimulus_ns"]  # the first connect; the reconnect keeps it
+    assert s["start_ns"] < s["connected_ns"] < s["end_ns"]
+
+
+def test_session_connected_ns_is_null_without_a_connect(tmp_path, driver_clock):
+    code, _, _ = _run(tmp_path, driver_clock, link=DriverLink(driver_clock, connect_ok=False))
+    assert code == soak.EXIT_ABORT and _session(tmp_path / "run")["connected_ns"] is None
+
+
 def test_maplestory_at_start_aborts_before_connect(tmp_path, driver_clock, monkeypatch):
     monkeypatch.setattr(soak, "_process_names", lambda: Success(["explorer.exe", "MapleStory.exe"]))
     code, link, sink = _run(tmp_path, driver_clock)

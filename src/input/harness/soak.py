@@ -173,7 +173,8 @@ class RunWriter:
     """Writes one run's C5 files into `run_dir`. Use as a context manager (or call `open()` / `close()`).
 
     `session` is the dict written to `session.json`; callers set `process_check` (and anything else C5 lists) on
-    it. `record_connect()` fills `mtu`, `pong`, `ci_ms` from the first successful `connect()`."""
+    it. `record_connect()`, called right after the first successful `connect()`, stamps `connected_ns`
+    (perf_counter_ns) and fills `mtu`, `pong`, `ci_ms` from it; later calls change nothing."""
 
     def __init__(self, run_dir: str | Path, link: _Link, *, run_id: str | None = None, seed: int | None = None,
                  git_sha: str | None = None) -> None:
@@ -185,6 +186,7 @@ class RunWriter:
             "git_sha": git_sha if git_sha is not None else git_head(),
             "mtu": None, "pong": None, "ci_ms": None,
             "start_ns": None, "end_ns": None,
+            "connected_ns": None,  # right after the first successful connect() (A-H2-R-D1); null if none
             "process_check": None,
             "focus_pauses": [],
         }
@@ -244,9 +246,9 @@ class RunWriter:
         self._write(FAULTS_FILE, row)
 
     def record_connect(self, info: SessionInfo) -> None:
-        if self.session["mtu"] is not None:
+        if self.session["connected_ns"] is not None:
             return
-        self.session.update(mtu=info.mtu, pong=_pong_fields(info.pong), ci_ms=info.pong.itvl_units * CI_UNIT_MS)
+        self.session.update(connected_ns=_clock(), mtu=info.mtu, pong=_pong_fields(info.pong), ci_ms=info.pong.itvl_units * CI_UNIT_MS)
 
     def add_focus_pause(self, start_ns: int, end_ns: int) -> None:
         self.session["focus_pauses"].append([start_ns, end_ns])
