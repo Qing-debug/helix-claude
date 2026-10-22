@@ -533,4 +533,88 @@ Affects: what `actions.sequence` schedules (departs from C4's text as first writ
 
 Cost if wrong: ≈ 0.005 extra `hold_clipped` samples per 10 000-command soak compared with C4's literal text. KS is unchanged (it uses the unclipped `chosen_ms`), and H4 gates `hold_clipped` separately either way.
 
-Undo: in `src/input/actions.py` replace the `nxt = next(...)` line (:158 at `dabc542`, :164 at `0ed0c7a`) with `nxt = n + 1 if n + 1 < len(keys) and keys[n + 1] == key else None` and delete the comment above it that cites A-P3-D1 (:161-163 at `0ed0c7a`); delete or invert `test_sequence_clips_a_non_adjacent_repeat_too` (`tests/input/test_actions.py`, :313-319 at `dabc542`) and `test_sequences_over_three_keys_validate_with_every_hold_and_gap_at_its_extreme` (`732f842`; it fails under B). Not `git revert dabc542`, which removes all of P3. Then revert the docs: `git revert e24945c`, and revert the commit that added this entry (`git log --format=%h -S 'A-P3-D1 (2026-10-22)' -- docs/decisions.md`).
+Undo: in `src/input/actions.py` replace the `nxt = next(...)` line (:158 at `dabc542`, :164 at `0ed0c7a`) with `nxt = n + 1 if n + 1 < len(keys) and keys[n + 1] == key else None` and delete the comment above it that cites A-P3-D1 (:161-163 at `0ed0c7a`); delete or invert `test_sequence_clips_a_non_adjacent_repeat_too` (`tests/input/test_actions.py`, :313-319 at `dabc542`) and `test_sequences_over_three_keys_validate_with_every_hold_and_gap_at_its_extreme` (`732f842`; it fails under B). Not `git revert dabc542`, which removes all of P3. Not `git revert 732f842` alone either: `732f842` (= `aed5141` on `p1a-p2`) also adds the three A-P3-R m1 walk tests, which are red until `0ed0c7a` (= `48e4f80`), so reverting it alone silently drops them and leaves `MAX_WALK_INTENDED_MS` with no boundary test, and `git revert 0ed0c7a` alone leaves red tests; revert `732f842` and `0ed0c7a` together or not at all, and `git bisect skip 732f842` (A-P4-R Q4). Then revert the docs: `git revert e24945c`, and revert the commit that added this entry (`git log --format=%h -S 'A-P3-D1 (2026-10-22)' -- docs/decisions.md`).
+
+## A-H1-D2 (2026-10-22): the listener's `start()` raises `OSError` on a setup failure instead of returning a Result
+
+Question: when the keyboard hook or the Tk sink window does not come up within 5 s, does `start(out_dir, block=True)` raise or return a `Result`? Options: A. raise `OSError` after `stop()` has cleaned up, keeping the plan's signature `start(...) -> Listener` (as built in `cd794a4`). B. return `Result[Listener, str]`.
+
+Ruling: A (ruled [spec-text] by the orchestrator from the plan's own signature); confirmed KEEP by A-H1-R.
+
+Reason: the plan fixes `start(out_dir, block=True) -> Listener` (A-PF I5), and H2, V1 and V2 are written to it. A `Result` return would change three downstream tasks' interface for no gain, since none of them can recover from "no hook / no sink window"; each stops. Hard rule 5 and CLAUDE.md "Error handling" scope the Result pattern to controller, parser and graph code; `listener.py` is harness start-up code, where an `OSError` for a Win32 setup failure is the ordinary idiom. `_start` calls `stop()` before raising (A-H1-R: `listener.py:293,296` at `cd794a4`). The two 5 s waits run one after the other, so the worst case is about 10 s (A-H1-R m4, a docstring nit).
+
+Affects: `src/input/harness/listener.py` `start()`; plan A task H1, public API bullet (unchanged: it already gives `-> Listener`). Applied in `cd794a4`.
+
+Cost if wrong: about 5 lines in `start()` plus a plan edit to H1's API bullet and its H2/V1/V2 callers.
+
+Undo: make `start()` in `src/input/harness/listener.py` return `Success(listener)` / `Failure(message)` instead of raising, update H1's public API bullet and the H2/V1/V2 call sites in the plan, and revert the commit that added this entry (`git log --format=%h -S 'A-H1-D2 (2026-10-22)' -- docs/decisions.md`).
+
+## A-P4-D1 (2026-10-22): each `InputError` value is its member name
+
+Question: are `InputError`'s values the member names (`"LINK_LOST"`) or `auto()` lower case (`"link_lost"`)? C5's `link_faults.jsonl` writes "its InputError" and H3 counts `LINK_LOST` lines. Options: A. value == name (as built, pinned by a test). B. `auto()` lower case; H2 and H3 write and read `.name`.
+
+Ruling: A (ruled as Hong while away, adjudicated by A-P4-R, opus-xhigh); confirmed KEEP by A-P4-R2.
+
+Reason: JSON writes a StrEnum's value. Under `auto()` a writer that forgets `.name` writes `"link_lost"`, so H3's `LINK_LOST` drop count reads 0 and the Drops gate passes falsely. Under A, `str()` and `json` both give `"LINK_LOST"`. A-P4-R2 found that the C5 and H3 case tables all use upper-case literals.
+
+Affects: `InputError` in `src/input/link.py` (C3 interface) and every C5 field that carries an InputError (`link_faults.jsonl` and `faults.jsonl` `error`). Applied in `7df1a43` on `p1a-input` (cherry-pick of `a7b58ad` from `p1a-p2`); plan text in `82f9c7d` (C3's `InputError` line).
+
+Cost if wrong: none known.
+
+Undo: `git revert 7df1a43` (still clean: the fix round does not touch the enum, A-P4-R2 Q1), then restore C3's `InputError` line from `82f9c7d^`.
+
+## A-P4-D2 (2026-10-22): a failed public `ping()` is returned and never ends the session
+
+Question: when a public `ping()` fails while the session is live, does `BleLink` only return the error, or end the session? Options: A. return `WRITE_FAILED` / `ACK_TIMEOUT` with the session left live (as first built in `7c0de44`). A′. A, plus A-P4-R I1's `ACK_TIMEOUT` `faults()` entry (A-P4-R-D1). B. a `LINK_LOST` fault that ends the session.
+
+Ruling: A′ (ruled as Hong while away, adjudicated by A-P4-R); confirmed KEEP by A-P4-R2.
+
+Reason: the keepalive already detects a dead link within about 0.75 s, and ending the session from `ping()` would add a third session-ending path the plan lacks (only a keepalive miss and `disconnected_callback` end a session; P4 Session state). V2 step 3 is the only Phase 1 caller and writes no `link_faults.jsonl`, so the entry has no Phase 1 consumer and no gate effect. No session end does not mean no fault: a missed PONG is an `ACK_TIMEOUT` fault entry, while a write that raises is `WRITE_FAILED` with no entry. One asymmetry is by design (A-P4-R2 Q2): a `ping()` whose write blocks for the whole 0.5 s is `ACK_TIMEOUT` (a fault), because `_ping_cmd` has one limit over write + PONG, while a `play()` / `release_all()` whose write blocks is `WRITE_FAILED` (not a fault). A `ping()` blocked in its write is not cut short at session end; it returns `LINK_LOST` / `NOT_CONNECTED` within its own 0.5 s (A-P4-R2 Q4).
+
+Affects: `BleLink.ping()` (C3); plan A task P4, `ping()` bullet and the Keepalive bullet's last sentence. Applied in `7c0de44` (`_public_ping`, cherry-pick of `1ce4acb`), the fault entry in `d15c32b` (= `ad50320`), pinned by `2691a42` (= `4ebb922`); plan text in `82f9c7d`.
+
+Cost if wrong: a probe `ping()` cannot end a session.
+
+Undo: in `src/input/link.py` `_public_ping`, on a Failure while the same session is live call `_end_session(LINK_LOST)` instead of returning it; invert `test_ping_ack_timeout_is_a_fault_and_the_session_stays_live` and `test_ping_write_failure_is_returned_and_the_session_stays_live` (`tests/input/test_link.py`, `2691a42`); then revert the `ping()` bullet and C3's `ping` comment from `82f9c7d`.
+
+## A-P4-R-D1 (2026-10-22): `faults()` records `ACK_TIMEOUT` beside `LINK_LOST`
+
+Question: which failures besides `LINK_LOST` are `faults()` entries? Options: A. `ACK_TIMEOUT` only; `WRITE_FAILED` and `NOTIFY_FAILED` are not faults. B. also `WRITE_FAILED` and `NOTIFY_FAILED`.
+
+Ruling: A (ruled as Hong while away; raised and analysed by A-P4-R, opus-xhigh, with no second adjudicator, as with A-F5-adj-D1); confirmed KEEP by A-P4-R2.
+
+Reason: `ACK_TIMEOUT` is the one the plan names (P4 Notification dispatch: "fails with `ACK_TIMEOUT`, which is a fault"), and H3 treats non-`LINK_LOST` lines as faults but not drops. A-P4-R2 checked C5 `faults.jsonl`: `fault_seen_ns` can now be an `ACK_TIMEOUT` entry, but each one is appended in the same loop step as the Failure it accompanies (or just before `ping()` returns it), so `reported_ns` and `error` are what `failure_ns` alone gives. Under B, `WRITE_FAILED` / `NOTIFY_FAILED` entries would add nothing a command row does not already carry with its seq. The entries are a missed ACCEPTED or DONE, a DONE status on the `ACK_TIMEOUT` path, and a public `ping()`'s `ACK_TIMEOUT` while its session is live; a keepalive miss adds only its `LINK_LOST`, and ready-wait PINGs and `close()` add none.
+
+Affects: what `BleLink.faults()` holds (C3); C5 `link_faults.jsonl` and `faults.jsonl` `fault_seen_ns`; H3's Connection check. Applied in `d15c32b` (= `ad50320`); plan text in `82f9c7d` (C3 `faults()` comment, C5 `fault_seen_ns` and `link_faults.jsonl`, P4 fault list).
+
+Cost if wrong: H3 undercounts write failures.
+
+Undo: add `WRITE_FAILED` and `NOTIFY_FAILED` to the fault append in `src/input/link.py` (the `_fault` callers, as of `e95df27`), flip `test_other_failures_are_not_faults`, and reword the plan lines listed under Affects.
+
+## A-H1b-D1 (2026-10-22): for H1 step 3, Hong clicks the sink once and the board script runs unattended
+
+Question: how does the sink window become foreground for H1 step 3's board key check, after A-H1b saw `SetForegroundWindow` refused twice while another app was in front? Options: A. Hong's fallback: he clicks the sink and presses the keys himself (no board evidence). B. Hong clicks the sink once; the board script waits for it, then runs unattended through the same gates (one click, full board evidence, throwaway script change only). C. `AttachThreadInput` / `SPI_SETFOREGROUNDLOCKTIMEOUT` (touches Hong's window input state or a system setting).
+
+Ruling: B (Hong's decision; he did not name an option, so it was read as the recommended one, and he was told so).
+
+Reason: one click gives the full board evidence (real HID input, `injected=false`) with only a gitignored script changed; C is barred by H1 without a decision. A-H1c ran it and H1 step 3 passed: 94/94 lines `injected=false`, arrows, E and Space down and up, a 3 s LEFT hold gave repeat lines from 507 ms, and left Alt arrived as VK 0xA4 only.
+
+Affects: how H1 step 3 was run (gitignored `scripts/h1b_live.py`, `scripts/h1c_listener.py`); no code or plan change.
+
+Cost if wrong: one more click from Hong.
+
+Undo: none needed for code or plan; option A (Hong presses the keys himself) stays available to redo step 3.
+
+## A-H1c-D1 (2026-10-22): H1 step 3's pass-through check uses one Shift press from Hong with the listener blocking
+
+Question: the board cannot send Shift (PLAY's mask has seven keys), so how does H1 step 3 show a key that is not blocked going on through `CallNextHookEx` (A-H1-R item 5)? Options: A. shift-human: the listener blocks as the plan says, the board taps LEFT as a control, Hong presses Shift once, and a record-only observer hook installed before the listener logs a key only if the listener passed it on. B. noblock: the listener runs with `--no-block` and the board taps LEFT. C. add Shift to the firmware (out of scope).
+
+Ruling: A (ruled [local] by the orchestrator: a test method inside the brief that keeps the plan's blocking mode; Hong was present and agreed to help).
+
+Reason: A-H1c's second run passed. The observer saw Hong's left Shift (VK 0xA0, in both logs, `injected=false`) but not the board's LEFT (blocked), which shows both the `CallNextHookEx` path and blocking.
+
+Affects: H1 step 3 evidence only (gitignored `scripts/h1c_observer.py` and `data/`); no code or plan change.
+
+Cost if wrong: one more press from Hong.
+
+Undo: none needed; option B (a `--no-block` run) stays available as a control.
