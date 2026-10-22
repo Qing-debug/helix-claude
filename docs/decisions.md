@@ -305,15 +305,15 @@ Reason: the opus-xhigh adjudicator (A-F1-R) found that every compile with `--out
 
 Affects: `.gitignore` only; no plan command changes. Applied in `9e6c31a`; its comment's cause reworded (F1 review M1) in `8d70f4a`.
 
-Cost if wrong: one revert commit (`git revert 9e6c31a`), and a reviewer flags the untracked folder.
+Cost if wrong: deleting `.gitignore:40-41`, and a reviewer flags the untracked folder.
 
-Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F1-R); undo: `git revert 9e6c31a`.
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F1-R); undo: delete `.gitignore:40-41` (`git revert 9e6c31a` alone conflicts, `8d70f4a` rewrote :40).
 
 ## A-PF-D1 (2026-10-22): TimingModel.draws gives each Sample its index
 
 A′ (amended A). C3 `TimingModel` gains a read-only `draws: int`: the values its six methods have returned so far, 0 at construction, rejected truncation candidates not counted. A builder sets `index = model.draws - 1` right after each draw, so `Sample.index` is the 0-based draw ordinal (with the seed it fixes the value's place in the RNG stream). The P3 and P5 stubs count their calls in `draws`, C3 notes that one thread draws at a time, and V1 M4's probe-only override calls the base method. The other option was B (the six methods return a partial `Sample`); C (a second `sample()` API beside the floats) and D (drop `index`) were also weighed and rejected.
 
-Reason: the opus-xhigh adjudicator (A-PF-adj1) found that A′ is additive, keeps the float returns that P2's tests and the P3/P5 stubs assume, and that no check reads `index` (H3 and H4 never do). numpy 2.5.1's PCG64 exposes no draw counter, so a model-level ordinal is the only integer form of PAr-D1 §3's "stream position". B changes six C3 return types and makes every P2 test unwrap `.ms`. A′'s one weakness, a read-after-call race, needs two threads drawing at once, which no Phase 1 caller has.
+Reason: the opus-xhigh adjudicator (A-PF-adj1) found that A′ is additive, keeps the float returns that P2's tests and the P3/P5 stubs assume, and that no gate check reads `index` (H3 and H4 never do; only P3's and P5's unit tests assert it). numpy 2.5.1's PCG64 exposes no draw counter, so a model-level ordinal is the only integer form of PAr-D1 §3's "stream position". B changes six C3 return types and makes every P2 test unwrap `.ms`. A′'s one weakness, a read-after-call race, needs two threads drawing at once, which no Phase 1 caller has.
 
 Affects: the C3 interface (`TimingModel.draws`, the meaning of `Sample.index`); plan A tasks P2, P3, P5 and V1. Plan lines as of `fd06197`: C3 :228 and :233-236, P2 :810-812, P3 :840-842 and :853-855, P5 :1066-1071, V1 :1186-1189. Applied in `fd06197`.
 
