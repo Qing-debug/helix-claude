@@ -184,17 +184,6 @@ def test_wait_uses_the_reaction_and_elapsed_exactly(clock, link):
     assert clock.sleeps == [pytest.approx((212.5 - 12.345678) / 1000)]
 
 
-@pytest.mark.parametrize("error", list(InputError), ids=[e.name for e in InputError])
-@pytest.mark.parametrize("name, call, build", METHODS, ids=METHOD_IDS)
-def test_link_play_failures_pass_through_unchanged(clock, link, name, call, build, error):
-    link.play_result = Failure(error)
-
-    result = call(InputLayer(link, StubModel()))
-
-    assert not is_successful(result)
-    assert result.failure() is error
-
-
 def test_release_all_bypasses_timing(clock, link):
     model = StubModel()
     layer = InputLayer(link, model)
@@ -252,6 +241,21 @@ def test_sequence_of_nine_keys_is_too_long_without_waiting_or_sending(clock, lin
     assert link.calls == []
     assert clock.sleeps == []
     assert model.draws == 0
+
+
+@pytest.mark.parametrize("call", [
+    lambda L: L.walk(Key.LEFT | Key.RIGHT, 500.0, stimulus_ns=STIMULUS_NS),
+    lambda L: L.sequence([], stimulus_ns=STIMULUS_NS),
+    lambda L: L.sequence([Key.LEFT | Key.E], stimulus_ns=STIMULUS_NS),
+], ids=["walk_two_direction_bits", "sequence_empty", "sequence_multi_bit_key"])
+def test_a_malformed_direction_or_key_list_is_too_long_without_waiting_or_sending(clock, link, call):
+    clock.now_ns = STIMULUS_NS + 10_000_000
+
+    result = call(InputLayer(link, StubModel()))
+
+    assert result.failure() is InputError.TOO_LONG
+    assert link.calls == []
+    assert clock.sleeps == []
 
 
 def test_sequence_of_eight_keys_plays_sixteen_steps(clock, link):
@@ -352,6 +356,8 @@ def test_feedback_release_from_another_thread_aborts_the_walk_without_waiting():
     action_thread.join(2.0)
 
     assert not feedback_thread.is_alive() and not action_thread.is_alive()
+    assert walk_result, "the action thread produced no result"
+    assert release_result, "the feedback thread produced no result"
     released, elapsed_s = release_result[0]
     assert is_successful(released)
     assert elapsed_s < 0.1

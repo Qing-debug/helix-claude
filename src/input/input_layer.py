@@ -44,7 +44,7 @@ class InputLayer:
         return self._act(actions.tap(self._model, key), stimulus_ns)
 
     def walk(self, direction: Key, intended_ms: float, stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
-        # Any builder Failure (per-step cap, or an unusable intended_ms) is TOO_LONG, before any wait (C3).
+        # Any builder Failure (per-step cap, unusable intended_ms, or a malformed direction) is TOO_LONG, before any wait (C3).
         return self._act_checked(actions.walk(self._model, direction, intended_ms), stimulus_ns)
 
     def teleport(self, direction: Key, stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
@@ -57,7 +57,7 @@ class InputLayer:
         return self._act(actions.jump(self._model), stimulus_ns)
 
     def sequence(self, keys: Sequence[Key], stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
-        # More than 8 keys (or no key) is a builder Failure -> TOO_LONG, before any wait (C3, PA-rev m2).
+        # Any builder Failure (more than 8 keys, no key, or a malformed key) is TOO_LONG, before any wait (C3, PA-rev m2).
         return self._act_checked(actions.sequence(self._model, keys), stimulus_ns)
 
     def release_all(self) -> Result[SendReport, InputError]:
