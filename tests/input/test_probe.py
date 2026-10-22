@@ -8,6 +8,7 @@ probe reports run analyze.py / realism.py on real C5 files.
 import asyncio
 import json
 import math
+import re
 import threading
 
 import pytest
@@ -850,6 +851,15 @@ def test_m8_confirms_a_tick_granularity_of_10_to_16_ms(tmp_path, clock):
     assert "[review]" not in rep
 
 
+def test_m8_reviews_a_granularity_above_the_upper_bound(tmp_path, clock):
+    # A-V1-Rb m1: ~20 ms ticks are past 16 ms + the 1 ms stamp tolerance
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(20)}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    est = float(re.search(r"M8 tick_ms granularity: NOT CONFIRMED ~([\d.]+) ms", rep).group(1))
+    assert 17 < est < 21 and "[review] m8: tick_ms granularity" in rep
+
+
 def test_m8_reviews_a_granularity_outside_10_to_16_ms(tmp_path, clock):
     code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(1)}))
     assert code == probe.EXIT_OK
@@ -865,11 +875,22 @@ class ReleaseLink(ProbeLink):
     waits for the second thread's release_all(): the schedule's transitions before the release call are logged;
     the release lifts every key still down at its done_ns + `up_shift_ns` (unless `lift` is False) and the play
     ends Failure(ABORTED). `reorder`: the PLAY reaches the board after the RELEASE_ALL, so its whole schedule plays
-    from the release's done_ns + 50 ms and the play ends Success. release_all() is done 4 ms after its call."""
+    from the release's done_ns + 50 ms and the play ends Success. release_all() is done 4 ms after its call.
 
-    def __init__(self, clock, keys, reorder=False, lift=True, up_shift_ns=-1 * MS, **kw):
+    One reason at a time for release_ordering_report (each leaves the others clean): `play_ok` the play ends Success
+    with nothing else wrong; `release_fail` release_all() returns that InputError; `late_down_ns` an extra short E
+    tap at done_ns + that (past done_ns + CI + 5 ms); `up_shift_ns` 600 ms = a 600 ms E hold; `lift` False = E left
+    down. `reorder_aborted`: the realistic reorder, the schedule plays 50 ms after done_ns but the PC marked the
+    play ABORTED on the RELEASE_ALL's DONE (P4's abort rules)."""
+
+    def __init__(self, clock, keys, reorder=False, lift=True, up_shift_ns=-1 * MS, play_ok=False, release_fail=None,
+                 late_down_ns=None, reorder_aborted=False, **kw):
         super().__init__(clock, keys, **kw)
         self.reorder = reorder
+        self.play_ok = play_ok
+        self.release_fail = release_fail
+        self.late_down_ns = late_down_ns
+        self.reorder_aborted = reorder_aborted
         self.lift = lift
         self.up_shift_ns = up_shift_ns
         self.released = threading.Event()
@@ -889,7 +910,7 @@ class ReleaseLink(ProbeLink):
         assert self.released.wait(10), "no release_all() from the second thread"
         rel, done = self.release_call_ns, self.release_done_ns
         trans = [(t * 100_000, VK_BY_KEY[k], d) for t, k, d in transitions(steps)]
-        if self.reorder:
+        if self.reorder or self.reorder_aborted:
             rows = [self._key(done + 50 * MS + t, vk, d) for t, vk, d in trans]
         else:
             rows = [self._key(sent + MS + t, vk, d) for t, vk, d in trans if sent + MS + t < rel]
@@ -897,9 +918,13 @@ class ReleaseLink(ProbeLink):
                     if [r["down"] for r in rows if r["vk"] == vk][-1]]
             if self.lift:
                 rows += [self._key(done + self.up_shift_ns, vk, False) for vk in held]
+            if self.late_down_ns is not None:
+                e = VK_BY_KEY[Key.E]
+                rows += [self._key(done + self.late_down_ns, e, True),
+                         self._key(done + self.late_down_ns + 2 * MS, e, False)]
         self.keys.extend(rows)
         self.clock.now = max([self.clock.now] + [r["qpc_ns"] for r in rows]) + 20 * MS
-        if not self.reorder:
+        if not self.reorder and not self.play_ok:
             return Failure(InputError.ABORTED)
         return Success(SendReport(seq=self.plays, sent_ns=sent, written_ns=sent + 1_000, accepted_ns=sent + 2_000,
                                   done_ns=self.clock.clock(), accepted=Accepted(self.plays, 0),
@@ -911,6 +936,8 @@ class ReleaseLink(ProbeLink):
         self.release_call_ns = self.clock.clock()
         self.release_done_ns = self.release_call_ns + 4 * MS
         self.released.set()
+        if self.release_fail is not None:
+            return Failure(self.release_fail)
         return Success(SendReport(seq=0, sent_ns=self.release_call_ns, written_ns=self.release_call_ns + 1_000,
                                   accepted_ns=None, done_ns=self.release_done_ns, accepted=None,
                                   done=Done(seq=0, status=0, fail_step=None, rc=0, t0_us=0, late_us=())))
@@ -994,6 +1021,41 @@ def test_release_ordering_a_reordered_play_stops_with_a_review_item(tmp_path, cl
     assert "[review] release_ordering: the writes can reorder" in rep and "P4's abort rules" in rep
     err = capsys.readouterr().err
     assert "not run: two" in err
+
+
+def _ordering_outcomes(rep):
+    """The reasons on the report's 'other outcomes:' line, as {reason: trials}."""
+    tail = [ln for ln in rep.splitlines() if ln.startswith("release-all ordering:")][0].partition("other outcomes: ")[2]
+    return {k: int(v) for k, v in re.findall(r"(.+?) (\d+)(?:, |$)", tail)}
+
+
+@pytest.mark.parametrize("reason, link_kw", [
+    ("play OK", {"play_ok": True}),
+    ("release_all not OK", {"release_fail": InputError.WRITE_FAILED}),
+    ("key-down past the margin", {"late_down_ns": 50 * MS}),
+    ("E hold >= 500 ms", {"up_shift_ns": 600 * MS}),
+    ("E left down", {"lift": False}),
+], ids=["play-not-aborted", "release-all-failed", "late-key-down", "long-e-hold", "e-left-down"])
+def test_release_ordering_stops_for_each_reason_alone(tmp_path, clock, reason, link_kw):
+    # A-V1-Rb I1: plan V1 "any other outcome ... stop"; each per-trial reason, the others clean, must stop on its own
+    code, _ = _run(tmp_path, clock, probes=("release_ordering",), rig=ReleaseRig(clock, link_kw=link_kw))
+    rep = _report(tmp_path, "release_ordering")
+    kinds = _ordering_outcomes(rep)
+    assert kinds.keys() == {reason} and 0 < kinds[reason] <= probe.RELEASE_ORDER_N
+    assert code == probe.EXIT_STOP
+    assert "[review] release_ordering: the writes can reorder" in rep and f"{reason} {kinds[reason]}" in rep
+
+
+def test_release_ordering_stops_on_the_realistic_reorder_that_the_pc_marked_aborted(tmp_path, clock):
+    # P4's abort rules: the PC ends the play ABORTED on the RELEASE_ALL's DONE, the board still plays the 1 s E hold
+    # 50 ms after done_ns: play ABORTED and release OK, so only the key-down and the hold betray it (A-V1-Rb I1)
+    rig = ReleaseRig(clock, link_kw={"reorder_aborted": True})
+    code, _ = _run(tmp_path, clock, probes=("release_ordering",), rig=rig)
+    rep = _report(tmp_path, "release_ordering")
+    n = probe.RELEASE_ORDER_N
+    assert f"play ABORTED {n} of {n}" in rep and f"release_all OK {n} of {n}" in rep
+    assert _ordering_outcomes(rep) == {"key-down past the margin": n, "E hold >= 500 ms": n}
+    assert code == probe.EXIT_STOP and "[review] release_ordering: the writes can reorder" in rep
 
 
 def test_release_ordering_an_e_up_late_past_done_ns_is_reported_not_gated(tmp_path, clock):
