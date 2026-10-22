@@ -290,6 +290,17 @@ def test_link_log_gets_warnings_with_perf_ns_and_not_info(tmp_path):
     assert level == "WARNING" and " ".join(msg) == "undecodable notification: deadbeef"
 
 
+def test_link_log_is_overwritten_when_the_run_dir_is_reused(tmp_path):
+    # A-H2-R M1: link.log is opened like the .jsonl files and session.json ('w'), so it holds one run only
+    logger = logging.getLogger("src.input.link")
+    with _writer(tmp_path):
+        logger.warning("first run")
+    with _writer(tmp_path) as w:
+        logger.warning("second run")
+    lines = (w.run_dir / "link.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and lines[0].endswith("WARNING second run")
+
+
 def test_link_log_handler_removed_on_ctrl_c(tmp_path):
     logger = logging.getLogger("src.input.link")
     before_handlers = list(logger.handlers)

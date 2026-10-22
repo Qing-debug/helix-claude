@@ -10,7 +10,8 @@ path (normal end, abort, Ctrl-C):
   (opened with ``newline="\\n"``, A-D3-LF). `drain()` moves `link.take_pongs()` into `pongs.jsonl` and the
   `link.faults()` entries not yet logged into `link_faults.jsonl`; `run_command` calls it after every command and
   `close()` once more.
-- `link.log`: a `logging.FileHandler` on logger ``src.input.link``, level WARNING, a filter that stamps
+- `link.log`: a `logging.FileHandler` (mode 'w', as the other files) on logger ``src.input.link``, level WARNING,
+  a filter that stamps
   ``record.perf_ns = time.perf_counter_ns()`` (filters run in `Handler.handle`, in the logging thread, before
   `emit`), format ``%(created).6f %(perf_ns)d %(levelname)s %(message)s``. Attached on open, so open the writer
   before `connect()`; removed and closed by `close()`.
@@ -208,7 +209,7 @@ class RunWriter:
         self.session["start_ns"] = _clock()
 
     def _attach_link_log(self) -> None:
-        handler = logging.FileHandler(self.run_dir / LINK_LOG_FILE, encoding="utf-8")
+        handler = logging.FileHandler(self.run_dir / LINK_LOG_FILE, mode="w", encoding="utf-8")  # one run per file
         handler.setLevel(logging.WARNING)
         handler.addFilter(_stamp_perf_ns)
         handler.setFormatter(logging.Formatter(LINK_LOG_FORMAT))
