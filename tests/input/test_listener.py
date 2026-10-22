@@ -1,6 +1,8 @@
 """Tests for the H1 keystroke listener's pure parts (no hook, no Tk, no keystrokes)."""
 import io
 import json
+import threading
+import time
 
 import pytest
 
@@ -14,6 +16,7 @@ from src.input.harness.listener import (
     RawKeyEvent,
     TransitionTracker,
     VK_BY_KEY,
+    _STOP,
     parse_args,
     should_block,
 )
@@ -212,3 +215,48 @@ def test_bring_returns_recheck_when_focus_stays(set_result):
     fake = FakeForeground(OTHER, set_result, moves_on_set=False)
     assert _listener(fake).bring_sink_to_foreground() is False
     assert fake.set_calls == [SINK]
+
+
+# ---- writer thread (A-H1-R m8, m5): no hook, no Tk --------------------------------
+
+def _run_writer(lst):
+    th = threading.Thread(target=lst._writer_thread, daemon=True)
+    th.start()
+    return th
+
+
+def test_writer_thread_appends_drains_before_stop_and_uses_lf(tmp_path):
+    keys = tmp_path / "keys.jsonl"
+    keys.write_bytes(b'{"old": 1}\n')  # append mode: an existing file is kept
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    events = [RawKeyEvent(10 * (i + 1), VK_LEFT, 0 if i % 2 == 0 else LLKHF_UP, i) for i in range(6)]
+    for ev in events:
+        lst._queue.put(ev)
+    lst._queue.put(_STOP)
+    th = _run_writer(lst)  # queue is already full: every event is ahead of _STOP
+    th.join(5)
+    assert not th.is_alive()
+    raw = keys.read_bytes()
+    assert b"\r" not in raw  # newline="\n": LF on Windows too
+    lines = raw.split(b"\n")
+    assert lines[0] == b'{"old": 1}' and lines[-1] == b""
+    rows = [json.loads(line) for line in lines[1:-1]]
+    assert [r["qpc_ns"] for r in rows] == [ev.qpc_ns for ev in events]
+
+
+def test_writer_thread_flushes_when_queue_goes_idle(tmp_path):
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    th = _run_writer(lst)
+    keys = tmp_path / "keys.jsonl"
+    try:
+        lst._queue.put(RawKeyEvent(1, VK_E, 0, 1))
+        deadline = time.monotonic() + 5
+        data = b""
+        while time.monotonic() < deadline and not data.endswith(b"\n"):
+            time.sleep(0.01)
+            data = keys.read_bytes() if keys.exists() else b""
+        assert data.endswith(b"\n")  # visible on disk before the writer is told to stop
+    finally:
+        lst._queue.put(_STOP)
+        th.join(5)
+    assert not th.is_alive()

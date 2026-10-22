@@ -247,7 +247,8 @@ class Listener:
 
     def _writer_thread(self) -> None:
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.out_path, "a", encoding="utf-8") as fh:
+        with open(self.out_path, "a", encoding="utf-8", newline="
+") as fh:  # LF on Windows too (m5)
             writer = KeyLogWriter(fh)
             while True:
                 item = self._queue.get()
