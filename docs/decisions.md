@@ -320,3 +320,27 @@ Affects: the C3 interface (`TimingModel.draws`, the meaning of `Sample.index`); 
 Cost if wrong: low. `index` is investigation-only: if B–D later draw from two threads, logged indexes can repeat or skip, which corrupts no gated result, and a later switch to B changes six signatures before P2 lands.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert fd06197`.
+
+## A-PF-D3 (2026-10-22): V1 runs after H4 and imports H2-H4's logic
+
+A′ (amended A). Plan A's task order becomes H1, H2, H3, H4, V1, V2, V3, and the V1 section moves after H4. H2, H3 and H4 expose importable functions (the C5 run writer and the focus policy in `soak.py`, Delivery matching with its per-command windows and the M7 split in `analyze.py`, the pairing of samples to listener intervals in `realism.py`); V1's `probe.py` imports them, re-implements none, and sets `stimulus_ns` before each command. V1's foreground pre-check moves into H2 step 3, whose 200-command dry run becomes the first run of `BleLink`/`InputLayer` on the board. The M7 definition stays at V1's M7 bullet (PA-fix1c-D1-adj-D1, PA-rev3a-D1). The other options were B (keep the order; V1 creates `harness/runlog.py`, which H2 imports) and C (split V1 into a part before H2 and a part after H4).
+
+Reason: the opus-xhigh adjudicator (A-PF-adj2) found that V1 used H2-H4 logic (C5 writer, focus policy, Delivery matching, pairing, M7 split) before those tasks exist. A′ removes the duplicated logic, keeps it in tasks that have tests, and weakens no hard rule. B leaves matching, pairing and the M7 split duplicated or moves them into a task with no test file, and adds a module to C3's list; C still needs a writer and a focus policy before H2, plus a new task id and a second hardware session.
+
+Affects: plan A task order and the module boundaries / data flow between H2-H4 and V1. Plan lines as of `56443e6`: task table :423-427, H2 :1191, :1195-1199 and step 3 :1280-1285, H3 :1330-1331, H4 :1407-1408, V1 :1426-1502 (moved; Files :1428-1432, :1448-1449, M2 :1450-1453, M4 :1465, M7 :1478-1479). Applied in `dcb59a1`.
+
+Cost if wrong: the release-all ordering check now runs after H2's 200-command dry run, so the worst case is one ≤ 10 s schedule of bot keys (no Enter) into the test window during that dry run; and P4/P5 hardware bugs surface in H2's dry run, where V1's narrower probes would have isolated them faster.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert dcb59a1` (V1 back before H2; revert `56443e6` first if its H2 hunks conflict).
+
+## A-PF-D4 (2026-10-22): C5 logs link faults and session starts for H3's Connection check
+
+Amended A. C5 gains `link_faults.jsonl` (`{"qpc_ns", "error"}`, one line per `BleLink.faults()` entry, appended by H2's soak driver after each command and on every exit path; a `LINK_LOST` line is one drop, and `close()` adds none) and `session_starts.jsonl` (one row per start: attempt, condition, result, error, seconds, start_ns, end_ns; written by V2's `session_starts.py` into its own run dir `data/starts/<run>/`). H3's Connection check becomes two parts with tests: starts (`--starts <file>`: 20 rows split 8/6/6, all Success) and drops (`LINK_LOST` lines, gated only in a run with no injected fault: 0 drops over a connected span ≥ 2 h, from the first command's `stimulus_ns` to the last non-null `done_ns`). V2 gets a writer test step (step 2b) and passes `--starts` to `analyze`. The other option was B (count `LINK_LOST`/`NOT_CONNECTED` rows in `commands.jsonl`).
+
+Reason: the opus-xhigh adjudicator (A-PF-adj2) found that H3's Connection check read two inputs that nothing defined. B miscounts deliberate `close()` reconnects as drops (`close()` fails pending commands with `NOT_CONNECTED`, which is not a fault, PA-rev3a-D2), cannot see a drop after the last command, has no drop times, and leaves the session-start log undefined. A is additive to C5 and measures spec:L61's quantities directly.
+
+Affects: the C5 file format (two new files) and the data flow H2 / V2 → H3; plan A tasks H2, H3, V2 and V3. Plan lines as of `56443e6`: C5 heading :341 and bullets :390-401, H2 :1192-1194 and :1277-1279, H3 :1343-1351 and :1371-1375, V2 :1506-1507, :1513-1515, :1518-1520 and :1524-1526, V3 :1557-1558. Applied in `56443e6`.
+
+Cost if wrong: two extra harness files and their tests.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert 56443e6`.
