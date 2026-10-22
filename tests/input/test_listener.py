@@ -361,3 +361,48 @@ def test_stop_says_so_when_the_quit_post_fails_and_the_hook_thread_stays_alive(m
     assert "blocked" in err
     assert lst._sink_stop.is_set()
     assert not lst._queue.empty()  # the writer's _STOP was queued
+
+
+# ---- CLI cue when the sink is not in front (A-H1-R m6) -------------------------------------------
+
+class FakeCliListener:
+    sink_hwnd = SINK
+
+    def __init__(self, out_path, fg):
+        self.out_path = out_path
+        self._fg = fg
+        self.stopped = False
+
+    def bring_sink_to_foreground(self):
+        return self._fg
+
+    def sink_is_foreground(self):
+        return self._fg
+
+    def stop(self):
+        self.stopped = True
+
+
+def _run_main(monkeypatch, tmp_path, fg):
+    keys = tmp_path / "keys.jsonl"
+    keys.write_text("", encoding="utf-8")
+    fake = FakeCliListener(keys, fg)
+    monkeypatch.setattr(listener_mod, "start", lambda out, block=True: fake)
+    rc = listener_mod.main(["--out", str(tmp_path), "--seconds", "0"])
+    return rc, fake
+
+
+def test_main_tells_the_operator_to_click_the_sink_when_it_is_not_foreground(monkeypatch, tmp_path, capsys):
+    rc, fake = _run_main(monkeypatch, tmp_path, fg=False)
+    out, err = capsys.readouterr()
+    assert rc == 0 and fake.stopped
+    assert "foreground=False" in out  # the stdout line A-H1b's script parses is unchanged
+    assert "click the window titled 'Helix input test sink'" in err
+
+
+def test_main_is_quiet_on_stderr_when_the_sink_is_foreground(monkeypatch, tmp_path, capsys):
+    rc, _ = _run_main(monkeypatch, tmp_path, fg=True)
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert "foreground=True" in out
+    assert err == ""

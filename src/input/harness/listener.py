@@ -370,6 +370,9 @@ def main(argv: list[str] | None = None) -> int:
         fg = lst.bring_sink_to_foreground()
         print(f"sink hwnd=0x{lst.sink_hwnd:X} foreground={fg} block={args.block} "
               f"listening {args.seconds:g} s -> {lst.out_path}", flush=True)
+        if not fg:
+            print(f"sink did not take the foreground; click the window titled '{SINK_TITLE}'",
+                  file=sys.stderr, flush=True)
         time.sleep(args.seconds)
         print(f"sink foreground at end={lst.sink_is_foreground()}", flush=True)
     finally:
