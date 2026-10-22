@@ -173,6 +173,48 @@ def test_event_before_first_window_is_extra(tmp_path):
     assert "extra 1" in text(res["Delivery"])
 
 
+def write_session(run: Path, **fields) -> None:
+    (run / "session.json").write_text(json.dumps({"run_id": "t", "start_ns": 0, "end_ns": 1, **fields}),
+                                      encoding="utf-8")
+
+
+def test_a_h2_r_d1_events_before_connected_ns_are_ignored_and_counted_on_their_own_line(tmp_path):
+    """A-H2-R-D1 (ruling A): the operator's keys before the first connect() are not the board's."""
+    cmds, keys = perfect(2)
+    keys += [key(30 * MS, VK[Key.SPACE], True), key(40 * MS, VK[Key.SPACE], False)]   # before connect
+    run = write_run(tmp_path, cmds, keys)
+    write_session(run, connected_ns=50 * MS)
+    res = checks(run)["Delivery"]
+    assert res.verdict == "PASS"
+    assert "extra 0" in res.summary
+    assert "ignored before connect: 2" in text(res)
+
+
+def test_a_h2_r_d1_event_at_or_after_connected_ns_outside_a_window_is_still_an_extra(tmp_path):
+    cmds, keys = perfect(2)
+    keys += [key(30 * MS, VK[Key.SPACE], True), key(50 * MS, VK[Key.SPACE], False)]   # 30 ms before, 50 ms == connect
+    run = write_run(tmp_path, cmds, keys)
+    write_session(run, connected_ns=50 * MS)
+    res = checks(run)["Delivery"]
+    assert res.verdict == "FAIL"
+    assert "extra 1" in res.summary
+    assert "ignored before connect: 1" in text(res)
+    assert "extra outside any command window: 1" in text(res)
+
+
+@pytest.mark.parametrize("session", [None, {}, {"connected_ns": None}], ids=["no file", "no key", "null"])
+def test_a_h2_r_d1_without_a_connected_ns_every_early_event_is_an_extra(tmp_path, session):
+    cmds, keys = perfect(2)
+    keys.append(key(30 * MS, VK[Key.SPACE], True))
+    run = write_run(tmp_path, cmds, keys)
+    if session is not None:
+        write_session(run, **session)
+    res = checks(run)["Delivery"]
+    assert res.verdict == "FAIL"
+    assert "extra 1" in res.summary
+    assert "ignored before connect" not in text(res)
+
+
 def test_alignment_pairs_expected_to_observed_indexes():
     a = analyze.align([(1, True), (2, True), (2, False), (1, False)],
                       [(2, True), (1, True), (2, False), (1, False)])
@@ -571,6 +613,17 @@ def test_silent_loss_after_a_fault_with_null_reported_ns_is_printed(tmp_path):
     assert ": PASS" in f1 and ": FAIL" in f2
     assert text(res).count("silent loss after fault: seq 6") == 1
     assert "1/2 faults pass" in res.summary
+
+
+def test_fault_with_null_injected_ns_and_a_lost_command_fails_without_a_silent_loss_line(tmp_path):
+    """A-H34-fix2-R finding 2: the null-injected_ns guard in check_faults (no fault moment, nothing to blame)."""
+    cmds, keys = perfect(7)
+    keys = [e for e in keys if not 5 * S <= e["qpc_ns"] < 6 * S]          # command 6 lost
+    res = checks(write_run(tmp_path, cmds, keys, faults=[fault(None, None)]))
+    assert res["Faults"].verdict == "FAIL"
+    assert "0/1 faults pass" in res["Faults"].summary
+    assert "silent loss after fault" not in text(res["Faults"])
+    assert res["Delivery"].verdict == "FAIL"
 
 
 def test_m3_extra_events_are_printed_with_their_vk(tmp_path):

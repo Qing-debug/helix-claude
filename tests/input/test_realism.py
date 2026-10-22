@@ -292,6 +292,15 @@ def test_stray_first_key_down_before_sent_ns_does_not_mask_an_inverted_chord(tmp
     assert "violations 1 over 1 chords" in c.summary
 
 
+def test_stray_second_key_down_before_sent_ns_is_not_the_second_down(tmp_path):
+    """A-H34-fix2-R finding 1: the second key's down is taken at or after sent_ns too (realism.py second guard)."""
+    row = plan_row(1, actions.teleport(model(), Key.LEFT))
+    stray = [key(row["sent_ns"] - 20 * MS, VK[Key.E], True), key(row["sent_ns"] - 10 * MS, VK[Key.E], False)]
+    c = by_name(realism.realism(write_run(tmp_path, [row], events_for(row) + stray)), "Chord order")
+    assert c.verdict == "PASS"
+    assert "violations 0 over 1 chords" in c.summary
+
+
 def test_chord_order_second_down_seen_with_first_never_seen_is_a_violation(tmp_path):
     """A-H4-R n2 (Q1): the second key was seen at a moment the first had not been (spec:59)."""
     row = plan_row(1, actions.teleport(model(), Key.LEFT))

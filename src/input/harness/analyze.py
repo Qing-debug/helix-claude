@@ -73,6 +73,7 @@ class RunLog:
     keys: list[Row]                   # keys.jsonl sorted by qpc_ns (stable; file order is write order)
     faults: list[Row]                 # faults.jsonl, [] when absent
     link_faults: list[Row] | None     # link_faults.jsonl, None when absent
+    connected_ns: int | None = None   # session.json connected_ns (perf_counter_ns after the first connect()); None if absent/null
 
 
 def load_run(run_dir: Path | str) -> RunLog:
@@ -83,7 +84,16 @@ def load_run(run_dir: Path | str) -> RunLog:
         keys=sorted(read_jsonl(run_dir / "keys.jsonl"), key=lambda e: e["qpc_ns"]),
         faults=read_jsonl(faults_p) if faults_p.exists() else [],
         link_faults=read_jsonl(link_p) if link_p.exists() else None,
+        connected_ns=_connected_ns(run_dir / "session.json"),
     )
+
+
+def _connected_ns(path: Path) -> int | None:
+    """``connected_ns`` of ``session.json`` (A-H2-R-D1); None when the file or the key is absent, or the key is null."""
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh).get("connected_ns")
 
 
 def is_focus_lost(row: Row) -> bool:
@@ -183,8 +193,9 @@ class CommandMatch:
 class DeliveryMatch:
     commands: list[CommandMatch]      # measured commands, file order (before LISTENER_DEAD; FOCUS_LOST excluded)
     unmeasured: list[Row]             # commands from LISTENER_DEAD's seq on
-    outside: list[Row]                # transitions before the first window (extras of no command)
+    outside: list[Row]                # transitions before the first window, at or after connected_ns (extras of no command)
     liveness: Liveness
+    pre_connect: list[Row] = field(default_factory=list)   # transitions before connected_ns: ignored (A-H2-R-D1)
 
 
 def match_delivery(run: RunLog) -> DeliveryMatch:
@@ -194,11 +205,17 @@ def match_delivery(run: RunLog) -> DeliveryMatch:
     starts = [w[0] for w in windows]
     per: list[list[Row]] = [[] for _ in cmds]
     outside: list[Row] = []
+    pre_connect: list[Row] = []
     for e in run.keys:
         if e["repeat"]:
             continue
         i = bisect.bisect_right(starts, e["qpc_ns"]) - 1
-        (outside if i < 0 else per[i]).append(e)
+        if i >= 0:
+            per[i].append(e)
+        elif run.connected_ns is not None and e["qpc_ns"] < run.connected_ns:
+            pre_connect.append(e)       # before the first connect(): the board cannot have sent it (A-H2-R-D1)
+        else:
+            outside.append(e)
     n_measured = len(cmds) if live.dead_from_index is None else live.dead_from_index
     matches = []
     for i in range(n_measured):
@@ -207,7 +224,7 @@ def match_delivery(run: RunLog) -> DeliveryMatch:
         sent = row["sent_ns"]      # a Failure may have no sent_ns; nothing bot-made goes down before it is sent
         first_down = next((e["qpc_ns"] for e in obs if e["down"] and (sent is None or e["qpc_ns"] >= sent)), None)
         matches.append(CommandMatch(row["seq"], row, windows[i], obs, al, first_down))
-    return DeliveryMatch(matches, cmds[n_measured:], outside, live)
+    return DeliveryMatch(matches, cmds[n_measured:], outside, live, pre_connect)
 
 
 # ---- statistics --------------------------------------------------------------------------
@@ -296,6 +313,9 @@ def check_delivery(run: RunLog, dm: DeliveryMatch) -> Check:
     if dm.outside:
         details.append(f"extra outside any command window: {len(dm.outside)} "
                        f"({_events((e['vk'], e['down']) for e in dm.outside)})")
+    if dm.pre_connect:
+        details.append(f"ignored before connect: {len(dm.pre_connect)} (listener transitions before session.json "
+                       "connected_ns; not counted)")
     if injected:
         details.append(f"injected events: {injected} (every observed event must have injected=false)")
     if failed:
