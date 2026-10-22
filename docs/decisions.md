@@ -467,7 +467,7 @@ Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F4-R-D1); undo: 
 
 ## A-F5-D1 (2026-10-22): F5's `onWrite` treats only a PING / RELEASE_ALL that `proto::parse` accepts as special
 
-Question: how does `onWrite` recognise the two frames it handles itself (PING → PONG at once; RELEASE_ALL → count `abortRequested`, then queue)? Options: A. run the full `proto::parse` in `onWrite`; only a *valid* PING or RELEASE_ALL is special, and every other frame, a malformed PING or RELEASE_ALL included, is queued uncounted and the executor rejects it (as built in `747b708`). B. test the header bytes only (`len >= 2`, `ver == 1`, op 3 → PONG, op 2 → counted), so a malformed PING still gets a PONG and a malformed RELEASE_ALL still aborts the running PLAY before it is rejected.
+Question: how does `onWrite` recognise the two frames it handles itself (PING → PONG at once; RELEASE_ALL → count `abortRequested`, then queue)? Options: A. run the full `proto::parse` in `onWrite`; only a *valid* PING or RELEASE_ALL is special, and every other frame (any PLAY, and a PING or RELEASE_ALL that `proto::parse` rejects) is queued uncounted, and the executor rejects it if `proto::parse` does (as built in `747b708`; wording corrected per A-F5-R m-1). B. test the header bytes only (`len >= 2`, `ver == 1`, op 3 → PONG, op 2 → counted), so a malformed PING still gets a PONG and a malformed RELEASE_ALL still aborts the running PLAY before it is rejected.
 
 Ruling: A (ruled as Hong while away, adjudicated by A-F5-adj).
 
@@ -517,6 +517,6 @@ Reason: a log write must never stall the executor or `onWrite` in timing-critica
 
 Affects: serial logging timing for every line the firmware prints (loop and NimBLE host tasks); plan A task F5. Plan lines as of `4174c3e`: F5 :853-859. Applied in `5a779b6` (firmware, `setup()`) and `2de8cae` (plan text).
 
-Cost if wrong (no real hazard): one harmless line. Cost of the fix itself: serial log lines are dropped when no host reads, so captures keep a monitor open and reading for the whole run. `Serial.flush()` at timeout 0 discards pending output (`HWCDC.cpp:646-658`); the sketch never calls it.
+Cost if wrong (no real hazard): one harmless line. Cost of the fix itself: a serial log line is dropped whole when no host reads, or when another task holds the serial lock at that moment (`HWCDC.cpp:544`; A-F5-R m-2), so captures keep a monitor open and reading for the whole run. Boot and connect lines past the first ≈ 256 bytes queued before the monitor opens are dropped newest-first (connected path, `HWCDC.cpp:586-604`, ring 256 B `:422`), so link state after a reset is read from a PING's PONG, not from `CONN` lines (A-F5-R I-1; plan F2 step 6, F3 step 7, F5 steps 4-6). `Serial.flush()` at timeout 0 discards pending output (`HWCDC.cpp:646-658`); the sketch never calls it.
 
 Undo: `git revert 5a779b6` (it only adds the call and its comment in `setup()`, `firmware/Helix_BLE/Helix_BLE.ino:299-302`), then compile, flash and check the serial log per F5 step 5. For the plan text, delete F5 :853-859.
