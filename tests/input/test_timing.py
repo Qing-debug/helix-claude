@@ -111,16 +111,36 @@ def test_draws_counts_values_returned_not_rejected_candidates():
     assert rng.primitive_calls > 300, "no candidate was rejected; the test does not exercise rejection"
 
 
-def test_draws_counts_one_per_call_for_every_type_under_rejection():
-    # reaction is an ex-Gaussian (two primitives per candidate) so primitive calls exceed draws
-    rng = CountingRng(SEED)
-    m = TimingModel(rng)
-    for _ in range(100):
-        m.reaction()
-        m.hold()
-        m.gap()
-    assert m.draws == 300
-    assert rng.primitive_calls >= 400
+class ScriptedRng:
+    """Replays fixed candidates, so rejection is certain rather than statistical."""
+
+    def __init__(self, **streams):
+        self._it = {k: iter(v) for k, v in streams.items()}
+
+    def lognormal(self, mean, sigma):
+        return next(self._it["lognormal"])
+
+    def normal(self, loc, scale):
+        return next(self._it["normal"])
+
+    def exponential(self, scale):
+        return next(self._it["exponential"])
+
+
+@pytest.mark.parametrize(
+    "method, streams, expected",
+    [
+        ("hold", dict(lognormal=[1.0, 500.0, 100.0]), 100.0),  # [60, 250]: 1.0 and 500.0 rejected
+        ("gap", dict(lognormal=[2000.0, 40.0]), 100.0),  # 60 + x, [60, 1000]: 2060 rejected
+        ("chord_offset", dict(lognormal=[1.0, 500.0, 25.0]), 25.0),  # [8, 100]
+        # [110, 1000]: normal + exponential = 60 and 1500 rejected
+        ("reaction", dict(normal=[50.0, 1500.0, 200.0], exponential=[10.0, 0.0, 30.0]), 230.0),
+    ],
+)
+def test_rejected_candidates_are_not_returned_or_counted(method, streams, expected):
+    m = TimingModel(ScriptedRng(**streams))
+    assert getattr(m, method)() == expected
+    assert m.draws == 1
 
 
 # ---- (b) bounds and raw floats -------------------------------------------------------------------
@@ -205,6 +225,7 @@ def test_truncated_cdf_undefined_for_walk_and_hold_clipped():
         truncated_cdf(TimingType.WALK)
     with pytest.raises(ValueError):
         truncated_cdf(TimingType.HOLD_CLIPPED)
+
 
 
 # ---- (d) moments ---------------------------------------------------------------------------------
