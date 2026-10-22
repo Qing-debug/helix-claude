@@ -101,7 +101,6 @@ class _Session:
     start: float  # loop.time() at connect()'s Success
     keepalive: asyncio.Task | None = None
     tasks: set = field(default_factory=set)
-    writes: set = field(default_factory=set)  # asyncio.Timeout of each PLAY / RELEASE_ALL write in progress
 
 
 def _unmet(pong: Pong) -> list[str]:
@@ -124,6 +123,7 @@ class BleLink:
         self._faults: list[tuple[int, InputError]] = []
         self._pongs: deque[tuple[int, Pong]] = deque()
         self._pong_overflow_warned = False
+        self._write_tasks: set[asyncio.Task] = set()  # each write until it ends, also one no command waits for
         self._play_lock = asyncio.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name="BleLink-loop", daemon=True)
@@ -280,9 +280,7 @@ class BleLink:
             self._fault(fault)
             log.warning("link fault: %s", fault)
         session.keepalive.cancel()
-        for cm in list(session.writes):  # a write blocked on a vanished peer must not hold its command (P4 :1086)
-            if not cm.expired():  # one whose own timeout has fired is already unwinding; reschedule() would raise
-                cm.reschedule(self._loop.time())
+        # Resolving them also ends the wait of a command blocked in its write (P4 :1086; _ping_cmd, _write).
         for entry in list(self._pending.values()):
             self._resolve(entry, Failure(fault or InputError.NOT_CONNECTED))
         self._disconnect_task = self._loop.create_task(self._disconnect(session.client))
@@ -398,20 +396,44 @@ class BleLink:
 
     # ------------------------------------------------------------ commands
 
+    def _start_write(self, client, data: bytes) -> asyncio.Task:
+        """Start a write with response as its own task. It starts eagerly, so the write has been issued when this
+        returns, as an inline await would have it (the release_all() cover rule relies on that order). Callers wait on
+        it with a deadline and never await it after giving up: winrt's wrap_async answers a cancel by waiting for
+        WinRT to complete the op (winrt/runtime/_internals.py:237-243), and a write in flight to a dead peer is not
+        completed until the link goes (A-V2link), so cancelling it cannot end the wait (A-LK). The task is kept, and
+        its outcome retrieved, until it ends."""
+        task = self._loop.create_task(client.write_gatt_char(CMD_UUID, data, response=True), eager_start=True)
+        self._write_tasks.add(task)
+        task.add_done_callback(self._write_ended)
+        return task
+
+    def _write_ended(self, task: asyncio.Task) -> None:
+        self._write_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()  # retrieved: a write that fails after its command gave up is not "never retrieved"
+
     async def _ping_cmd(self, client, limit: float) -> Result[Pong, InputError]:
-        """Register, then one limit over write + PONG (PA-rev m11). A PONG may arrive before the write returns."""
+        """Register, then one limit over write + PONG (PA-rev m11). A PONG may arrive before the write returns and ends
+        the wait; so does the session end. The limit never waits for the write itself (_start_write)."""
+        loop = self._loop
         entry = self._register(_PING)
         entry.sent_ns = time.perf_counter_ns()
-        try:
-            async with asyncio.timeout(limit):
-                await client.write_gatt_char(CMD_UUID, encode_ping(entry.seq), response=True)
-                await asyncio.shield(entry.final)
-        except TimeoutError:
-            self._resolve(entry, Failure(InputError.ACK_TIMEOUT))
-        except Exception as e:  # noqa: BLE001 - a failed write is this PING's result
-            log.debug("PING seq=%d write failed: %r", entry.seq, e)
-            self._resolve(entry, Failure(InputError.WRITE_FAILED))
-        return entry.final.result()
+        deadline = loop.time() + limit
+        write = self._start_write(client, encode_ping(entry.seq))
+        waiting = {write, entry.final}
+        while not entry.final.done() and (left := deadline - loop.time()) > 0:
+            done, _ = await asyncio.wait(waiting, timeout=left, return_when=asyncio.FIRST_COMPLETED)
+            if write in done:
+                waiting.discard(write)
+                if write.exception() is not None:  # a failed write is this PING's result
+                    log.debug("PING seq=%d write failed: %r", entry.seq, write.exception())
+                    self._resolve(entry, Failure(InputError.WRITE_FAILED))
+        self._resolve(entry, Failure(InputError.ACK_TIMEOUT))  # no-op if a PONG, the session end or the write did
+        result = entry.final.result()
+        if not is_successful(result) and not write.done():
+            write.cancel()  # not awaited (_start_write)
+        return result
 
     async def _public_ping(self) -> Result[Pong, InputError]:
         """A failure is returned, never ends the session (A-P4-D2); a missed PONG is an ACK_TIMEOUT fault (A-P4-R I1)."""
@@ -424,17 +446,24 @@ class BleLink:
         return r
 
     async def _write(self, entry: _Pending, session: _Session, data: bytes) -> bool:
-        """Write with response inside WRITE_TIMEOUT_S, cut short when the session ends (A-P4-R I2); kept inline, so it
-        has started when write_started is set. False if the command is already resolved or the write failed."""
-        try:
-            async with asyncio.timeout(WRITE_TIMEOUT_S) as cm:
-                session.writes.add(cm)
-                try:
-                    await session.client.write_gatt_char(CMD_UUID, data, response=True)
-                finally:
-                    session.writes.discard(cm)
-        except Exception as e:  # noqa: BLE001 - TimeoutError included: both are WRITE_FAILED
-            log.debug("%s seq=%d write failed: %r", entry.kind, entry.seq, e)
+        """Write with response inside WRITE_TIMEOUT_S, cut short when the session ends (A-P4-R I2). The write is issued
+        before this first yields (_start_write), so it has started once write_started is set, and neither the limit nor
+        the session end waits for it (A-LK). False if the command is already resolved or the write failed."""
+        loop = self._loop
+        deadline = loop.time() + WRITE_TIMEOUT_S
+        write = self._start_write(session.client, data)
+        waiting = {write, entry.final}  # the session end resolves entry.final; an answer alone does not end the wait
+        while not write.done() and self._session is session and (left := deadline - loop.time()) > 0:
+            await asyncio.wait(waiting, timeout=left, return_when=asyncio.FIRST_COMPLETED)
+            if entry.final.done():
+                waiting.discard(entry.final)
+        if not write.done():  # limit passed or session ended
+            write.cancel()  # not awaited (_start_write)
+            log.debug("%s seq=%d write did not complete", entry.kind, entry.seq)
+            self._resolve(entry, Failure(InputError.WRITE_FAILED))  # no-op if a fault or answer resolved it first
+            return False
+        if write.exception() is not None:
+            log.debug("%s seq=%d write failed: %r", entry.kind, entry.seq, write.exception())
             self._resolve(entry, Failure(InputError.WRITE_FAILED))  # no-op if a fault or answer resolved it first
             return False
         entry.written_ns = time.perf_counter_ns()

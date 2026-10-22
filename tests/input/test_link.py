@@ -938,24 +938,6 @@ def test_play_blocked_in_its_write_fails_at_once_when_the_session_ends(link, boa
     assert bg.t_end - t < 0.1
 
 
-def test_session_end_while_a_write_timeout_is_expiring(link, board):
-    """The write's own timeout has fired (task cancelled, not yet unwound) when the session ends: still a clean end."""
-    board.play = hang
-    bg = Bg(link.play, tap_steps())
-    assert wait_until(lambda: board.ops(OP_PLAY))
-
-    async def expire_then_end():
-        (cm,) = link._session.writes
-        cm.reschedule(link._loop.time())  # runs the timeout handler on the next loop iteration ...
-        link._loop.call_soon(link._end_session, InputError.LINK_LOST)  # ... and this right after it, before the task unwinds
-
-    asyncio.run_coroutine_threadsafe(expire_then_end(), link._loop).result(2.0)
-    assert bg.join().failure() == InputError.LINK_LOST
-    assert wait_until(lambda: board.client.disconnect_calls == 1)
-    assert fault_errors(link) == [InputError.LINK_LOST]
-    assert link.play(tap_steps()).failure() == InputError.NOT_CONNECTED
-
-
 # ---------------------------------------------------------------- connect() returns Failure, never raises (A-P4-R m1)
 
 
