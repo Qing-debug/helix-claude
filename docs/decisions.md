@@ -452,3 +452,15 @@ Affects: the firmware concurrency model (F5's `onWrite`, queue item and executor
 Cost if wrong: one F5 paragraph rewritten before F5 runs.
 
 Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert 94c376c b3b476b` (reverse-applies clean as of `94c376c`; `b3b476b` alone now conflicts).
+
+## A-F4-R-D1 (2026-10-22): `vectors.json` is ratified as F4 committed it (one top-level array)
+
+A. Ratify `firmware/test/vectors.json` as committed in `ea2d641`: the file is one top-level JSON array of entries. A valid PLAY lists its steps as `expect.steps = [[delta_100us, mask], ...]`; the schedule-rule rejects and the pc_only entry carry the same pair shape as a top-level `"steps"`, and no entry has both. Plan A contract C1 now names the container (it gave only the two entry shapes). The other option was B (wrap the file as `{"version": 1, "vectors": [...]}`, which edits `vectors.json` and the C++ test's `main()`).
+
+Reason: the opus-xhigh adjudicator (A-F4-R-D1) found that the file has exactly two readers, F4's C++ host test and P1's Python test, both versioned with it in git. The C++ test already requires the array (`firmware/test/test_protocol.cpp:245`). A file-level `version` would have no defined trigger beside the wire's per-frame `ver` (C1), which every vector already carries in `expect.ver`. Reversing later is about three test-side edits, with no wire change, no firmware reflash and no runtime code change.
+
+Affects: the shared golden-vector file format and its two readers (`firmware/test/test_protocol.cpp`, `tests/input/test_protocol.py`); plan A contract C1. Plan lines as of `eabd3bb`: C1 :179-190. Applied in `ea2d641` (the file, by F4) and `eabd3bb` (C1 container clause).
+
+Cost if wrong: wrap `vectors.json`, edit the C++ test's `main()` and P1's loader line, re-run both tests.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F4-R-D1); undo: no commit to revert for the ratification (it keeps `ea2d641` as is), so make the test-side edits: `vectors.json` line 1 `[` → `{"version": 1, "vectors": [` and line 41 `]` → `]}`; `test_protocol.cpp` `main()` :244-248 takes `root.at("vectors")`, checks it is a non-empty array and that `root.at("version").num == 1`, and loops over it; `tests/input/test_protocol.py:30` loads `["vectors"]` and asserts `version == 1`. Then re-run F4 step 2's g++ command (expect `ALL PASS`) and `$PY -m pytest -q tests/input/test_protocol.py`. For the C1 clause, `git revert eabd3bb` (reverse-applies clean as of this entry's commit), then write the wrapper into C1 instead. Line numbers are as of `67667fe`.
