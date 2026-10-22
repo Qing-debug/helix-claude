@@ -296,3 +296,15 @@ Affects: the log format (C5 `link.log` and `session.json`), read only by a perso
 Cost if wrong: one extra number per `link.log` line.
 
 Ruling as Hong under H9; undo: revert the fix-round hunks (`5af1e74`: C5 :371-374 and :377-379; H2 :1227, :1231-1234 and :1276-1277) and restore `5de889f`'s m-c hunks (C5 `session.json`, C5 `link.log`, H2).
+
+## F1-D1 (2026-10-22): .gitignore also ignores firmware/Helix_BLE/build/
+
+A. Keep `9e6c31a`, which adds `firmware/Helix_BLE/build/` to `.gitignore` beside the `firmware/build/` line from Plan A task F1 step 3 (:482). The other options were B (keep only the plan's line; each firmware task deletes the folder) and C (find a setting that stops the copy).
+
+Reason: the opus-xhigh adjudicator (A-F1-R) found that every compile with `--output-dir` (F1, F2, F3, F4, F5, V3 and the V1 probe) leaves about 26 MB of binaries in `firmware/Helix_BLE/build/`, which the plan's `firmware/build/` line does not match (it matches only at the repo root), and that no arduino-cli setting stops it (`always_export_binaries` is already false; the esp32 core 3.3.10 postsavehex hooks, `platform.txt:202-235`, make the copy). One line covers all seven compiling tasks with no command change, B leaves a 26 MB staging trap in seven tasks, and C has no setting and would rewrite six tasks' commands or Hong's global Arduino core.
+
+Affects: `.gitignore` only; no plan command changes. Applied in `9e6c31a`; its comment's cause reworded (F1 review M1) in `8d70f4a`.
+
+Cost if wrong: one revert commit (`git revert 9e6c31a`), and a reviewer flags the untracked folder.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F1-R); undo: `git revert 9e6c31a`.
