@@ -235,6 +235,7 @@ class BleLink:
         else:
             log.warning("seq=%d %s DONE with unexpected status %d: treated as ACK_TIMEOUT", done.seq, entry.kind,
                         done.status)
+            self._fault(InputError.ACK_TIMEOUT)
             self._resolve(entry, Failure(InputError.ACK_TIMEOUT))
 
     def _log_pong(self, ns: int, pong: Pong) -> None:
@@ -264,6 +265,10 @@ class BleLink:
 
     # ------------------------------------------------------------ session
 
+    def _fault(self, error: InputError) -> None:
+        """Append to faults(): LINK_LOST (ends the session) or ACK_TIMEOUT (a missed ACCEPTED, DONE or PONG; A-P4-R-D1)."""
+        self._faults.append((time.perf_counter_ns(), error))
+
     def _end_session(self, fault: InputError | None) -> None:
         """LINK_LOST (fault) or close() (None): stop the keepalive, fail every pending command, disconnect."""
         session = self._session
@@ -271,7 +276,7 @@ class BleLink:
             return
         self._session = None
         if fault is not None:
-            self._faults.append((time.perf_counter_ns(), fault))
+            self._fault(fault)
             log.warning("link fault: %s", fault)
         session.keepalive.cancel()
         for entry in list(self._pending.values()):
@@ -397,9 +402,14 @@ class BleLink:
         return entry.final.result()
 
     async def _public_ping(self) -> Result[Pong, InputError]:
-        if self._session is None:
+        """A failure is returned, never ends the session (A-P4-D2); a missed PONG is an ACK_TIMEOUT fault (A-P4-R I1)."""
+        session = self._session
+        if session is None:
             return Failure(InputError.NOT_CONNECTED)
-        return await self._ping_cmd(self._session.client, PING_TIMEOUT_S)
+        r = await self._ping_cmd(session.client, PING_TIMEOUT_S)
+        if self._session is session and not is_successful(r) and r.failure() == InputError.ACK_TIMEOUT:
+            self._fault(InputError.ACK_TIMEOUT)
+        return r
 
     async def _write(self, entry: _Pending, client, data: bytes) -> bool:
         """Write with response inside WRITE_TIMEOUT_S. False if the command is already resolved or the write failed."""
@@ -417,6 +427,7 @@ class BleLink:
         if entry.final.done():
             return False
         if not evt.is_set():
+            self._fault(InputError.ACK_TIMEOUT)
             self._resolve(entry, Failure(InputError.ACK_TIMEOUT))
             return False
         return True

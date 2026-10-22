@@ -782,3 +782,85 @@ def test_malformed_frame_instead_of_accepted_is_ack_timeout(link, board):
 
     board.play = play
     assert link.play(tap_steps()).failure() == InputError.ACK_TIMEOUT
+
+
+# ---------------------------------------------------------------- faults() beyond LINK_LOST (A-P4-R I1, A-P4-R-D1)
+
+
+def fault_errors(lk):
+    return [e for _, e in lk.faults()]
+
+
+def answering(*notes):
+    """A board handler that writes successfully and sends each notification builder (seq -> bytes), 5 ms apart."""
+
+    async def handler(client, seq, data):
+        loop = asyncio.get_running_loop()
+        for i, note in enumerate(notes, 1):
+            loop.call_later(0.005 * i, client.notify, note(seq))
+
+    return handler
+
+
+async def write_raises(client, seq, data):
+    raise RuntimeError("write failed")
+
+
+def test_missing_accepted_is_a_fault_and_the_session_stays_live(link, board):
+    board.play = answering()
+    assert link.play(tap_steps()).failure() == InputError.ACK_TIMEOUT
+    assert fault_errors(link) == [InputError.ACK_TIMEOUT]
+    board.play = board.default_play
+    assert is_successful(link.play(tap_steps()))
+    link.close()
+    assert fault_errors(link) == [InputError.ACK_TIMEOUT]  # close() adds none
+
+
+@pytest.mark.parametrize("call,notes", [
+    ("play", ()),
+    ("play", (n_accepted,)),
+    ("play", (n_accepted, lambda s: n_done(s, 2, 1))),
+    ("release_all", ()),
+], ids=["play_no_accepted", "play_no_done", "play_done_status_2", "release_all_no_done"])
+def test_ack_timeout_is_recorded_as_a_fault(link, board, call, notes):
+    setattr(board, "release" if call == "release_all" else "play", answering(*notes))
+    r = link.release_all() if call == "release_all" else link.play(tap_steps())
+    assert r.failure() == InputError.ACK_TIMEOUT
+    assert fault_errors(link) == [InputError.ACK_TIMEOUT]
+
+
+@pytest.mark.parametrize("handler,err", [
+    (write_raises, InputError.WRITE_FAILED),
+    (answering(n_accepted, lambda s: n_done(s, 1, 1, fail_step=0)), InputError.NOTIFY_FAILED),
+    (answering(lambda s: n_rejected(s, 4)), InputError.REJECTED),
+], ids=["write_failed", "notify_failed", "rejected"])
+def test_other_failures_are_not_faults(link, board, handler, err):
+    board.play = handler
+    assert link.play(tap_steps()).failure() == err
+    assert link.faults() == []
+
+
+@pytest.mark.parametrize("handler", [hang, answering()], ids=["write_blocked", "no_pong"])
+def test_ping_ack_timeout_is_a_fault_and_the_session_stays_live(board, monkeypatch, handler):
+    monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)  # after connect(), only this ping() writes
+    lk = connected_link(board)
+    try:
+        board.ping = handler
+        t = time.perf_counter()
+        assert lk.ping().failure() == InputError.ACK_TIMEOUT
+        assert time.perf_counter() - t < 0.6
+        assert fault_errors(lk) == [InputError.ACK_TIMEOUT]
+        board.ping = board.default_ping
+        assert is_successful(lk.ping())
+        assert is_successful(lk.play(tap_steps()))
+        assert fault_errors(lk) == [InputError.ACK_TIMEOUT]
+    finally:
+        lk.close()
+
+
+def test_ready_wait_pings_add_no_faults(board, monkeypatch):
+    monkeypatch.setattr(L, "READY_TIMEOUT_S", 0.3)
+    board.ping = hang
+    lk = make_link(board)
+    assert "no PONG" in lk.connect(timeout_s=5.0).failure()
+    assert lk.faults() == []
