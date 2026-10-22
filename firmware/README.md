@@ -48,7 +48,7 @@ echo "PORT=[$PORT]"   # expect exactly one port
 |---|---|---|
 | Compile | `"$CLI" compile -b "$FQBN" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE` | `Sketch uses ... bytes`, exit 0 |
 | Compile + flash | `"$CLI" compile -b "$FQBN" -u -p $PORT --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE` | esptool output ending `Hard resetting via RTS pin...`, exit 0 |
-| Monitor | `"$CLI" monitor -p $PORT -c baudrate=115200 --timestamp` | see "Observed behaviour" |
+| Monitor | `"$CLI" monitor -p $PORT -c baudrate=115200,dtr=off,rts=off --timestamp` | see "Observed behaviour" |
 | Reset | `"$ESPTOOL" --port "$PORT" --no-stub read-mac` | last line `Hard resetting via RTS pin...`, exit 0 |
 
 The reset command uses esptool's default `--after hard-reset`. It connects (default `--before default-reset`, which
@@ -67,22 +67,30 @@ OnConnect method executed, advertising again. (when Windows reconnects, about 1 
 
 ## Capture procedure (F3 and F5 reuse it)
 
-The monitor opens the COM port for exclusive access, so esptool cannot reset the board while the monitor runs.
+The monitor opens the COM port for exclusive access, so esptool cannot reset the board while the monitor runs. Every
+capture monitor keeps DTR and RTS off (the Monitor command above, A-F2-D1). With the defaults (`dtr=on`, `rts=on`),
+closing the monitor reboots the board (see "Observed behaviour").
 
-1. Stop the monitor.
+1. Stop the monitor, then read the "Guiness" last-connected time (command below). This is reading (1).
 2. Run the reset command. Expected: `Hard resetting via RTS pin...` and exit 0.
-3. Reopen the monitor at once with the monitor command.
+3. Reopen the monitor at once with the Monitor command, with nothing in between.
+4. After the capture, stop the monitor and read the last-connected time again. This is reading (4).
 
-Evidence of the reboot (record which one showed it). See "Observed behaviour": with the default monitor settings the
-boot line shows that *a* boot happened, not which reset caused it. A `LastConnectedTime` read after step 2 and before
-step 3 is the reading that ties the reboot to the esptool reset.
-- the `Starting NimBLE work!` line (and `OnConnect ...`) in the reopened capture;
-- the "Guiness" device's `DEVPKEY_Bluetooth_LastConnectedTime` moving past the reset time:
+Evidence of the reboot (record which one showed it):
+- the `Starting NimBLE work!` boot line in the reopened capture. Output printed before the monitor opens is queued in
+  a 256-byte TX ring that drops the oldest bytes when it is full, so the boot line is the first one lost if more than
+  256 bytes queued before the open. The monitor's timestamps are arrival times, not boot times.
+- reading (4) later than reading (1) of the "Guiness" device's `DEVPKEY_Bluetooth_LastConnectedTime`. Compare the two
+  readings with each other, not with the reset time: the value can be earlier than esptool's exit (03:54:36.35 for a
+  run that exited at 03:54:36.46, see "Observed behaviour"). A second `OnConnect` line in the capture means a later
+  reconnect also moved the value.
   ```powershell
   (Get-PnpDeviceProperty -InstanceId 'BTHLE\DEV_1020BA4E2771\8&E129C23&0&1020BA4E2771' -KeyName DEVPKEY_Bluetooth_LastConnectedTime).Data.ToString('o')
   ```
-  The value displays **1 h ahead** of true local time (for example `04:54:36` for a 03:54:36 reset), the same offset
-  recorded on 2026-10-21.
+  The value displays ahead of true local time. On 2026-10-21/22 it was 1 h ahead (for example `04:54:36` for a
+  03:54:36 reset), which equals the UK BST offset from UTC. That is the offset as observed, not a fixed value:
+  *inferred*, it is a local-vs-UTC display offset and becomes 0 h when BST ends (2026-10-25). Compare two readings
+  rather than correcting the value; both carry the same offset.
 
 ## Observed behaviour (2026-10-22, Task F2)
 
