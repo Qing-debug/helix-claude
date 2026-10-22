@@ -368,3 +368,15 @@ Affects: the C5 file format (one field); plan A task H2. Plan lines as of `cf2f9
 Cost if wrong: one unused JSON field.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert 90af6b1`.
+
+## A-F2-D1 (2026-10-22): capture monitors keep DTR and RTS off
+
+A′ (amended A). Every capture monitor (Plan A tasks F2 step 6, F3 step 3 and F5 step 5) runs `"$CLI" monitor -p "$PORT" -c baudrate=115200,dtr=off,rts=off --timestamp`. The capture procedure reads the "Guiness" last-connected time (LCT) after stopping the monitor and before the reset, and again after the capture, and compares the two readings. The other options were A (the same flags, but the LCT read sits between the reset and the reopen) and B (keep the plan: default `dtr=on,rts=on`).
+
+Reason: the opus-xhigh adjudicator (A-F2-R) found that serial-monitor v0.15.0 (`main.go`) has `dtr` and `rts` settings that default to `on` and that its `getMode()` passes them as the port's initial status bits, and that arduino-cli v1.5.1 (`service_monitor.go`) applies `-c` settings before it opens the port, so `dtr=off,rts=off` opens with both lines low and nothing changes at close. HWCDC keeps output written before the host opens the port in a 256-byte TX ring (it drops the oldest bytes when the ring is full), so the plan's "output before the open is lost" inference was wrong while output stays at or under 256 bytes. A′ stops the unrequested reboot at every monitor close (F2 saw it on 3 of 3 default closes and on none with both off). A's LCT read in the reset-to-reopen gap delays the reopen against F3's 3 s host wait and the ring, and may read LCT before Windows reconnects; B reboots the board at every capture close, can add a spurious disconnect in F5 step 6, and keeps the disproved inference.
+
+Affects: capture data behaviour (which output and which reboots a capture contains) and the capture procedure that F3 and F5 reuse; plan A tasks F2, F3 and F5. Plan lines as of `3ffe9d8`: F2 step 6 :542-558, F3 step 3 :591-594, F3 step 7 :626-629, F5 step 5 :818-820. `firmware/README.md` as of `63683fb`: Monitor row :51, capture procedure :68-93. Applied in `3ffe9d8` (plan) and `63683fb` (README).
+
+Cost if wrong: if `dtr=off,rts=off` ever loses boot lines, F3's first capture shows it and the flag comes out (one plan line per step).
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F2-R); undo: `git revert 63683fb 3ffe9d8`.
