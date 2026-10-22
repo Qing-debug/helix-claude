@@ -440,3 +440,15 @@ Affects: the capture procedure (plan A tasks F2, F3 by reuse, F5) and `firmware/
 Cost if wrong: none (harmless with a terminal).
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert 210d18b eded7b0`.
+
+## PA-rev6c-D1 (2026-10-22): F5's queued RELEASE_ALLs carry a `counted` flag that decrements once at dequeue
+
+A. In Plan A task F5, `onWrite` increments `abortRequested` first and then queues the RELEASE_ALL at the back with a `counted` flag set in its queue item, so the count is never below the number of queued RELEASE_ALLs. Every dequeued item with the flag decrements the count exactly once, whatever happens to it: it runs (DONE OK or NOTIFY_FAILED), `parse` rejects it, or it is dropped because its handle left the table. PA-rev6b-I-1's "never reset" and atomic change, and m9's "> 0" and "decrements", stay. PA-fix6e's QUEUE_FULL take-back stays as written and fits the flag rule: a RELEASE_ALL refused with QUEUE_FULL is never queued, so it is never dequeued, and the take-back is its one decrement. The other options were B (an executor reset of the count, which re-opens the reset races PA-rev6b-I-1 closed) and C (keep `0418d94`'s text, which leaves the stuck-until-reboot state below).
+
+Reason: the opus-xhigh reviewer (PA-rev6c N-1) found that after `0418d94` the only decrement was "RELEASE_ALL then sends all-up, answers DONE OK and decrements the count", so a counted RELEASE_ALL that `loop()` drops because its link left the table before dequeue (confirmed from the plan text), or (inferred) that `parse` rejects or that ends NOTIFY_FAILED, is never decremented; with the reset gone, every later PLAY is ABORTED until reboot. The window is narrow (a link drop between enqueue and dequeue; V2 step 4 and H2's `bluetooth_off_on` drop links without rebooting the board) but the result is sticky. A closes the drop, reject and NOTIFY_FAILED paths with one invariant (each increment has exactly one decrement) and keeps I-1's "never reset".
+
+Affects: the firmware concurrency model (F5's `onWrite`, queue item and executor); plan A task F5. Plan lines as of `4d21160`: F5 :793-796, :807-810. Applied in `b3b476b`.
+
+Cost if wrong: one F5 paragraph rewritten before F5 runs.
+
+Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert b3b476b` (reverse-applies clean as of `4d21160`).
