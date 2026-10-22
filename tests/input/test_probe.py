@@ -6,9 +6,12 @@ perfect keyboard) into a shared key log that `ProbeSink.stop()` writes as the pr
 probe reports run analyze.py / realism.py on real C5 files.
 """
 import asyncio
+import io
 import json
 import math
+import random
 import re
+import sys
 import threading
 
 import pytest
@@ -559,6 +562,21 @@ def test_main_runs_the_selected_probes(tmp_path, clock, monkeypatch):
     assert (tmp_path / "x" / "two" / "report.txt").exists() and not (tmp_path / "x" / "one").exists()
 
 
+def test_main_prints_reports_verbatim_through_a_cp1252_stdout(tmp_path, clock, monkeypatch):
+    # A-V1live-D1: a redirected stdout is cp1252 on Windows and the reports quote analyze's "≥"/"≤" targets, so the
+    # first report print crashed (UnicodeEncodeError) without PYTHONIOENCODING=utf-8 in the environment
+    rig = Rig(clock)
+    monkeypatch.setattr(probe, "_new_link", rig.new_link)
+    monkeypatch.setattr(probe, "_start_sink", rig.start_sink)
+    monkeypatch.setattr(probe, "PROBES", {"one": _dummy("one", report=lambda run_dir: probe.ProbeReport(
+        ["target: ≥10,000 commands, p99 ≤ 100 ms"]))})
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="cp1252"))
+    assert probe.main(["--probes", "one", "--out", str(tmp_path / "x"), "--seed", "1"]) == probe.EXIT_OK
+    sys.stdout.flush()
+    assert "target: ≥10,000 commands, p99 ≤ 100 ms" in buf.getvalue().decode("utf-8")
+
+
 # ---- piece 2: shared helpers --------------------------------------------------------------------------
 
 def test_histogram_bins_counts_and_out_of_range():
@@ -865,6 +883,30 @@ def test_m8_reviews_a_granularity_outside_10_to_16_ms(tmp_path, clock):
     assert code == probe.EXIT_OK
     rep = _report(tmp_path, "m8")
     assert "M8 tick_ms granularity: NOT CONFIRMED" in rep and "[review] m8: tick_ms granularity" in rep
+
+
+def _lagged_ticks(step_ms, max_lag_ticks, seed=7):
+    """tick_ms on a `step_ms` grid that trails each event by a random 0..max_lag_ticks ticks: BLE-HID input live
+    (A-M8: tick_ms trails the hook's qpc_ns by ~2 ticks, so tick_ms - qpc_ns spans ~2 ticks, not 1)."""
+    rng = random.Random(seed)
+    return lambda qpc: int(math.floor((qpc / MS - rng.uniform(0, max_lag_ticks * step_ms)) / step_ms) * step_ms)
+
+
+def test_m8_confirms_the_granularity_through_up_to_two_ticks_of_arrival_lag(tmp_path, clock):
+    # the live V1 try-3 failure: 15.625 ms ticks, p99 - p1 of tick_ms - qpc_ns read ~27 ms (A-M8)
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _lagged_ticks(15.625, 2)}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    est = float(re.search(r"M8 tick_ms granularity: CONFIRMED ~([\d.]+) ms", rep).group(1))
+    assert 15.5 < est < 15.75 and "[review]" not in rep
+
+
+def test_m8_a_tick_that_never_advances_is_n_a_and_reviewed(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m8",))  # the rig's default tick_ms is 0 for every event
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    assert "M8 tick_ms granularity: n/a" in rep and "[review] m8: tick_ms granularity: n/a" in rep
+    assert "CONFIRMED" not in rep
 
 
 # ---- piece 4: release-all probes (a second thread) ---------------------------------------------------------
