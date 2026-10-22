@@ -16,6 +16,7 @@ from src.input.timing import Sample, TimingModel, TimingType
 
 MAX_SEQUENCE_KEYS = 8  # two steps per key; protocol.MAX_STEPS = 16
 CLIP_MARGIN_100US = 150  # 15 ms: a repeated key is lifted at least this long before its next down (C4)
+MAX_WALK_INTENDED_MS = 13_107.1  # 2 x 6553.55: above this every WALK draw (>= T/2) overflows the 65 535 per-step cap
 
 _DOWN, _UP = True, False
 
@@ -117,6 +118,10 @@ def walk(model: TimingModel, direction: Key, intended_ms: float) -> Result[Plan,
     # TimingModel.walk raises ValueError on these (A-P2); a builder returns a Failure instead.
     if not (math.isfinite(intended_ms) and intended_ms >= 0):
         return Failure(f"walk: intended_ms must be finite and >= 0, got {intended_ms!r}")
+    # Every WALK draw is >= intended_ms / 2 (C4), so beyond this it exceeds the per-step cap whatever is drawn;
+    # failing here also keeps TimingModel.walk from raising OverflowError at intended_ms ** 2 for absurd values.
+    if intended_ms > MAX_WALK_INTENDED_MS:
+        return Failure(f"walk: intended_ms {intended_ms!r} exceeds {MAX_WALK_INTENDED_MS} (per-step delta cap)")
     b = _Builder(model)
     ms, i = _draw(model, model.walk, intended_ms)
     down = b.event(0, direction, _DOWN)
@@ -154,7 +159,8 @@ def sequence(model: TimingModel, keys: Sequence[Key]) -> Result[Plan, str]:
         up_t = down_t[n] + _wire(h_ms)
         kind = TimingType.HOLD
         # C4 says "key i+1 equals key i"; the same lift-early applies to the next later press of the same key,
-        # otherwise the key would go down while still down and the schedule would be invalid (DECISION, see notes).
+        # otherwise the key would go down while still down and the schedule would be invalid
+        # (A-P3-D1, docs/decisions.md).
         nxt = next((j for j in range(n + 1, len(keys)) if keys[j] == key), None)
         if nxt is not None and up_t > down_t[nxt] - CLIP_MARGIN_100US:
             up_t = down_t[nxt] - CLIP_MARGIN_100US
