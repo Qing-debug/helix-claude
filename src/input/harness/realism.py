@@ -175,7 +175,7 @@ class ChordOrder:
     seq: int
     first_vk: int
     second_vk: int
-    first_down_ns: int | None         # first observed down of that VK in the command's window
+    first_down_ns: int | None         # first observed down of that VK in the command's window at or after sent_ns
     second_down_ns: int | None
 
     @property
@@ -195,8 +195,9 @@ def chord_orders(dm: DeliveryMatch) -> list[ChordOrder]:
             if s["type"] != T.CHORD_OFFSET.value:
                 continue
             v1, v2 = exp[s["step_from"]][0], exp[s["step_to"]][0]
-            d1 = next((e["qpc_ns"] for e in m.observed if e["vk"] == v1 and e["down"]), None)
-            d2 = next((e["qpc_ns"] for e in m.observed if e["vk"] == v2 and e["down"]), None)
+            sent = m.row["sent_ns"]      # nothing bot-made goes down before it is sent (A-H3-R m4, A-H4-R n1)
+            d1 = next((e["qpc_ns"] for e in m.observed if e["vk"] == v1 and e["down"] and e["qpc_ns"] >= sent), None)
+            d2 = next((e["qpc_ns"] for e in m.observed if e["vk"] == v2 and e["down"] and e["qpc_ns"] >= sent), None)
             out.append(ChordOrder(m.seq, v1, v2, d1, d2))
     return out
 

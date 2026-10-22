@@ -280,6 +280,38 @@ def test_one_inverted_chord_fails_chord_order(tmp_path):
     assert any("seq 4" in d for d in c.details)
 
 
+def test_stray_first_key_down_before_sent_ns_does_not_mask_an_inverted_chord(tmp_path):
+    """A-H4-R n1: the first key's down is taken at or after sent_ns, like first_down_ns (A-H3-R m4)."""
+    m = model()
+    row = plan_row(1, actions.teleport(m, Key.LEFT))
+    ev = events_for(row)
+    ev[0]["qpc_ns"], ev[1]["qpc_ns"] = ev[1]["qpc_ns"], ev[0]["qpc_ns"]          # E down seen before LEFT down
+    stray = [key(row["sent_ns"] - 20 * MS, VK[Key.LEFT], True), key(row["sent_ns"] - 10 * MS, VK[Key.LEFT], False)]
+    c = by_name(realism.realism(write_run(tmp_path, [row], ev + stray)), "Chord order")
+    assert c.verdict == "FAIL"
+    assert "violations 1 over 1 chords" in c.summary
+
+
+def test_chord_order_second_down_seen_with_first_never_seen_is_a_violation(tmp_path):
+    """A-H4-R n2 (Q1): the second key was seen at a moment the first had not been (spec:59)."""
+    row = plan_row(1, actions.teleport(model(), Key.LEFT))
+    ev = [e for e in events_for(row) if not (e["vk"] == VK[Key.LEFT] and e["down"])]
+    c = by_name(realism.realism(write_run(tmp_path, [row], ev)), "Chord order")
+    assert c.verdict == "FAIL"
+    assert "violations 1 over 1 chords" in c.summary
+    assert any("seq 1" in d and "first key 0x25 down at None" in d for d in c.details)
+
+
+def test_chord_order_second_down_never_seen_is_a_miss_not_a_violation(tmp_path):
+    """A-H4-R n2 (Q1): nothing was seen before the first key, so no violation; listed as unseen (Delivery drop)."""
+    row = plan_row(1, actions.teleport(model(), Key.LEFT))
+    ev = [e for e in events_for(row) if not (e["vk"] == VK[Key.E] and e["down"])]
+    c = by_name(realism.realism(write_run(tmp_path, [row], ev)), "Chord order")
+    assert c.verdict == "PASS"
+    assert "violations 0 over 1 chords" in c.summary
+    assert any("second key-down not seen" in d and "seq 1" in d for d in c.details)
+
+
 def test_chord_order_passes_on_ordered_chords(tmp_path):
     m = model()
     rows = [plan_row(i + 1, actions.drop(m)) for i in range(10)]

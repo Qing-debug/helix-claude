@@ -119,7 +119,7 @@ class Alignment:
     extra: int
     out_of_order: int
     pairs: dict[int, int]             # expected index -> observed index, for the 'equal' opcodes
-    extra_events: tuple[tuple[int, bool], ...] = ()   # the (vk, down) counted in `extra`, in observed order
+    extra_events: tuple[tuple[int, bool], ...] = ()   # the (vk, down) counted in `extra`, grouped by (vk, down)
 
 
 def align(expected: Sequence[tuple[int, bool]], observed: Sequence[tuple[int, bool]]) -> Alignment:
@@ -341,16 +341,19 @@ def check_faults(run: RunLog, dm: DeliveryMatch) -> Check:
     injected = sorted(f["injected_ns"] for f in run.faults if f["injected_ns"] is not None)
     for n, f in enumerate(run.faults, 1):
         inj, rep = f["injected_ns"], f["reported_ns"]
+        # "after the fault" ends where the next fault is injected: a loss after fault k+1 is fault k+1's (A-H3-R m2)
+        until = next((t for t in injected if inj is not None and t > inj), math.inf)
+        lost = [] if inj is None else [
+            m.row for m in dm.commands if m.alignment is not None and m.alignment.dropped
+            and m.row["done_ns"] is not None and inj < m.row["done_ns"] <= until]
         if inj is None or rep is None:
             bad += 1
             details.append(f"fault {n} {f['kind']}: FAIL injected_ns {inj} reported_ns {rep} "
                            "(fault moment not observed, or fault never reported)")
+            if lost:      # the fault FAILs regardless; its silent loss is still listed (A-H4-R fyi)
+                details.append(f"silent loss after fault: seq {_seqs(lost)}")
             continue
         late = rep - inj > FAULT_REPORT_LIMIT_NS
-        # "after the fault" ends where the next fault is injected: a loss after fault k+1 is fault k+1's (A-H3-R m2)
-        until = next((t for t in injected if t > inj), math.inf)
-        lost = [m.row for m in dm.commands if m.alignment is not None and m.alignment.dropped
-                and m.row["done_ns"] is not None and inj < m.row["done_ns"] <= until]
         bad += bool(late or lost)
         details.append(f"fault {n} {f['kind']}: {'FAIL' if late or lost else 'PASS'} reported after "
                        f"{(rep - inj) / NS_PER_MS:.3f} ms ({f['error']})")

@@ -560,6 +560,19 @@ def test_m2_silent_loss_between_two_faults_fails_only_the_earlier_one(tmp_path):
     assert "1/2 faults pass" in res.summary
 
 
+def test_silent_loss_after_a_fault_with_null_reported_ns_is_printed(tmp_path):
+    """A-H4-R fyi: the null fault FAILs on its own, but its silent loss must still be listed (under that fault)."""
+    cmds, keys = perfect(7)
+    keys = [e for e in keys if not 5 * S <= e["qpc_ns"] < 6 * S]          # command 6 lost (done 5.6 s)
+    faults = [fault(1 * S, 1 * S + 10 * MS), fault(4 * S, None)]
+    res = checks(write_run(tmp_path, cmds, keys, faults=faults))["Faults"]
+    assert res.verdict == "FAIL"
+    f1, f2 = fault_lines(res)
+    assert ": PASS" in f1 and ": FAIL" in f2
+    assert text(res).count("silent loss after fault: seq 6") == 1
+    assert "1/2 faults pass" in res.summary
+
+
 def test_m3_extra_events_are_printed_with_their_vk(tmp_path):
     cmds, keys = perfect(3)
     t = cmds[1]["sent_ns"] + 300 * MS
