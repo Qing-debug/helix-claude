@@ -72,6 +72,18 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+// CI request (Plan A F3 step 5): set by onConnect, sent from loop() >= 1.5 s later, once per connection.
+volatile bool ciRequestPending = false;
+volatile uint16_t ciRequestHandle = 0;
+volatile unsigned long ciRequestAtMs = 0;
+
+static void printConn(NimBLEConnInfo& connInfo) {
+  Serial.printf("CONN handle=%u itvl_ms=%.2f latency=%u timeout_ms=%u mtu=%u bonded=%d encrypted=%d auth=%d\n",
+                connInfo.getConnHandle(), connInfo.getConnInterval() * 1.25, connInfo.getConnLatency(),
+                connInfo.getConnTimeout() * 10, connInfo.getMTU(), connInfo.isBonded(), connInfo.isEncrypted(),
+                connInfo.isAuthenticated());
+}
+
 class HelixBLEKeyboard : public BleKeyboard {
   NimBLEService* pService;
   NimBLECharacteristic* pCharacteristic1;
@@ -85,14 +97,32 @@ class HelixBLEKeyboard : public BleKeyboard {
     pCharacteristic2 = pService->createCharacteristic(PCRESPONSECHARACTERISTIC_UUID, NIMBLE_PROPERTY::NOTIFY); //TODO hook this up on the PC side, need to get PC to subscrie to this. For now i'll impleent everything else on this side but leave the PC side for later
     CommandCallbacks* customNotifyCallbackObject = new CommandCallbacks(pCharacteristic2, this);
     pCharacteristic1->setCallbacks(customNotifyCallbackObject);
+    NimBLEDevice::setSecurityAuth(true, false, true);       // bonding, no MITM, SC  (Helix 3544179, ISSUES #3 Fix)
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT); // Just Works (headless board)
    };
 
    //fires when windows connects, does not fire when we connect through python script but device still advertises, maybe stop it form advertising? Though i dont think this is the issue to our current problem of onwrite not writing back to the PC.
    virtual void onConnect(NimBLEServer* pServer, NimBLEConnInfo &connInfo) override{
     Serial.println("OnConnect method executed, advertising again.");
+    printConn(connInfo);
+    ciRequestHandle = connInfo.getConnHandle();
+    ciRequestAtMs = millis();
+    ciRequestPending = true;
     BleKeyboard::onConnect(pServer, connInfo);
     pServer->getAdvertising()->start();
     }
+
+   virtual void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+    printConn(connInfo);
+   }
+
+   virtual void onConnParamsUpdate(NimBLEConnInfo& connInfo) override {
+    printConn(connInfo);
+   }
+
+   virtual void onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) override {
+    Serial.printf("MTU handle=%u mtu=%u\n", connInfo.getConnHandle(), MTU);
+   }
 };
 
 
@@ -103,12 +133,18 @@ HelixBLEKeyboard bleKeyboard;
 
 void setup() {
   Serial.begin(115200);
+  while (!Serial && millis() < 3000) { delay(10); }  // host wait (PA-rev I9)
   Serial.println("Starting NimBLE work!");
   bleKeyboard.setName("Guiness");
   bleKeyboard.begin();
+  Serial.printf("BONDS=%d\n", NimBLEDevice::getNumBonds());
 }
 
 void loop() {
+  if (ciRequestPending && millis() - ciRequestAtMs >= 1500) {
+    ciRequestPending = false;
+    NimBLEDevice::getServer()->updateConnParams(ciRequestHandle, 9, 12, 0, 100);  // 11.25-15 ms, latency 0, 1 s timeout
+  }
   // Serial.println("is the BLEKeyboard connected on the esp32 side:" + String(bleKeyboard.isConnected()));
   if (count == 0){
     count += 1;
