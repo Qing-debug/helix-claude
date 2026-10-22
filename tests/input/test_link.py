@@ -1061,3 +1061,18 @@ def test_connect_returns_failure_and_disconnects_when_mtu_size_raises(board):
     assert board.client.disconnect_calls == 1
     assert lk.faults() == []
     assert lk.play(tap_steps()).failure() == InputError.NOT_CONNECTED
+
+def test_every_reply_is_logged_at_debug_with_its_loop_time(link, board, caplog):
+    """probe --link-debug (A-M6diag): each decoded reply is one DEBUG `rx` record, stamped with the ns the loop used."""
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        rep = link.play(tap_steps()).unwrap()
+    rx = [m for m in (rec.getMessage() for rec in caplog.records if rec.levelno == logging.DEBUG)
+          if m.startswith("rx ")]
+    assert any(m.startswith("rx Accepted(") and m.endswith(f"ns={rep.accepted_ns}") for m in rx), rx
+    assert any(m.startswith("rx Done(") and m.endswith(f"ns={rep.done_ns}") for m in rx), rx
+
+
+def test_rx_records_stay_below_warning(link, board, caplog):
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        assert is_successful(link.play(tap_steps()))
+    assert not [rec for rec in caplog.records if rec.getMessage().startswith("rx ")]

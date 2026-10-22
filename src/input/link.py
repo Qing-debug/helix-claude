@@ -203,6 +203,7 @@ class BleLink:
             log.warning("dropping undecodable notification %s: %s", raw.hex(), decoded.failure())
             return
         msg = decoded.unwrap()
+        log.debug("rx %r ns=%d", msg, now)  # every reply as the loop takes it (probe --link-debug, A-M6diag)
         entry = self._pending.get(msg.seq)
         if entry is None or not entry.takes(msg):
             log.debug("dropping %r: no pending command takes it", msg)

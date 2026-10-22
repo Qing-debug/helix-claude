@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import contextlib
 import datetime
 import json
+import logging
 import math
 import subprocess
 import sys
@@ -947,6 +949,34 @@ class ProbeConfig:
     out: Path
     seed: int
     cli: str = CLI_DEFAULT
+    link_debug: bool = False
+
+
+LINK_DEBUG_FILE = "link-debug.log"  # --link-debug only (A-M6diag); link.log (WARNING, C5) is unchanged
+
+
+@contextlib.contextmanager
+def _link_debug_log(run_dir: Path | None):
+    """With a run dir: every `src.input.link` record at DEBUG and up also goes to ``run_dir / LINK_DEBUG_FILE``, in
+    link.log's format (perf_ns stamped, so it lines up with commands.jsonl); the logger's level is restored after."""
+    if run_dir is None:
+        yield
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(run_dir / LINK_DEBUG_FILE, mode="w", encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    handler.addFilter(soak._stamp_perf_ns)
+    handler.setFormatter(logging.Formatter(soak.LINK_LOG_FORMAT))
+    logger = logging.getLogger(soak.LINK_LOGGER)
+    level = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+        handler.close()
 
 
 def _check_processes(writer: RunWriter) -> None:
@@ -1025,7 +1055,8 @@ def run_probes(cfg: ProbeConfig, new_link: Callable[[], BleLink],
         p = PROBES[name]
         rest = ", ".join(cfg.probes[i + 1:]) or "none"
         try:
-            _run_probe(p, cfg, new_link(), start_sink)
+            with _link_debug_log(cfg.out / name if cfg.link_debug else None):
+                _run_probe(p, cfg, new_link(), start_sink)
         except ProbeAbort as e:
             tag = "[review] " if "FOCUS_LOST" in str(e) else ""
             print(f"{tag}{e} (probe.py stopped in probe {name}; not run: {rest})", file=sys.stderr, flush=True)
@@ -1063,6 +1094,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--out", default=None, help="run directory (overrides --run)")
     p.add_argument("--seed", type=int, default=None, help="timing and probe seed (default: a fresh one, logged)")
     p.add_argument("--cli", default=CLI_DEFAULT, help="arduino-cli.exe for the board-port check (hard rule 3)")
+    p.add_argument("--link-debug", action="store_true",
+                   help="also write <probe dir>/link-debug.log: src.input.link at DEBUG, incl. every reply received")
     p.add_argument("--run-sheet", action="store_true", help="print the V1 live run sheet and exit (runs nothing)")
     return p.parse_args(argv)
 
@@ -1074,7 +1107,7 @@ def config_from_args(args: argparse.Namespace) -> ProbeConfig:
     else:
         out = PROBE_ROOT / (args.run or datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     probes = tuple(s.strip() for s in args.probes.split(",") if s.strip())
-    return ProbeConfig(probes=probes, out=out, seed=seed, cli=args.cli)
+    return ProbeConfig(probes=probes, out=out, seed=seed, cli=args.cli, link_debug=args.link_debug)
 
 
 def main(argv: list[str] | None = None) -> int:

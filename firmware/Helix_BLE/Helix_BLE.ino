@@ -62,6 +62,12 @@
 #define START_JITTER 1
 #endif
 
+// Reply-notify diagnostic (A-M6-D1 -> A). A diagnostic build passes -DNOTIFY_DIAG=1; HEAD stays 0 and compiles none of
+// the NOTIFY_DIAG code. On: notifyPeer keeps each reply's NimBLE rc and prints serial `NOTIFY ...` lines (see notifyPeer).
+#ifndef NOTIFY_DIAG
+#define NOTIFY_DIAG 0
+#endif
+
 // ---- Connection table (PA-adj1c-D1 -> A). Written by the NimBLE host task, read by the loop task: all under linksMux.
 struct LinkEntry { uint16_t handle; bool subscribed; };
 static LinkEntry links[CONFIG_BT_NIMBLE_MAX_CONNECTIONS];
@@ -126,9 +132,68 @@ static std::atomic<int> abortRequested{0};
 static NimBLECharacteristic* pResponseChar = nullptr;   // C1 notify characteristic
 static NimBLECharacteristic* inputReport = nullptr;     // HID keyboard input report (report ID 1), or nullptr
 
+#if NOTIFY_DIAG
+// Every reply notify's NimBLE rc is kept. Running totals over all reply kinds (written by both tasks):
+static std::atomic<uint32_t> diagSent{0}, diagFailed{0}, diagPongFailed{0}, diagRejectedFailed{0};
+// The last ACCEPTED's rc, printed with its DONE. Loop task only: ACCEPTED and DONE are sent only from loop()
+// (runPlay, runReleaseAll, the queued-ABORT reply); onWrite sends only PONG and REJECTED (QUEUE_FULL).
+static bool diagAccPending = false;
+static uint16_t diagAccSeq = 0;
+static int diagAccRc = 0;
+
+// One serial line per DONE, printed by the loop task right after the DONE is sent, so never inside a schedule or in
+// onWrite (A-F5-D3). Non-blocking: a line that does not fit the TX ring is dropped whole (setup()); `sent` then jumps.
+//   NOTIFY seq=<s> accepted_rc=<rc|none> done_rc=<rc|none> sent=<n> failed=<k> pong_failed=<p> rejected_failed=<r>
+// accepted_rc=none: no ACCEPTED before this DONE (RELEASE_ALL, queued ABORTED). done_rc=none: an ACCEPTED whose DONE
+// was never sent (DROP), printed at the next ACCEPTED or DONE. rc is 0 or the NimBLE rc (BLE_HS_ENOMEM = 6, ...).
+static void diagPrint(uint16_t seq, const char* accRc, const char* doneRc) {
+  Serial.printf("NOTIFY seq=%u accepted_rc=%s done_rc=%s sent=%lu failed=%lu pong_failed=%lu rejected_failed=%lu\n",
+                seq, accRc, doneRc, (unsigned long)diagSent.load(), (unsigned long)diagFailed.load(),
+                (unsigned long)diagPongFailed.load(), (unsigned long)diagRejectedFailed.load());
+}
+
+static void diagFlushAccepted() {
+  if (!diagAccPending) return;
+  diagAccPending = false;
+  char acc[12];
+  snprintf(acc, sizeof(acc), "%d", diagAccRc);
+  diagPrint(diagAccSeq, acc, "none");
+}
+
+static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len) {
+  // The calls notify() makes for one peer and a custom value (NimBLECharacteristic::sendValue, NimBLE-Arduino 2.5.0
+  // NimBLECharacteristic.cpp:276-290, :321-325, which turns rc != 0 into false), made here so the rc is kept, as
+  // sendKeyReport does. The diagnostic build drops only sendValue's NIMBLE_LOGE line on a failure.
+  os_mbuf* om = ble_hs_mbuf_from_flat(buf, len);
+  const int rc = om == nullptr ? BLE_HS_ENOMEM : ble_gattc_notify_custom(handle, pResponseChar->getHandle(), om);
+  const uint8_t kind = buf[1];
+  const uint16_t seq = (uint16_t)(buf[2] | (buf[3] << 8));   // C1 header: ver, kind, seq (u16 LE), protocol.h
+  diagSent.fetch_add(1);
+  if (rc != 0) {
+    diagFailed.fetch_add(1);
+    if (kind == proto::detail::KIND_PONG) diagPongFailed.fetch_add(1);
+    if (kind == proto::detail::KIND_REJECTED) diagRejectedFailed.fetch_add(1);
+  }
+  if (kind == proto::detail::KIND_ACCEPTED) {   // held until its DONE
+    diagFlushAccepted();
+    diagAccPending = true;
+    diagAccSeq = seq;
+    diagAccRc = rc;
+  } else if (kind == proto::detail::KIND_DONE) {
+    if (diagAccPending && diagAccSeq != seq) diagFlushAccepted();
+    char acc[12], done[12];
+    if (diagAccPending) snprintf(acc, sizeof(acc), "%d", diagAccRc);
+    else snprintf(acc, sizeof(acc), "none");
+    snprintf(done, sizeof(done), "%d", rc);
+    diagAccPending = false;
+    diagPrint(seq, acc, done);
+  }
+}
+#else
 static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len) {
   pResponseChar->notify(buf, len, handle);
 }
+#endif
 
 static void sendRejected(uint16_t handle, uint16_t seq, uint8_t reason) {
   uint8_t buf[5];
