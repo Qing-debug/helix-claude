@@ -606,7 +606,12 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
             writer.record_connect(connected.unwrap())
             mix = command_mix(mix_rng)
             seq, first_stimulus_ns, last_done_ns = 0, None, None
-            while seq < cfg.commands or (last_done_ns or 0) - (first_stimulus_ns or 0) < target_ns:
+
+            def span_short() -> bool:  # H3's connected span; none yet (no Success) is not "short": stop at N
+                return (target_ns > 0 and first_stimulus_ns is not None and last_done_ns is not None
+                        and last_done_ns - first_stimulus_ns < target_ns)
+
+            while seq < cfg.commands or span_short():
                 periodic_check()
                 cmd = next(mix)
                 if seq in fault_at:

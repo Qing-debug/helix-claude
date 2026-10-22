@@ -454,15 +454,20 @@ def test_fault_row_with_null_injected_ns_nulls_the_stamps_after_it():
 # ---- driver fakes ---------------------------------------------------------------------------------
 
 class DriverLink(FakeLink):
-    """A BleLink stand-in for the driver: each play() takes 1 s of fake time; `fail_plays` (1-based) fail."""
+    """A BleLink stand-in for the driver: each play() takes 1 s of fake time; `fail_plays` (1-based) fail with
+    `fail_error`. More than MAX_PLAYS plays is a runaway loop: the test fails instead of hanging."""
 
-    def __init__(self, clock, fail_plays=(), connect_ok=True, connect_fails_after=None):
+    MAX_PLAYS = 1000
+
+    def __init__(self, clock, fail_plays=(), connect_ok=True, connect_fails_after=None,
+                 fail_error=InputError.LINK_LOST):
         super().__init__()
         self.clock = clock
         self.events = []
         self.connected = False
         self.plays = 0
         self.fail_plays = set(fail_plays)
+        self.fail_error = fail_error
         self.connect_ok = connect_ok
         self.connects = 0
         self.connect_fails_after = connect_fails_after
@@ -482,12 +487,13 @@ class DriverLink(FakeLink):
 
     def play(self, steps):
         self.plays += 1
+        assert self.plays <= self.MAX_PLAYS, "runaway soak loop"
         self.events.append("play")
         self.clock.now += S
         if not self.connected:
             return Failure(InputError.NOT_CONNECTED)
         if self.plays in self.fail_plays:
-            return Failure(InputError.LINK_LOST)
+            return Failure(self.fail_error)
         n = self.clock.clock()
         return Success(SendReport(seq=self.plays, sent_ns=n - 3, written_ns=n - 2, accepted_ns=n - 1, done_ns=n,
                                   accepted=Accepted(self.plays, 0),
@@ -736,6 +742,17 @@ def test_min_hours_uses_the_span_to_the_last_done_not_the_wall_clock(tmp_path, d
     first = rows[0]["stimulus_ns"]
     assert rows[9]["stimulus_ns"] - first >= 5 * S  # the wall clock passed H during the failures...
     assert _span(rows[:10]) < 5 * S <= _span(rows)  # ...but the connected span reached it only at the end
+
+
+@pytest.mark.parametrize("min_hours", [0.0, 10 * S / 3600e9])
+def test_a_run_in_which_no_command_succeeds_ends_after_n_commands(tmp_path, driver_clock, min_hours):
+    # A-H2-R I1: no Success means no done_ns, so there is no span to test; the run ends at N (it already failed)
+    link = DriverLink(driver_clock, fail_plays=range(1, DriverLink.MAX_PLAYS + 1),
+                      fail_error=InputError.REJECTED)
+    code, _, _ = _run(tmp_path, driver_clock, link=link, commands=3, min_hours=min_hours)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == 0 and len(rows) == 3
+    assert all(r["error"] == "REJECTED" and r["done_ns"] is None for r in rows)
 
 
 # ---- faults during the run ------------------------------------------------------------------------
