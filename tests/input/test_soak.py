@@ -839,6 +839,29 @@ def test_failures_that_are_not_consecutive_do_not_abort_a_min_hours_run(tmp_path
     assert _span(rows) >= 4 * K * S
 
 
+def test_without_min_hours_a_run_of_n_failures_ends_at_n_with_exit_0(tmp_path, driver_clock):
+    # A-H2-fix3-R m2(a): the D1-B abort is gated on span_short(); with no --min-hours the last K commands failing
+    # does not abort: the run ends at N, exit 0 (N = K + 2 so the failure streak is longer than K)
+    n = soak.MAX_CONSECUTIVE_FAILURES + 2
+    link = DriverLink(driver_clock, fail_plays=range(1, DriverLink.MAX_PLAYS + 1), fail_error=InputError.REJECTED)
+    code, _, _ = _run(tmp_path, driver_clock, link=link, commands=n)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == 0 and len(rows) == n
+    assert all(r["error"] == "REJECTED" for r in rows)
+
+
+def test_a_failure_burst_before_n_does_not_abort_a_min_hours_run(tmp_path, driver_clock):
+    # A-H2-fix3-R m2(b): the D1-B abort starts only at seq >= N; K + 2 consecutive failures before N (plays 3..K+4,
+    # N = 30) are followed by a success and the run ends normally once the span is met
+    K = soak.MAX_CONSECUTIVE_FAILURES
+    link = DriverLink(driver_clock, fail_plays=range(3, K + 5), fail_error=InputError.REJECTED)
+    code, _, _ = _run(tmp_path, driver_clock, link=link, commands=30, min_hours=5 * S / 3600e9)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == 0 and len(rows) >= 30
+    assert sum(r["error"] == "REJECTED" for r in rows) == K + 2
+    assert _span(rows) >= 5 * S
+
+
 # ---- faults during the run ------------------------------------------------------------------------
 
 def _injector(clock, link, calls, seen_after_s=None, set_stamp=True):
