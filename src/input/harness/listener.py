@@ -193,6 +193,9 @@ class Listener:
         self._queue: queue.SimpleQueue = queue.SimpleQueue()
         self._hook_tid: int | None = None
         self._hook_error: str | None = None
+        self._writer_error: str | None = None
+        self._sink_error: str | None = None
+        self._writer_ready = threading.Event()
         self._hook_ready = threading.Event()
         self._sink_ready = threading.Event()
         self._sink_stop = threading.Event()
@@ -246,8 +249,15 @@ class Listener:
             _user32.UnhookWindowsHookEx(hook)
 
     def _writer_thread(self) -> None:
-        self.out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.out_path, "a", encoding="utf-8", newline="\n") as fh:  # LF on Windows too (m5)
+        try:
+            self.out_path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(self.out_path, "a", encoding="utf-8", newline="\n")  # LF on Windows too (m5)
+        except OSError as e:
+            self._writer_error = f"cannot open {self.out_path}: {e}"
+            self._writer_ready.set()
+            return
+        self._writer_ready.set()
+        with fh:
             writer = KeyLogWriter(fh)
             while True:
                 item = self._queue.get()
@@ -258,15 +268,26 @@ class Listener:
                     fh.flush()
 
     def _sink_thread(self) -> None:
-        import tkinter as tk
+        root = None
+        try:
+            import tkinter as tk
 
-        root = tk.Tk()
-        root.title(SINK_TITLE)
-        root.geometry("360x120")
-        # Labels only: no focusable Button/Checkbutton/Radiobutton/Entry/Text widget (H1 test-window rule).
-        tk.Label(root, text=SINK_TITLE, font=("Segoe UI", 12)).pack(expand=True)
-        root.update()
-        self.sink_hwnd = _user32.GetAncestor(root.winfo_id(), GA_ROOT) or None
+            root = tk.Tk()
+            root.title(SINK_TITLE)
+            root.geometry("360x120")
+            # Labels only: no focusable Button/Checkbutton/Radiobutton/Entry/Text widget (H1 test-window rule).
+            tk.Label(root, text=SINK_TITLE, font=("Segoe UI", 12)).pack(expand=True)
+            root.update()
+            self.sink_hwnd = _user32.GetAncestor(root.winfo_id(), GA_ROOT) or None
+        except Exception as e:  # TclError, RuntimeError, ...: start() re-raises it as an OSError (m4)
+            self._sink_error = f"test sink window failed: {e!r}"
+            self._sink_ready.set()
+            if root is not None:
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
+            return
         self._sink_ready.set()
 
         def poll() -> None:
@@ -288,13 +309,18 @@ class Listener:
             th = threading.Thread(target=target, name=name, daemon=True)
             self._threads.append(th)
             th.start()
+        if not self._writer_ready.wait(_STARTUP_TIMEOUT_S) or self._writer_error:
+            err = self._writer_error or "writer thread did not start"
+            self.stop()
+            raise OSError(err)
         if not self._hook_ready.wait(_STARTUP_TIMEOUT_S) or self._hook_error:
             err = self._hook_error or "hook thread did not start"
             self.stop()
             raise OSError(err)
         if not self._sink_ready.wait(_STARTUP_TIMEOUT_S) or self.sink_hwnd is None:
+            err = self._sink_error or "test sink window did not come up"
             self.stop()
-            raise OSError("test sink window did not come up")
+            raise OSError(err)
 
     def stop(self) -> None:
         """Unhook, drain the queue into keys.jsonl, close the sink. Safe to call twice."""
@@ -313,7 +339,7 @@ class Listener:
 
 def start(out_dir: str | Path, block: bool = True) -> Listener:
     """Start the hook, writer and sink threads; return once the hook is installed and the sink exists.
-    Raises OSError if either fails to come up within 5 s."""
+    Raises OSError if the writer, the hook or the sink does not come up, each within 5 s."""
     sys.setswitchinterval(0.001)  # cut GIL delay to the hook thread (inferred benefit; M8 measures it)
     lst = Listener(out_dir, block=block)
     lst._start()

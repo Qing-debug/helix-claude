@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from src.input.harness import listener as listener_mod
 from src.input.harness.listener import (
     BOT_VKS,
     LLKHF_INJECTED,
@@ -260,3 +261,45 @@ def test_writer_thread_flushes_when_queue_goes_idle(tmp_path):
         lst._queue.put(_STOP)
         th.join(5)
     assert not th.is_alive()
+
+
+# ---- start-up failures reach start() (A-H1-R m3, m4): fake hook thread, no Win32, no Tk window ---------
+
+def _fast_startup(monkeypatch):
+    monkeypatch.setattr(listener_mod, "_STARTUP_TIMEOUT_S", 1.0)  # a red run must not sit for 5 s per wait
+
+
+def _fake_hook_ok(lst):
+    def hook():
+        lst._hook_ready.set()
+    lst._hook_thread = hook  # shadows the bound method: no SetWindowsHookExW
+
+
+def _fake_sink_ok(lst):
+    def sink():
+        lst.sink_hwnd = SINK
+        lst._sink_ready.set()
+    lst._sink_thread = sink  # shadows the bound method: no Tk
+
+
+def test_start_raises_oserror_when_the_keys_file_cannot_be_opened(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    (tmp_path / "keys.jsonl").mkdir()  # open(..., "a") on a directory fails
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    _fake_sink_ok(lst)
+    with pytest.raises(OSError, match="keys.jsonl"):
+        lst._start()
+
+
+def test_start_raises_oserror_carrying_the_sink_threads_error(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+
+    def no_display(*args, **kwargs):
+        raise RuntimeError("no display for the sink")
+
+    monkeypatch.setattr("tkinter.Tk", no_display)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    with pytest.raises(OSError, match="no display for the sink"):
+        lst._start()
