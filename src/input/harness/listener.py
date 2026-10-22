@@ -12,6 +12,10 @@ Win32 facts used here (Microsoft Learn, read 2026-10-22):
   injected, bit 7 = transition state (1 = released).
 - SetForegroundWindow(HWND) -> BOOL; the system restricts which processes may set the foreground, so its return
   value is not trusted here: GetForegroundWindow decides.
+- FlashWindowEx(PFLASHWINFO) flashes a window and "does not change the active state of the window"; its return value
+  is the caption's previous active state, not success. FLASHWINFO {UINT cbSize; HWND hwnd; DWORD dwFlags; UINT uCount;
+  DWORD dwTimeout}; FLASHW_ALL 0x3 = caption and taskbar button, FLASHW_TIMERNOFG 0xC = flash continuously until the
+  window comes to the foreground; dwTimeout 0 = the default caret blink rate (Microsoft Learn, read 2026-10-22).
 
 Run: ``python -m src.input.harness.listener --out data/listener-check --seconds 20 [--no-block]``
 """
@@ -42,6 +46,11 @@ LLKHF_INJECTED = 0x10
 LLKHF_UP = 0x80
 
 SINK_TITLE = "Helix input test sink"
+SINK_LABEL = "Helix test window\nclick here once, then don't type"   # plain words for the operator (A-LF)
+SINK_BG = "#ffe600"                                                   # bright yellow, black text
+SINK_MIN_W, SINK_MIN_H = 600, 300
+FLASHW_ALL = 0x00000003
+FLASHW_TIMERNOFG = 0x0000000C
 KEYS_FILE = "keys.jsonl"
 _STARTUP_TIMEOUT_S = 5.0
 
@@ -57,6 +66,14 @@ VK_BY_KEY: dict[Key, int] = {
     Key.SPACE: 0x20,  # VK_SPACE
 }
 BOT_VKS: frozenset[int] = frozenset(VK_BY_KEY.values())
+
+
+def sink_rect(screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
+    """(w, h, x, y) of the sink window: a quarter of the screen width (at least 600x300), centred, never off the
+    top-left. ``wm geometry`` takes x/y after a ``+`` as pixels from the left / top of the screen (Tk wm docs)."""
+    w = max(SINK_MIN_W, screen_w // 4)
+    h = max(SINK_MIN_H, w // 2)
+    return w, h, max(0, (screen_w - w) // 2), max(0, (screen_h - h) // 2)
 
 
 def should_block(vk: int, block: bool) -> bool:
@@ -136,6 +153,16 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
+class FLASHWINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("hwnd", wintypes.HWND),
+        ("dwFlags", wintypes.DWORD),
+        ("uCount", wintypes.UINT),
+        ("dwTimeout", wintypes.DWORD),
+    ]
+
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -158,8 +185,17 @@ _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
 _user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 _user32.GetAncestor.restype = wintypes.HWND
+_user32.FlashWindowEx.argtypes = [ctypes.POINTER(FLASHWINFO)]
+_user32.FlashWindowEx.restype = wintypes.BOOL
 _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 _kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+
+def flash_window(hwnd: int) -> None:
+    """Flash the window's caption and taskbar button until it comes to the foreground, so the operator can find it.
+    Does not activate it; the return value (the caption's previous state) says nothing about success, so it is dropped."""
+    info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, FLASHW_ALL | FLASHW_TIMERNOFG, 0, 0)
+    _user32.FlashWindowEx(ctypes.byref(info))
 
 
 class Foreground(Protocol):
@@ -279,11 +315,18 @@ class Listener:
             # root.destroy() below raised TclError. Closing now ends the thread the way stop() does; the window still
             # goes away, so the focus check goes False and the soak / probe FOCUS_LOST abort is unchanged.
             root.protocol("WM_DELETE_WINDOW", self._sink_stop.set)
-            root.geometry("360x120")
+            # Easy to find (A-LF): big, centred on the primary screen, above other windows, bright, plain words.
+            w, h, x, y = sink_rect(root.winfo_screenwidth(), root.winfo_screenheight())
+            root.geometry(f"{w}x{h}+{x}+{y}")
+            root.configure(bg=SINK_BG)
+            root.attributes("-topmost", True)  # "displays above all other windows" (Tk wm docs)
             # Labels only: no focusable Button/Checkbutton/Radiobutton/Entry/Text widget (H1 test-window rule).
-            tk.Label(root, text=SINK_TITLE, font=("Segoe UI", 12)).pack(expand=True)
+            tk.Label(root, text=SINK_LABEL, font=("Segoe UI", 24, "bold"), bg=SINK_BG, fg="black", justify="center",
+                     wraplength=w - 40).pack(expand=True, fill="both")
             root.update()
             self.sink_hwnd = _user32.GetAncestor(root.winfo_id(), GA_ROOT) or None
+            if self.sink_hwnd is not None:
+                flash_window(self.sink_hwnd)  # flashes only; does not activate, so the click-wait still sees a click
         except Exception as e:  # TclError, RuntimeError, ...: start() re-raises it as an OSError (m4)
             self._sink_error = f"test sink window failed: {e!r}"
             self._sink_ready.set()

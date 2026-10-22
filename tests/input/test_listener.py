@@ -497,3 +497,70 @@ def test_closing_the_sink_window_ends_its_thread_without_a_traceback(tmp_path, m
     finally:
         lst.stop()
     assert thread_errors == []
+
+
+GWL_EXSTYLE, WS_EX_TOPMOST = -20, 0x00000008
+_u32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+_u32.GetWindowRect.restype = wintypes.BOOL
+_u32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+_u32.GetWindowLongW.restype = ctypes.c_long
+_u32.GetSystemMetrics.argtypes = [ctypes.c_int]
+_u32.GetSystemMetrics.restype = ctypes.c_int
+
+
+def test_sink_rect_is_large_and_centred_on_the_screen():
+    assert listener_mod.sink_rect(1920, 1080) == (600, 300, 660, 390)      # (w, h, x, y); 600x300 is the floor
+    assert listener_mod.sink_rect(3840, 2160) == (960, 480, 1440, 840)     # a quarter of the screen width at 4K
+    assert listener_mod.sink_rect(400, 200) == (600, 300, 0, 0)            # a tiny screen never gives a negative offset
+
+
+def test_sink_colours_and_words_are_easy_to_see():
+    r, g, b = (int(listener_mod.SINK_BG[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    assert 0.2126 * r + 0.7152 * g + 0.0722 * b >= 0.7            # a bright background
+    label = listener_mod.SINK_LABEL.lower()
+    assert "click here once" in label and "don't type" in label   # plain words: what to do, and what not to do
+    assert listener_mod.SINK_TITLE == "Helix input test sink"     # the title the operator is told to click is unchanged
+
+
+def test_the_real_sink_window_is_big_centred_and_topmost(tmp_path, monkeypatch):
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        hwnd = lst.sink_hwnd
+        rect = wintypes.RECT()
+        assert _u32.GetWindowRect(hwnd, ctypes.byref(rect))
+        screen_w, screen_h = _u32.GetSystemMetrics(0), _u32.GetSystemMetrics(1)    # SM_CXSCREEN / SM_CYSCREEN: primary
+        assert rect.right - rect.left >= 600 and rect.bottom - rect.top >= 300
+        assert abs((rect.left + rect.right) / 2 - screen_w / 2) <= 40
+        assert abs((rect.top + rect.bottom) / 2 - screen_h / 2) <= 60              # the title bar shifts the middle
+        assert _u32.GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST
+    finally:
+        lst.stop()
+    assert thread_errors == []
+
+
+def test_the_sink_flashes_its_own_taskbar_button_once_it_has_a_handle(tmp_path, monkeypatch):
+    flashed = []
+    monkeypatch.setattr(listener_mod, "flash_window", flashed.append)
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        assert flashed == [lst.sink_hwnd] and lst.sink_hwnd is not None
+    finally:
+        lst.stop()
+    assert thread_errors == []
+
+
+def test_flash_window_asks_for_caption_and_taskbar_until_the_window_is_foreground(monkeypatch):
+    # FLASHWINFO {UINT cbSize; HWND hwnd; DWORD dwFlags; UINT uCount; DWORD dwTimeout}; FLASHW_ALL 0x3 | FLASHW_TIMERNOFG 0xC;
+    # dwTimeout 0 = the default caret blink rate (learn.microsoft.com ns-winuser-flashwinfo).
+    seen = []
+
+    class FakeUser32:
+        def FlashWindowEx(self, pfwi):
+            i = pfwi._obj
+            seen.append((i.cbSize, i.hwnd, i.dwFlags, i.uCount, i.dwTimeout))
+            return 0
+
+    monkeypatch.setattr(listener_mod, "_user32", FakeUser32())
+    listener_mod.flash_window(0xABC)
+    assert seen == [(ctypes.sizeof(listener_mod.FLASHWINFO), 0xABC, 0x3 | 0xC, 0, 0)]
+    assert listener_mod.FLASHW_ALL == 0x3 and listener_mod.FLASHW_TIMERNOFG == 0xC
