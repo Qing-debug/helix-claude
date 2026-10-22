@@ -250,6 +250,49 @@ def test_radio_on_refused_after_off_keeps_the_stamp_and_fails(monkeypatch):
     assert stamps.injected_ns is not None  # the radio did go off
 
 
+class RaisingRadio(FakeRadio):
+    """WinRT failures surface as OSError (pywinrt 3.2.1: an invalid `Uri(...)` raises OSError, winerror E_INVALIDARG)."""
+
+    def __init__(self, raise_on, off_status=RadioAccessStatus.ALLOWED):
+        super().__init__(off_status)
+        self.raise_on = raise_on
+
+    def set_state(self, on):
+        super().set_state(on)
+        if on == self.raise_on:
+            raise OSError(-2147024891, "Access is denied")
+        return self.on_status if on else self.off_status
+
+
+def test_radio_off_call_raising_takes_the_fallback_like_a_refusal(monkeypatch):
+    # A-H2-R M2: an exception from the WinRT call is a refusal, not an error leaving run_soak
+    _fake_radio(monkeypatch, RaisingRadio(raise_on=False))
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    start = time.perf_counter_ns()
+    assert bluetooth_off_on(0, stamps) == Success(None)
+    assert ran == ["off", "on"]
+    assert stamps.injected_ns - start >= 300_000_000  # the fallback marker, not the radio call's stamp
+
+
+def test_radio_off_call_raising_with_no_fallback_is_a_null_entry(monkeypatch):
+    _fake_radio(monkeypatch, RaisingRadio(raise_on=False))
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    result = bluetooth_off_on(0, stamps, fallback=False)
+    assert not is_successful(result) and "Access is denied" in result.failure()
+    assert stamps == FaultStamps() and ran == []
+
+
+def test_radio_on_call_raising_after_off_keeps_the_stamp_and_fails(monkeypatch):
+    _fake_radio(monkeypatch, RaisingRadio(raise_on=True))
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    result = bluetooth_off_on(0, stamps)
+    assert not is_successful(result) and "ON" in result.failure() and "Access is denied" in result.failure()
+    assert stamps.injected_ns is not None and ran == []  # the radio did go off; no fallback after it
+
+
 def test_fallback_enable_failure_keeps_the_stamp_and_fails(monkeypatch):
     _fake_radio(monkeypatch, FakeRadio(RadioAccessStatus.UNSPECIFIED))
     _fake_fallback(monkeypatch, GOOD_FALLBACK, on_body="raise SystemExit(1)\n")

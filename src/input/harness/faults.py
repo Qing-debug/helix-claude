@@ -9,7 +9,8 @@ every call by USB identity (VID 0x303A / PID 1001, plan hard rule 3), never cach
 ``Radio.get_radios_async() -> IAsyncOperation[Sequence[Radio]]``, ``Radio.kind``,
 ``Radio.set_state_async(RadioState) -> IAsyncOperation[RadioAccessStatus]``; ``IAsyncOperation.wait(timeout) ->
 AsyncStatus`` and ``get_results()`` from ``_winrt_windows_foundation.pyi``). A refusal is a returned
-``RadioAccessStatus`` other than ``ALLOWED``, not an exception (PA-rev4a m3); then it falls back to
+``RadioAccessStatus`` other than ``ALLOWED``, not an exception (PA-rev4a m3); an ``OSError`` from the call (how
+pywinrt raises a failed HRESULT) counts as a refusal too (A-H2-R M2). On a refusal it falls back to
 ``Disable-PnpDevice`` / ``Enable-PnpDevice`` on the Bluetooth adapter, which needs an elevated shell.
 
 Stamps (PA-rev I5, PA-rev3b G2-G4; all ``perf_counter_ns``). The caller passes a ``FaultStamps``; the injector
@@ -234,15 +235,22 @@ def bluetooth_off_on(seconds: float, stamps: FaultStamps | None = None, *, fallb
     if is_successful(found):
         radio = found.unwrap()
         before_ns = time.perf_counter_ns()
-        status = radio.set_state(False)
+        try:
+            status = radio.set_state(False)
+        except OSError as e:  # a failed WinRT call: a refusal like any other (A-H2-R M2)
+            status, refusal = None, f"radio OFF call failed: {e}"
         if status == RadioAccessStatus.ALLOWED:
             stamps.injected_ns = before_ns
             sleep(seconds)
-            status_on = radio.set_state(True)
+            try:
+                status_on = radio.set_state(True)
+            except OSError as e:
+                return Failure(f"radio ON call failed: {e}; Bluetooth left off")
             if status_on != RadioAccessStatus.ALLOWED:
                 return Failure(f"radio ON refused ({status_on.name}); Bluetooth left off")
             return Success(None)
-        refusal = f"radio OFF refused ({status.name})"
+        if status is not None:
+            refusal = f"radio OFF refused ({status.name})"
     else:
         refusal = found.failure()
     if not fallback:
