@@ -52,6 +52,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "protocol.h"   // wire protocol v1 (Plan A C1)
+#include "notify_retry.h"   // bounded retry of a refused reply notify (A-M6fix)
 
 #define SERVICE_UUID        "a723b49a-2b53-46a6-a2db-02bb9e9a577c"
 #define KEYBOARDINPUTCHARACTERISTIC_UUID "61adcd67-20e9-4c38-b1d0-879445c5b732"
@@ -133,43 +134,45 @@ static NimBLECharacteristic* pResponseChar = nullptr;   // C1 notify characteris
 static NimBLECharacteristic* inputReport = nullptr;     // HID keyboard input report (report ID 1), or nullptr
 
 #if NOTIFY_DIAG
-// Every reply notify's NimBLE rc is kept. Running totals over all reply kinds (written by both tasks):
+// Every reply's final NimBLE rc is kept (after any retries). Running totals over all reply kinds, one per reply, not
+// per attempt (written by both tasks):
 static std::atomic<uint32_t> diagSent{0}, diagFailed{0}, diagPongFailed{0}, diagRejectedFailed{0};
-// The last ACCEPTED's rc, printed with its DONE. Loop task only: ACCEPTED and DONE are sent only from loop()
-// (runPlay, runReleaseAll, the queued-ABORT reply); onWrite sends only PONG and REJECTED (QUEUE_FULL).
+// The last ACCEPTED's rc and attempts, printed with its DONE. Loop task only: ACCEPTED and DONE are sent only from
+// loop() (runPlay, runReleaseAll, the queued-ABORT reply); onWrite sends only PONG and REJECTED (QUEUE_FULL).
 static bool diagAccPending = false;
 static uint16_t diagAccSeq = 0;
 static int diagAccRc = 0;
+static uint32_t diagAccTries = 0;
 
 // One serial line per DONE, printed by the loop task right after the DONE is sent, so never inside a schedule or in
 // onWrite (A-F5-D3). Non-blocking: a line that does not fit the TX ring is dropped whole (setup()); `sent` then jumps.
 //   NOTIFY seq=<s> accepted_rc=<rc|none> done_rc=<rc|none> sent=<n> failed=<k> pong_failed=<p> rejected_failed=<r>
+//          accepted_tries=<t|none> done_tries=<t|none>
 // accepted_rc=none: no ACCEPTED before this DONE (RELEASE_ALL, queued ABORTED). done_rc=none: an ACCEPTED whose DONE
-// was never sent (DROP), printed at the next ACCEPTED or DONE. rc is 0 or the NimBLE rc (BLE_HS_ENOMEM = 6, ...).
-static void diagPrint(uint16_t seq, const char* accRc, const char* doneRc) {
-  Serial.printf("NOTIFY seq=%u accepted_rc=%s done_rc=%s sent=%lu failed=%lu pong_failed=%lu rejected_failed=%lu\n",
+// was never sent (DROP), printed at the next ACCEPTED or DONE. rc is 0 or the NimBLE rc (BLE_HS_ENOMEM = 6, ...),
+// after any retries. *_tries: notify attempts for that reply (1 = no retry; A-M6fix, notify_retry.h).
+static void diagPrint(uint16_t seq, const char* accRc, const char* doneRc, const char* accTries,
+                      const char* doneTries) {
+  Serial.printf("NOTIFY seq=%u accepted_rc=%s done_rc=%s sent=%lu failed=%lu pong_failed=%lu rejected_failed=%lu"
+                " accepted_tries=%s done_tries=%s\n",
                 seq, accRc, doneRc, (unsigned long)diagSent.load(), (unsigned long)diagFailed.load(),
-                (unsigned long)diagPongFailed.load(), (unsigned long)diagRejectedFailed.load());
+                (unsigned long)diagPongFailed.load(), (unsigned long)diagRejectedFailed.load(), accTries, doneTries);
 }
 
 static void diagFlushAccepted() {
   if (!diagAccPending) return;
   diagAccPending = false;
-  char acc[12];
+  char acc[12], tries[12];
   snprintf(acc, sizeof(acc), "%d", diagAccRc);
-  diagPrint(diagAccSeq, acc, "none");
+  snprintf(tries, sizeof(tries), "%u", (unsigned)diagAccTries);
+  diagPrint(diagAccSeq, acc, "none", tries, "none");
 }
 
-static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len) {
-  // The calls notify() makes for one peer and a custom value (NimBLECharacteristic::sendValue, NimBLE-Arduino 2.5.0
-  // NimBLECharacteristic.cpp:276-290, :321-325, which turns rc != 0 into false), made here so the rc is kept, as
-  // sendKeyReport does. The diagnostic build drops only sendValue's NIMBLE_LOGE line on a failure.
-  os_mbuf* om = ble_hs_mbuf_from_flat(buf, len);
-  const int rc = om == nullptr ? BLE_HS_ENOMEM : ble_gattc_notify_custom(handle, pResponseChar->getHandle(), om);
+static void diagRecord(const uint8_t* buf, const notify_retry::Result& r) {
   const uint8_t kind = buf[1];
   const uint16_t seq = (uint16_t)(buf[2] | (buf[3] << 8));   // C1 header: ver, kind, seq (u16 LE), protocol.h
   diagSent.fetch_add(1);
-  if (rc != 0) {
+  if (r.rc != 0) {
     diagFailed.fetch_add(1);
     if (kind == proto::detail::KIND_PONG) diagPongFailed.fetch_add(1);
     if (kind == proto::detail::KIND_REJECTED) diagRejectedFailed.fetch_add(1);
@@ -178,32 +181,66 @@ static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len) {
     diagFlushAccepted();
     diagAccPending = true;
     diagAccSeq = seq;
-    diagAccRc = rc;
+    diagAccRc = r.rc;
+    diagAccTries = r.tries;
   } else if (kind == proto::detail::KIND_DONE) {
     if (diagAccPending && diagAccSeq != seq) diagFlushAccepted();
-    char acc[12], done[12];
-    if (diagAccPending) snprintf(acc, sizeof(acc), "%d", diagAccRc);
-    else snprintf(acc, sizeof(acc), "none");
-    snprintf(done, sizeof(done), "%d", rc);
+    char acc[12], done[12], accTries[12], doneTries[12];
+    if (diagAccPending) {
+      snprintf(acc, sizeof(acc), "%d", diagAccRc);
+      snprintf(accTries, sizeof(accTries), "%u", (unsigned)diagAccTries);
+    } else {
+      snprintf(acc, sizeof(acc), "none");
+      snprintf(accTries, sizeof(accTries), "none");
+    }
+    snprintf(done, sizeof(done), "%d", r.rc);
+    snprintf(doneTries, sizeof(doneTries), "%u", (unsigned)r.tries);
     diagAccPending = false;
-    diagPrint(seq, acc, done);
+    diagPrint(seq, acc, done, accTries, doneTries);
   }
 }
+
+// One attempt. The calls notify() makes for one peer and a custom value (NimBLECharacteristic::sendValue,
+// NimBLE-Arduino 2.5.0 NimBLECharacteristic.cpp:276-290, :321-325, which turns rc != 0 into false), made here so the rc
+// is kept, as sendKeyReport does. The diagnostic build drops only sendValue's NIMBLE_LOGE line on a failure.
+static int notifyOnce(uint16_t handle, const uint8_t* buf, size_t len) {
+  os_mbuf* om = ble_hs_mbuf_from_flat(buf, len);
+  return om == nullptr ? BLE_HS_ENOMEM : ble_gattc_notify_custom(handle, pResponseChar->getHandle(), om);
+}
 #else
-static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len) {
-  pResponseChar->notify(buf, len, handle);
+// One attempt. notify() returns only a bool: -1 means refused, rc unknown. Each call builds a fresh mbuf, and NimBLE
+// frees it on every path (ble_gatts_notify_custom), so a refused call can simply be made again.
+static int notifyOnce(uint16_t handle, const uint8_t* buf, size_t len) {
+  return pResponseChar->notify(buf, len, handle) ? 0 : -1;
 }
 #endif
 
-static void sendRejected(uint16_t handle, uint16_t seq, uint8_t reason) {
-  uint8_t buf[5];
-  notifyPeer(handle, buf, proto::encode_rejected(buf, seq, reason));
+// Sends one reply to `handle`. retry = true only on the loop task (A-M6fix): a refused notify is tried again after
+// each vTaskDelay(1) for up to notify_retry::WINDOW_US, stopping early once it succeeds or the peer leaves the table;
+// on final failure the reply is dropped, as before. retry = false (onWrite, the NimBLE host task): exactly one
+// attempt, no wait (A-F5-D3; window 0 never calls linkConnected or vTaskDelay, notify_retry.h).
+static void notifyPeer(uint16_t handle, const uint8_t* buf, size_t len, bool retry) {
+  const notify_retry::Result r = notify_retry::send_with_retry(
+      [&] { return notifyOnce(handle, buf, len); }, [&] { return linkConnected(handle); },
+      [] { return (int64_t)esp_timer_get_time(); }, [] { vTaskDelay(1); }, retry ? notify_retry::WINDOW_US : 0);
+#if NOTIFY_DIAG
+  diagRecord(buf, r);
+#else
+  (void)r;
+#endif
 }
 
+// retry: true from loop(), false from onWrite (see notifyPeer).
+static void sendRejected(uint16_t handle, uint16_t seq, uint8_t reason, bool retry) {
+  uint8_t buf[5];
+  notifyPeer(handle, buf, proto::encode_rejected(buf, seq, reason), retry);
+}
+
+// Loop task only (runPlay, runReleaseAll, loop's queued ABORTED), so always retried.
 static void sendDone(uint16_t handle, uint16_t seq, uint8_t status, uint8_t failStep, int16_t rc, uint32_t t0us,
                      uint8_t n, const uint16_t* late) {
   uint8_t buf[13 + 2 * proto::MAX_STEPS];   // n <= MAX_STEPS at every call site (A-F4-R M4)
-  notifyPeer(handle, buf, proto::encode_done(buf, seq, status, failStep, rc, t0us, n, late));
+  notifyPeer(handle, buf, proto::encode_done(buf, seq, status, failStep, rc, t0us, n, late), true);
 }
 
 // One HID keyboard report to one peer. Returns 0 or the NimBLE rc; -1 without a NimBLE call if the lookup failed.
@@ -225,7 +262,7 @@ static void sendPong(uint16_t handle, uint16_t seq) {
   uint8_t buf[17];
   notifyPeer(handle, buf, proto::encode_pong(buf, seq, info.getConnInterval(), info.getConnLatency(),
                                              info.getConnTimeout(), info.getMTU(), flags,
-                                             (uint32_t)esp_timer_get_time()));
+                                             (uint32_t)esp_timer_get_time()), false);
 }
 
 class CommandCallbacks : public NimBLECharacteristicCallbacks {
@@ -251,7 +288,7 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
     }
     if (xQueueSendToBack(cmdQueue, &item, 0) != pdTRUE) {
       if (item.counted) abortRequested.fetch_sub(1);   // never queued: this is its one decrement
-      sendRejected(item.handle, cmd.seq, proto::QUEUE_FULL);
+      sendRejected(item.handle, cmd.seq, proto::QUEUE_FULL, false);
     }
   }
 };
@@ -399,7 +436,7 @@ static void runPlay(uint16_t handle, const proto::Command& cmd) {
 #endif
   const uint32_t t0us = (uint32_t)t0;
   uint8_t buf[8];
-  notifyPeer(handle, buf, proto::encode_accepted(buf, cmd.seq, t0us));
+  notifyPeer(handle, buf, proto::encode_accepted(buf, cmd.seq, t0us), true);
 
   uint16_t late[proto::MAX_STEPS];
   uint8_t sent = 0, down = 0;
@@ -467,7 +504,7 @@ void loop() {
   cmd.seq = 0;
   const uint8_t reject = proto::parse(item.bytes, item.len, cmd);
   if (reject != 0) {
-    sendRejected(item.handle, cmd.seq, reject);
+    sendRejected(item.handle, cmd.seq, reject, true);
     Serial.printf("REJECTED seq=%u reason=%u\n", cmd.seq, reject);
     return;
   }
@@ -479,7 +516,7 @@ void loop() {
     return;
   }
   if (!linkSubscribed(item.handle)) {   // subscription gate (PA-adj1c-D1 -> A)
-    sendRejected(item.handle, cmd.seq, proto::HID_NOT_SUBSCRIBED);
+    sendRejected(item.handle, cmd.seq, proto::HID_NOT_SUBSCRIBED, true);
     Serial.printf("REJECTED seq=%u reason=6\n", cmd.seq);
     return;
   }
