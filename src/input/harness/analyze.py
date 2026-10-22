@@ -1,6 +1,6 @@
 """Soak-log analysis: listener liveness, delivery, latency, faults, stuck keys, connection (plan A, Task H3).
 
-Reads a C5 run dir (``commands.jsonl``, ``keys.jsonl``, ``faults.jsonl``, ``link_faults.jsonl``) and, with
+Reads a C5 run dir (``commands.jsonl``, ``keys.jsonl``, ``faults.jsonl``, ``link_faults.jsonl``, ``pongs.jsonl``) and, with
 ``--starts``, V2's ``session_starts.jsonl``. Each check prints PASS/FAIL (or INFO / n/a when it is reported, not
 gated) with its numbers and the spec target verbatim; the CLI exits non-zero on any FAIL.
 
@@ -15,6 +15,11 @@ Definitions used (plan A H3):
 - ``window_k = [stimulus_ns(k) + 110 ms, stimulus_ns(k+1) + 110 ms)``, the last one open-ended (PA-rev m12).
 - Observed = listener transitions, i.e. ``keys.jsonl`` rows with ``repeat`` false, sorted by ``qpc_ns``.
 - A run with no injected fault is one whose ``faults.jsonl`` is empty or absent.
+- A ``reset_board`` fault passes only if two figures are within 1 s: the gated ``reported_ns - injected_ns`` (the
+  stamp stays esptool's reset line, plan C5) and the worst case (A-V2stamp Q3 C1): the first report after esptool
+  started (``launch_ns``; a ``link_faults.jsonl`` entry or the fault's ``failure_ns``) minus the last PONG before that
+  report. The board answered at that PONG, so the fault cannot be earlier; the reset line is ~1-1.6 s later than the
+  moment the board went silent, so the gated figure alone omits most of the outage.
 - Percentiles are nearest-rank (the smallest value with at least p% of the values at or below it).
 
 Run: ``python -m src.input.harness.analyze <run dir> [--starts <session_starts.jsonl>]``
@@ -73,17 +78,19 @@ class RunLog:
     keys: list[Row]                   # keys.jsonl sorted by qpc_ns (stable; file order is write order)
     faults: list[Row]                 # faults.jsonl, [] when absent
     link_faults: list[Row] | None     # link_faults.jsonl, None when absent
+    pongs: list[Row] | None = None    # pongs.jsonl, None when absent (the reset_board worst case needs it)
     connected_ns: int | None = None   # session.json connected_ns (perf_counter_ns after the first connect()); None if absent/null
 
 
 def load_run(run_dir: Path | str) -> RunLog:
     run_dir = Path(run_dir)
-    faults_p, link_p = run_dir / "faults.jsonl", run_dir / "link_faults.jsonl"
+    faults_p, link_p, pongs_p = run_dir / "faults.jsonl", run_dir / "link_faults.jsonl", run_dir / "pongs.jsonl"
     return RunLog(
         commands=read_jsonl(run_dir / "commands.jsonl"),
         keys=sorted(read_jsonl(run_dir / "keys.jsonl"), key=lambda e: e["qpc_ns"]),
         faults=read_jsonl(faults_p) if faults_p.exists() else [],
         link_faults=read_jsonl(link_p) if link_p.exists() else None,
+        pongs=read_jsonl(pongs_p) if pongs_p.exists() else None,
         connected_ns=_connected_ns(run_dir / "session.json"),
     )
 
@@ -354,6 +361,26 @@ def check_latency(dm: DeliveryMatch) -> Check:
                  f"(target: {TARGET_LATENCY})", details)
 
 
+def reset_worst_case(f: Row, run: RunLog) -> tuple[int | None, str]:
+    """(ns, "") or (None, why it cannot be computed): first report after esptool started minus the last PONG before
+    that report. The first report is the earliest ``link_faults.jsonl`` entry or fault-row report (``fault_seen_ns`` /
+    ``failure_ns``) after ``launch_ns``; unlike ``reported_ns`` it is not limited to the time after the stamp. The last
+    PONG may come after ``launch_ns``: the board keeps answering for a few hundred ms while esptool starts."""
+    launch = f.get("launch_ns")
+    if launch is None:
+        return None, "no launch_ns"
+    if run.pongs is None:
+        return None, "pongs.jsonl missing"
+    reports = [r["qpc_ns"] for r in run.link_faults or []] + [f[k] for k in ("fault_seen_ns", "failure_ns") if f.get(k)]
+    first = min((t for t in reports if t > launch), default=None)
+    if first is None:
+        return None, "no report after esptool started"
+    last_pong = max((p["qpc_ns"] for p in run.pongs if p["qpc_ns"] < first), default=None)
+    if last_pong is None:
+        return None, "no PONG before the first report"
+    return first - last_pong, ""
+
+
 def check_faults(run: RunLog, dm: DeliveryMatch) -> Check:
     if not run.faults:
         return Check("Faults", "n/a", "no faults.jsonl entries (no injected fault)")
@@ -374,9 +401,15 @@ def check_faults(run: RunLog, dm: DeliveryMatch) -> Check:
                 details.append(f"silent loss after fault: seq {_seqs(lost)}")
             continue
         late = rep - inj > FAULT_REPORT_LIMIT_NS
+        worst_note = ""
+        if f["kind"] == "reset_board":      # the stamp is esptool's reset line, ~1-1.6 s after the board went silent
+            worst, why = reset_worst_case(f, run)
+            late = late or worst is None or worst > FAULT_REPORT_LIMIT_NS    # no figure = no proof: FAIL
+            worst_note = (f"; worst case n/a ({why})" if worst is None else
+                          f"; worst case {worst / NS_PER_MS:.3f} ms (last PONG to first report after esptool started)")
         bad += bool(late or lost)
         details.append(f"fault {n} {f['kind']}: {'FAIL' if late or lost else 'PASS'} reported after "
-                       f"{(rep - inj) / NS_PER_MS:.3f} ms ({f['error']})")
+                       f"{(rep - inj) / NS_PER_MS:.3f} ms ({f['error']}){worst_note}")
         if lost:
             details.append(f"silent loss after fault: seq {_seqs(lost)}")
     verdict = "FAIL" if bad else "PASS"

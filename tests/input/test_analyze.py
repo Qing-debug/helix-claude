@@ -82,8 +82,9 @@ def write_jsonl(path: Path, rows) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
-def write_run(tmp_path: Path, commands, keys, *, faults=None, link_faults=()) -> Path:
-    """faults=None leaves faults.jsonl absent; link_faults=None leaves link_faults.jsonl absent."""
+def write_run(tmp_path: Path, commands, keys, *, faults=None, link_faults=(), pongs=None) -> Path:
+    """faults=None leaves faults.jsonl absent; link_faults=None leaves link_faults.jsonl absent; pongs=None leaves
+    pongs.jsonl absent."""
     run = tmp_path / "run"
     run.mkdir()
     write_jsonl(run / "commands.jsonl", commands)
@@ -92,10 +93,13 @@ def write_run(tmp_path: Path, commands, keys, *, faults=None, link_faults=()) ->
         write_jsonl(run / "faults.jsonl", faults)
     if link_faults is not None:
         write_jsonl(run / "link_faults.jsonl", link_faults)
+    if pongs is not None:
+        write_jsonl(run / "pongs.jsonl", [{"qpc_ns": t, "board_us": t // 1000} for t in pongs])
     return run
 
 
-def fault(injected: int | None, reported: int | None, kind: str = "reset_board", error="LINK_LOST") -> dict:
+def fault(injected: int | None, reported: int | None, kind: str = "bluetooth_off_on", error="LINK_LOST") -> dict:
+    """A PC-side fault (no worst-case check); reset_board faults come from reset_fault()."""
     return {"injected_ns": injected, "kind": kind, "reported_ns": reported,
             "error": None if reported is None else error, "launch_ns": None,
             "fault_seen_ns": reported, "failure_ns": reported}
@@ -669,3 +673,96 @@ def test_m5_printed_checks_carry_the_trailing_spec_text(tmp_path):
     res = checks(write_run(tmp_path, cmds, keys))
     assert "bounds the true error rate below 0.03% at 95% confidence)." in text(res["Delivery"])
     assert "Provisional: re-set once first measured." in text(res["Latency"])
+
+
+# ---- reset_board worst case (A-LF, A-V2stamp Q3 C1): last PONG (proof of life) -> first report after esptool started ---
+
+LIMIT_MS = 1000
+
+
+def reset_run(tmp_path, *, gated_ms: float, worst_ms: float, pongs=True, launch_ns="default") -> tuple[Path, dict]:
+    """One reset_board fault. esptool starts at 1 s; the board still answers for another 250 ms (the last PONG, as in
+    v2-faults-3 where PONGs stop 476-582 ms after the launch); the first report (a LINK_LOST) comes `worst_ms` after
+    that last PONG; esptool's reset line (the stamp) 2.5 s after the launch; the next command's NOT_CONNECTED
+    `gated_ms` after the stamp. So the stamp is later than the first report, as in v2-faults-3."""
+    launch = 1 * S
+    pong = launch + 250 * MS
+    first_report = pong + round(worst_ms * MS)
+    injected = launch + 2500 * MS
+    reported = injected + round(gated_ms * MS)
+    row = {"injected_ns": injected, "kind": "reset_board", "reported_ns": reported, "error": "NOT_CONNECTED",
+           "launch_ns": launch if launch_ns == "default" else launch_ns, "fault_seen_ns": None, "failure_ns": reported}
+    cmds, keys = perfect(8)
+    return write_run(tmp_path, cmds, keys, faults=[row], link_faults=[{"qpc_ns": first_report, "error": "LINK_LOST"}],
+                     pongs=[launch - 5 * MS, pong] if pongs else None), row
+
+
+@pytest.mark.parametrize("gated_ms, worst_ms, verdict", [
+    (587.5, 966.7, "PASS"),        # v2-faults-3 fault 1
+    (600, 1000, "PASS"),           # exactly the limit passes (<=)
+    (600, 1000.001, "FAIL"),       # the gated figure is fine; the worst case is 1 us over
+    (600, 1400, "FAIL"),
+    (1000.001, 900, "FAIL"),       # the worst case is fine; the gated figure is 1 us over
+])
+def test_reset_fault_passes_only_if_the_gated_and_the_worst_case_figures_are_both_within_1s(
+        tmp_path, gated_ms, worst_ms, verdict):
+    res = checks(reset_run(tmp_path, gated_ms=gated_ms, worst_ms=worst_ms)[0])["Faults"]
+    assert res.verdict == verdict
+    (line,) = fault_lines(res)
+    assert f": {verdict} reported after {gated_ms:.3f} ms" in line      # the existing gated figure, unchanged
+    assert f"worst case {worst_ms:.3f} ms" in line                      # the new figure, next to it
+    assert f"{1 if verdict == 'PASS' else 0}/1 faults pass" in res.summary
+
+
+def test_the_worst_case_counts_a_report_that_came_before_the_stamp(tmp_path):
+    # The gated figure (stamp -> next command's NOT_CONNECTED) is 0.6 s, so it passes; the link was reported lost
+    # 1.4 s after the last PONG, before esptool's reset line. Only the worst case sees that.
+    res = checks(reset_run(tmp_path, gated_ms=600, worst_ms=1400)[0])["Faults"]
+    assert res.verdict == "FAIL"
+    assert "reported after 600.000 ms" in text(res) and "worst case 1400.000 ms" in text(res)
+
+
+@pytest.mark.parametrize("why, kw", [
+    ("pongs.jsonl missing", {"pongs": False}),
+    ("no launch_ns", {"launch_ns": None}),
+])
+def test_reset_fault_whose_worst_case_cannot_be_computed_fails_and_says_why(tmp_path, why, kw):
+    res = checks(reset_run(tmp_path, gated_ms=600, worst_ms=900, **kw)[0])["Faults"]
+    assert res.verdict == "FAIL"
+    assert f"worst case n/a ({why})" in text(res)
+
+
+def test_reset_fault_with_no_pong_before_the_first_report_fails(tmp_path):
+    run, row = reset_run(tmp_path, gated_ms=600, worst_ms=900)
+    first_report = row["launch_ns"] + 250 * MS + 900 * MS
+    write_jsonl(run / "pongs.jsonl", [{"qpc_ns": first_report + 5 * MS, "board_us": 1}])   # only a later PONG
+    res = checks(run)["Faults"]
+    assert res.verdict == "FAIL" and "worst case n/a (no PONG before the first report)" in text(res)
+
+
+def test_a_pong_after_esptool_started_still_counts_as_proof_of_life(tmp_path):
+    # The board answers for ~250-580 ms after esptool starts, so "esptool started" is not the fault moment. Measuring
+    # from the last PONG before the launch would give 1255 ms here and fail a reset the board survived until later.
+    res = checks(reset_run(tmp_path, gated_ms=600, worst_ms=950)[0])["Faults"]
+    assert res.verdict == "PASS" and "worst case 950.000 ms" in text(res)
+
+
+def test_the_worst_case_falls_back_to_the_failure_when_no_link_fault_was_logged(tmp_path):
+    run, row = reset_run(tmp_path, gated_ms=600, worst_ms=900)
+    write_jsonl(run / "link_faults.jsonl", [])
+    res = checks(run)["Faults"]
+    # last PONG 1.25 s; first report = failure_ns = launch 1 s + 2.5 s + 0.6 s = 4.1 s -> 2850 ms
+    assert res.verdict == "FAIL" and "worst case 2850.000 ms" in text(res)
+
+
+def test_a_bluetooth_fault_has_no_worst_case_and_needs_no_pongs(tmp_path):
+    cmds, keys = perfect(3)
+    res = checks(write_run(tmp_path, cmds, keys, faults=[fault(SPACING, 2 * SPACING)]))["Faults"]
+    assert res.verdict == "PASS" and "worst case" not in text(res)
+
+
+def test_the_stamp_and_the_gated_figure_are_unchanged_by_the_worst_case(tmp_path):
+    # Ruling (orch 21): the reset stamp stays at esptool's reset line; the worst case is an additional, stricter gate.
+    run, row = reset_run(tmp_path, gated_ms=587.5, worst_ms=966.7)
+    res = checks(run)["Faults"]
+    assert f"reported after {(row['reported_ns'] - row['injected_ns']) / MS:.3f} ms (NOT_CONNECTED)" in text(res)
