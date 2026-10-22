@@ -404,3 +404,39 @@ Affects: the firmware concurrency model (F5's `onWrite` and executor); plan A ta
 Cost if wrong: one F5 paragraph rewritten again before F5 is built.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in PA-rev6b); undo: `git revert 0418d94`.
+
+## A-F3-R-a (2026-10-22): F3's HID check matches the Keyboard class by board address
+
+B. Plan A task F3 step 6 checks that Windows installed the keyboard with `Get-PnpDevice -PresentOnly -Class Keyboard | Where-Object InstanceId -match '1020BA4E2771' | Select-Object Status, Class, FriendlyName` and expects one row `OK Keyboard HID Keyboard Device`. The other options were A (keep `Get-PnpDevice -PresentOnly | Where-Object FriendlyName -match 'Guiness'`, expecting a Bluetooth entry plus a HID entry) and C (walk `DEVPKEY_Device_Children` from the "Guiness" BTHLE device, as `data/F3-pnp.ps1` does).
+
+Reason: the opus-xhigh adjudicator (A-F3-R) ran the plan's check on 2026-10-22 after F3's re-pair and it printed only the Bluetooth entry: the HID entries are named `Bluetooth Low Energy GATT compliant HID device` and `HID Keyboard Device`, not "Guiness", but each carries the board's address `1020ba4e2771` in its instance id. So A reports "no HID entry" while the keyboard is installed and a re-run would raise a false BLOCKED. B is one line and printed exactly the expected row; C is four lines and its script sits in the gitignored `data/`, so the plan cannot cite it.
+
+Affects: a manual check in plan A task F3 (D1's README pairing procedure inherits it). Plan lines as of `210d18b`: F3 step 6 :616-625. Applied in `01aa21d`.
+
+Cost if wrong: one check line.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert 01aa21d`.
+
+## A-F3-R-b (2026-10-22): F5 tags each CONN line with its event and logs CIREQ
+
+C. In Plan A task F5 step 4 the firmware's `CONN` line becomes `CONN ev=%s handle=%u itvl_ms=%.2f latency=%u timeout_ms=%u mtu=%u bonded=%d encrypted=%d auth=%d`, with `ev` `connect` (`onConnect`), `auth` (`onAuthenticationComplete`) or `params` (`onConnParamsUpdate`), and `loop()` prints `CIREQ handle=%u` right after it sends the CI request. F5 step 6's PONG check compares `itvl` with the CI (`itvl_ms` / 1.25) of the latest `CONN` line for that handle instead of "the latest `onConnParamsUpdate` `CONN` line". F3 is not re-flashed. The other options were A (keep the format and explain the lines in notes) and B (an F3 follow-up flash now).
+
+Reason: the opus-xhigh adjudicator (A-F3-R) found that F3's three callbacks printed one format, so no `CONN` line in F3's captures can be tied to the CI request (notes/A-F3-R.md I-1): a rejected request prints the same line, because NimBLE raises the update event with a non-zero status on failure (`ble_gap.c:7781-7785`, `:1372-1382`) and `NimBLEServer.cpp:600-606` does not check it, and (inferred) a request Windows accepts without a change prints none. That also made F5 step 6's check unrunnable as written. M1 still passes (CI 15.00 ms on every line). C is about six lines in the file F5 already edits and is verified by F5 step 5's capture; B costs an extra board cycle on a sketch F5 rewrites, with no gate depending on it; A leaves the check unrunnable and the request's outcome unknown into V1.
+
+Affects: the firmware's serial log format (no H, V or D task parses `CONN` lines); plan A task F5. Plan lines as of `210d18b`: F5 step 4 :831-837, step 5 :843, step 6 :851-854. Applied in `b100b5b`.
+
+Cost if wrong: M1's request outcome stays unobserved until F5; nothing is flashed until F5 runs.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert b100b5b`.
+
+## A-F3-R-c (2026-10-22): scripted capture monitors hold stdin open
+
+A. When a capture monitor is run from a script, it gets a stdin that stays open for the whole capture, for example `timeout 60 "$CLI" monitor ... < <(sleep 65)`: Plan A task F2 step 6 (3) (the capture procedure F3 and F5 reuse), F5 step 5, and `firmware/README.md` capture procedure step 3. The other options were B (leave it to D1's README rewrite) and C (add a wrapper script).
+
+Reason: the opus-xhigh adjudicator (A-F3-R) confirmed it in the arduino-cli 1.5.1 source (https://raw.githubusercontent.com/arduino/arduino-cli/v1.5.1/internal/cli/monitor/monitor.go): `feedback.InteractiveStreams()` returns `os.Stdin` for Text output with no TTY check (`internal/cli/feedback/terminal.go:33-41`), and the stdin-to-port `io.Copy` calls `cancel()` when it returns (`monitor.go:292-303`), so with stdin at EOF the monitor exits at once with exit 0 and an empty log. F3's first capture hit this; its `< <(sleep N)` fix worked for its other five captures. B lets F5, which runs before D1, lose its first capture the same way; C gold-plates it. H2 and V1-V3 never run the monitor, and a console stdin (Hong) is unaffected.
+
+Affects: the capture procedure (plan A tasks F2, F3 by reuse, F5) and `firmware/README.md`. Plan lines as of `210d18b`: F2 step 6 (3) :551-555, F5 step 5 :840-842. `firmware/README.md` as of `210d18b`: capture procedure step 3 :76-80. Applied in `eded7b0` (plan) and `210d18b` (README).
+
+Cost if wrong: none (harmless with a terminal).
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert 210d18b eded7b0`.
