@@ -227,6 +227,12 @@ def test_truncated_cdf_undefined_for_walk_and_hold_clipped():
         truncated_cdf(TimingType.HOLD_CLIPPED)
 
 
+@pytest.mark.parametrize("name", ["walk", "hold_clipped"])
+def test_truncated_cdf_rejects_a_plain_string_name_with_value_error(name):
+    # type strings come back from JSONL logs as plain str, not TimingType members
+    with pytest.raises(ValueError):
+        truncated_cdf(name)
+
 
 # ---- (d) moments ---------------------------------------------------------------------------------
 

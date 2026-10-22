@@ -32,7 +32,8 @@ class TruncSpec:
     uniform:   low, high
     exgaussian: mu, sigma, tau (normal mu/sigma plus exponential of mean tau)
     walk:      sqrt_k, sigma_i, min_frac (SD = sqrt(k T^2 + sigma_i^2), result >= min_frac * T)
-    `lo`/`hi` are the truncation bounds in ms (None where the row has none or depends on T).
+    `lo`/`hi` are the truncation bounds in ms (None where the row depends on T, i.e. WALK).
+    RELEASE_LAG's 0/60 are the uniform's support, not a truncation.
     """
 
     family: str
@@ -146,7 +147,7 @@ def truncated_cdf(t: TimingType) -> Callable[[np.ndarray], np.ndarray]:
 
     Not defined for WALK (it depends on the caller's T) or HOLD_CLIPPED (not a MODEL key).
     """
-    if t not in MODEL or t is TimingType.WALK:
+    if t not in MODEL or t == TimingType.WALK:
         raise ValueError(f"truncated_cdf is not defined for {t!s}")
     from scipy import stats
 
