@@ -6,6 +6,7 @@ perfect keyboard) into a shared key log that `ProbeSink.stop()` writes as the pr
 probe reports run analyze.py / realism.py on real C5 files.
 """
 import json
+import math
 
 import pytest
 from returns.result import Failure, Success
@@ -14,7 +15,7 @@ from src.input import input_layer
 from src.input.harness import analyze, probe, soak
 from src.input.harness.listener import VK_BY_KEY
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Key, Pong, transitions
+from src.input.protocol import Accepted, Done, Key, Pong, Step, transitions
 
 MS = 1_000_000
 ONE_PORT = json.dumps({"detected_ports": [
@@ -52,12 +53,17 @@ class ProbeLink:
     Board clock (M2 phase): with `board_offset_ns` set, the board's u32 microsecond clock reads
     (qpc_ns - board_offset_ns) / 1000, every play logs a PONG stamped at its send, DONE carries
     t0_us = board time of the send + `t0_shift_us(play)` and one late_us per step (0). `grid_ns` puts every
-    listener transition on the next multiple of it (the connection-event lattice)."""
+    listener transition on the next multiple of it (the connection-event lattice).
+
+    Key log (M5, M8): `tick(qpc_ns)` gives each event's tick_ms; `injected` sets every event's injected bit;
+    `repeat=(delay_ns, period_ns)` adds OS auto-repeat downs of a held key from delay_ns after its down, every
+    period_ns, before its up."""
 
     MAX_PLAYS = 5000
 
     def __init__(self, clock, keys, fail_plays=(), fail_error=InputError.LINK_LOST, drop_keys=(),
-                 board_offset_ns=None, t0_shift_us=lambda play: 0, grid_ns=None, itvl=12):
+                 board_offset_ns=None, t0_shift_us=lambda play: 0, grid_ns=None, itvl=12, tick=lambda qpc: 0,
+                 injected=False, repeat=None):
         self.clock = clock
         self.keys = keys
         self.events = []
@@ -72,6 +78,13 @@ class ProbeLink:
         self.t0_shift_us = t0_shift_us
         self.grid_ns = grid_ns
         self.itvl = itvl
+        self.tick = tick
+        self.injected = injected
+        self.repeat = repeat
+
+    def _key(self, qpc, vk, down, repeat=False):
+        return {"qpc_ns": qpc, "vk": vk, "down": down, "injected": self.injected, "tick_ms": self.tick(qpc),
+                "repeat": repeat}
 
     def board_us(self, ns):
         return (ns - self.board_offset_ns) // 1_000 % (1 << 32)
@@ -110,14 +123,23 @@ class ProbeLink:
             self.pongs.append((sent, self._pong_at(sent)))
             t0_us = (self.board_us(sent) + self.t0_shift_us(self.plays)) % (1 << 32)
             late_us = (0,) * len(steps)
+        rows = []
         for t_100us, key, down in transitions(steps):
             qpc = sent + MS + t_100us * 100_000
             if self.grid_ns:
                 qpc = -(-qpc // self.grid_ns) * self.grid_ns
             if self.n_transitions not in self.drop_keys:
-                self.keys.append({"qpc_ns": qpc, "vk": VK_BY_KEY[key], "down": down,
-                                  "injected": False, "tick_ms": 0, "repeat": False})
+                rows.append(self._key(qpc, VK_BY_KEY[key], down))
             self.n_transitions += 1
+        if self.repeat is not None:
+            delay, period = self.repeat
+            for i, r in enumerate(list(rows)):
+                up = next((u["qpc_ns"] for u in rows[i + 1:] if u["vk"] == r["vk"] and not u["down"]), None)
+                t = r["qpc_ns"] + delay
+                while r["down"] and up is not None and t < up:
+                    rows.append(self._key(t, r["vk"], True, repeat=True))
+                    t += period
+        self.keys.extend(rows)
         self.clock.now += sum(s.delta_100us for s in steps) * 100_000 + 20 * MS
         n = self.clock.clock()
         return Success(SendReport(seq=self.plays, sent_ns=sent, written_ns=sent + 1_000, accepted_ns=sent + 2_000,
@@ -489,7 +511,8 @@ def test_delivery_is_seeded(tmp_path, clock):
 
 def test_cli_defaults_and_probe_selection():
     cfg = probe.config_from_args(probe.parse_args(["--seed", "3"]))
-    assert cfg.probes == probe.default_probes() == ("delivery", "m2", "m4", "m7") and cfg.seed == 3
+    assert cfg.probes == probe.default_probes() == ("delivery", "m2", "m4", "m5", "m6", "m8", "m7")
+    assert cfg.seed == 3
     assert cfg.out.parent == probe.PROBE_ROOT and cfg.cli == probe.CLI_DEFAULT
     cfg = probe.config_from_args(probe.parse_args(["--probes", "delivery", "--run", "r1", "--cli", "x.exe"]))
     assert cfg.probes == ("delivery",) and cfg.out == probe.PROBE_ROOT / "r1" and cfg.cli == "x.exe"
@@ -677,7 +700,7 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     monkeypatch.setattr(soak, "_process_names", boom)
     assert probe.main(["--run-sheet"]) == probe.EXIT_OK
     out = capsys.readouterr().out
-    assert '--probes delivery,m2,m4,m7 --run "$RUN" --seed "$SEED"' in out
+    assert '--probes delivery,m2,m4,m5,m6,m8,m7 --run "$RUN" --seed "$SEED"' in out
     assert ('"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build/probe-nojitter '
             '--build-property "compiler.cpp.extra_flags=-DSTART_JITTER=0" $REPO/firmware/Helix_BLE') in out
     assert '"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE' in out
@@ -687,3 +710,108 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
                             out.index("--output-dir $REPO/firmware/build $REPO"))
     assert i_off < i_run < i_head
     assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process") == 2
+
+
+# ---- piece 3: raw plans through the InputLayer -------------------------------------------------------------
+
+def test_raw_plan_refuses_an_invalid_schedule_and_logs_no_samples():
+    with pytest.raises(ValueError):
+        probe.raw_plan("open", (Step(0, Key.E),))  # the last mask must be 0
+    plan = probe.raw_plan("e_burst", probe.M6_STEPS)
+    assert len(plan.steps) == 16 and plan.samples == ()
+
+
+# ---- piece 3: M5 (3 s arrow hold) --------------------------------------------------------------------------
+
+def test_m5_holds_each_arrow_3_s_and_reports_repeats_and_their_spacing(tmp_path, clock):
+    rig = Rig(clock, link_kw={"repeat": (500 * MS, 33 * MS)})
+    code, _ = _run(tmp_path, clock, probes=("m5",), rig=rig)
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "m5" / "commands.jsonl")
+    assert len(rows) == probe.M5_N and {r["action"] for r in rows} == {"arrow_hold"}
+    assert all(r["status"] == "OK" and r["reaction_ms"] >= 110 for r in rows)  # analyze's windows apply
+    held = [r["steps"][0][1] for r in rows]
+    assert all(r["steps"] == [[0, r["steps"][0][1]], [30_000, 0]] for r in rows)
+    assert all(held.count(int(k)) == probe.M5_N // 4 for k in soak.ARROWS)
+    rep = _report(tmp_path, "m5")
+    # repeats at 500 + 33 k ms while 500 + 33 k < 3000: 76 per hold, 75 spacings each
+    assert f"repeat downs per hold: n {probe.M5_N} min 76.000 p50 76.000" in rep
+    assert "first repeat after the down: n 8 min 500.000 ms p50 500.000 ms" in rep
+    assert "repeat spacing: n 600 min 33.000 ms p50 33.000 ms" in rep
+    assert "measured hold (down -> up): n 8 min 3000.000 ms" in rep
+    assert "injected events: 0 of " in rep and "[review]" not in rep
+
+
+def test_m5_reports_no_repeat_and_reviews_an_injected_bit(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m5",), rig=Rig(clock, link_kw={"injected": True}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m5")
+    assert "repeat downs per hold: n 8 min 0.000" in rep and "repeat spacing: n/a n 0" in rep
+    assert "[review] m5: injected events: 16 of 16" in rep
+
+
+# ---- piece 3: M6 (16 zero-delta E steps) -------------------------------------------------------------------
+
+def test_m6_sends_fifty_16_step_zero_delta_e_bursts(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m6",))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "m6" / "commands.jsonl")
+    assert len(rows) == probe.M6_N and {r["action"] for r in rows} == {"e_burst"}
+    assert all(r["steps"] == [[0, int(Key.E)], [0, 0]] * 8 and r["samples"] == [] for r in rows)
+    assert all(r["reaction_ms"] >= 110 for r in rows)
+    rep = _report(tmp_path, "m6")
+    assert "DONE OK 50, NOTIFY_FAILED 0, other failures 0" in rep
+    assert "reports seen on DONE OK commands: 800 of 800 expected" in rep
+    assert "silent drops (DONE OK, a report missing): 0" in rep and "[review]" not in rep
+
+
+def test_m6_counts_notify_failed_and_the_input_layer_releases_after_it(tmp_path, clock):
+    rig = Rig(clock, link_kw={"fail_plays": {3}, "fail_error": InputError.NOTIFY_FAILED})
+    code, rig = _run(tmp_path, clock, probes=("m6",), rig=rig)
+    assert code == probe.EXIT_OK  # NOTIFY_FAILED reaches the caller: counted, not a stop
+    assert rig.links[0].events[:5] == ["connect", "play", "play", "play", "release_all"]
+    rep = _report(tmp_path, "m6")
+    assert "DONE OK 49, NOTIFY_FAILED 1, other failures 0" in rep
+    assert "reports seen on NOTIFY_FAILED commands: n 1 min 0.000" in rep
+    assert "silent drops (DONE OK, a report missing): 0" in rep
+
+
+def test_m6_silent_drop_stops_probe_py(tmp_path, clock, monkeypatch, capsys):
+    monkeypatch.setattr(probe, "PROBES", {"m6": probe.PROBES["m6"], "two": _dummy("two")})
+    code, rig = _run(tmp_path, clock, probes=("m6", "two"), rig=Rig(clock, link_kw={"drop_keys": {5}}))
+    assert code == probe.EXIT_STOP and len(rig.links) == 1
+    rep = _report(tmp_path, "m6")
+    assert "silent drops (DONE OK, a report missing): 1 (seq 0)" in rep
+    assert "[review] m6: silent drop" in rep
+    err = capsys.readouterr().err
+    assert "silent drop" in err and "not run: two" in err
+
+
+def test_m6_a_silent_listener_stops_too(tmp_path, clock):
+    rig = Rig(clock, link_kw={"drop_keys": set(range(16 * probe.M6_N))})
+    code, _ = _run(tmp_path, clock, probes=("m6",), rig=rig)
+    assert code == probe.EXIT_STOP
+    assert "unmeasured (listener silent from seq 0): 50" in _report(tmp_path, "m6")
+
+
+# ---- piece 3: M8 (tick_ms granularity) ---------------------------------------------------------------------
+
+def _ticks(step_ms):
+    return lambda qpc: int(math.floor(qpc / MS / step_ms) * step_ms)
+
+
+def test_m8_confirms_a_tick_granularity_of_10_to_16_ms(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(15.625)}))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "m8" / "commands.jsonl")
+    assert len(rows) == probe.M8_N and {r["action"] for r in rows} == {"tap"}
+    rep = _report(tmp_path, "m8")
+    assert "M8 tick_ms granularity: CONFIRMED" in rep and "nonzero tick steps between events" in rep
+    assert "[review]" not in rep
+
+
+def test_m8_reviews_a_granularity_outside_10_to_16_ms(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(1)}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    assert "M8 tick_ms granularity: NOT CONFIRMED" in rep and "[review] m8: tick_ms granularity" in rep

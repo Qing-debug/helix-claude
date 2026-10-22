@@ -47,8 +47,10 @@ from scipy import stats
 from src.input.harness import analyze, listener, realism, soak
 from src.input.harness.soak import (EXIT_ABORT, EXIT_INTERRUPTED, EXIT_OK, EXIT_REFUSED, FOCUS_RECHECKS,
                                     START_WAIT_S, Command, CommandOutcome, RunWriter)
+from src.input.actions import Plan
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import BleLink, InputError, SessionInfo
+from src.input.protocol import MAX_STEPS, Key, Step, validate_schedule
 from src.input.timing import TimingModel, TimingType, truncated_cdf
 
 # Seam the tests monkeypatch (as soak.py); _clock is perf_counter_ns, the clock of every C5 file.
@@ -444,6 +446,165 @@ def m4_report(run_dir: Path) -> ProbeReport:
     return ProbeReport(lines, review)
 
 
+# ---- raw plans (M5, M6): fixed schedules no InputLayer builder makes --------------------------------------
+
+def raw_plan(name: str, steps: Sequence[Step]) -> Plan:
+    """A Plan of fixed steps and no samples (nothing is drawn for them). ValueError if C1's schedule rules refuse
+    it: that is a probe bug, never a board result."""
+    checked = validate_schedule(steps)
+    if not is_successful(checked):
+        raise ValueError(f"{name}: {checked.failure()}")
+    return Plan(name, tuple(steps), ())
+
+
+def play_raw(ctx: ProbeContext, plan: Plan) -> CommandOutcome:
+    """One raw plan as a command named after the plan, through `ctx.command` (focus policy, `stimulus_ns`, the C5
+    row) and InputLayer's own play path: a REACTION draw and wait from the stimulus (>= 110 ms, so analyze's
+    windows apply), `link.play`, and `release_all` after an uncertain failure (PA-adj1b-D1). `_act` is that path's
+    entry; no public InputLayer call takes a Plan, and copying it is not allowed (A-PF-D3)."""
+    return ctx.command(plan.name, lambda s: ctx.layer._act(plan, s))
+
+
+# ---- probe M5: 3 s arrow holds (OS auto-repeat, the injected bit) ------------------------------------------
+
+M5_N = 8  # each arrow twice
+M5_HOLD_100US = 30_000  # 3 s
+
+
+def m5_commands(ctx: ProbeContext) -> None:
+    """8 holds of exactly 3 s, cycling the 4 arrows (a raw plan: walk() draws its duration)."""
+    for i in range(M5_N):
+        arrow = soak.ARROWS[i % len(soak.ARROWS)]
+        play_raw(ctx, raw_plan("arrow_hold", (Step(0, arrow), Step(M5_HOLD_100US, Key(0)))))
+
+
+def m5_report(run_dir: Path) -> ProbeReport:
+    """Per hold: the OS repeat downs of the held key between its down and up, the first one's delay after the down,
+    their spacing; the injected bit over every event of the probe (a board keyboard must never set it)."""
+    run = analyze.load_run(run_dir)
+    dm = analyze.match_delivery(run)
+    repeats = [e for e in run.keys if e["repeat"]]
+    per_hold, first, spacing, held = [], [], [], []
+    for m in dm.commands:
+        if m.alignment is None:
+            continue
+        vk = analyze.expected_transitions(m.row)[0][0]
+        down = next((e["qpc_ns"] for e in m.observed if e["vk"] == vk and e["down"]), None)
+        if down is None:
+            continue
+        up = next((e["qpc_ns"] for e in m.observed if e["vk"] == vk and not e["down"] and e["qpc_ns"] > down), None)
+        mine = [e["qpc_ns"] for e in repeats if e["vk"] == vk and down < e["qpc_ns"] and (up is None or e["qpc_ns"] < up)]
+        per_hold.append(len(mine))
+        if mine:
+            first.append((mine[0] - down) / analyze.NS_PER_MS)
+        spacing += [(b - a) / analyze.NS_PER_MS for a, b in zip(mine, mine[1:])]
+        if up is not None:
+            held.append((up - down) / analyze.NS_PER_MS)
+    injected = sum(1 for e in run.keys if e["injected"])
+    lines = [f"M5: {len(analyze.commands_of(run))} arrow holds of {M5_HOLD_100US / 10_000:g} s, measured "
+             f"{len(per_hold)} (DONE OK with the held key's down seen)",
+             "repeat downs per hold: " + summary(per_hold, unit=""),
+             "first repeat after the down: " + summary(first),
+             "repeat spacing: " + summary(spacing),
+             "measured hold (down -> up): " + summary(held),
+             f"injected events: {injected} of {len(run.keys)} (a board keyboard never sets the injected bit)"]
+    review = [lines[-1]] if injected else []
+    return ProbeReport(lines, review)
+
+
+# ---- probe M6: 16 zero-delta steps (NOTIFY_FAILED vs a silent drop) ----------------------------------------
+
+M6_N = 50
+M6_STEPS = tuple(Step(0, Key.E if i % 2 == 0 else Key(0)) for i in range(MAX_STEPS))  # E down/up x8, all deltas 0
+_SEQ_LIST_MAX = 10
+
+
+def m6_commands(ctx: ProbeContext) -> None:
+    plan = raw_plan("e_burst", M6_STEPS)
+    for _ in range(M6_N):
+        play_raw(ctx, plan)
+
+
+def _seq_list(seqs: Sequence[int]) -> str:
+    more = f", ... {len(seqs) - _SEQ_LIST_MAX} more" if len(seqs) > _SEQ_LIST_MAX else ""
+    return ", ".join(str(s) for s in seqs[:_SEQ_LIST_MAX]) + more
+
+
+def m6_report(run_dir: Path) -> ProbeReport:
+    """NOTIFY_FAILED count vs the reports (listener transitions) seen; a DONE OK command with a report missing is a
+    silent drop, which fails spec Goal 2: stop. A listener silent for >= 5 DONE OK commands (H3's LISTENER_DEAD)
+    cannot rule one out: stop too."""
+    run = analyze.load_run(run_dir)
+    dm = analyze.match_delivery(run)
+    rows = analyze.commands_of(run)
+    nf = str(InputError.NOTIFY_FAILED)
+    others = Counter(r["error"] for r in rows if r["error"] is not None and r["error"] != nf)
+    n_nf = sum(1 for r in rows if r["error"] == nf)
+    lines = [f"M6: {len(rows)} commands of {len(M6_STEPS)} zero-delta steps (E down / up alternating): DONE OK "
+             f"{sum(1 for r in rows if analyze.is_ok(r))}, NOTIFY_FAILED {n_nf}, other failures "
+             f"{sum(others.values())}" + (f" {dict(others)}" if others else "")]
+    ok = [m for m in dm.commands if m.alignment is not None]
+    seen = sum(len(m.observed) for m in ok)
+    expected = sum(len(analyze.expected_transitions(m.row)) for m in ok)
+    lines.append(f"reports seen on DONE OK commands: {seen} of {expected} expected (listener transitions in each "
+                 "command's window)")
+    lines.append("reports seen on NOTIFY_FAILED commands: "
+                 + summary([len(m.observed) for m in dm.commands if m.row["error"] == nf], unit=""))
+    drops = [m for m in ok if m.alignment.dropped]
+    lines.append(f"silent drops (DONE OK, a report missing): {len(drops)}"
+                 + (f" (seq {_seq_list([m.seq for m in drops])})" if drops else ""))
+    lines.append(f"extra {sum(m.alignment.extra for m in ok)}, out of order "
+                 f"{sum(m.alignment.out_of_order for m in ok)} on DONE OK commands (reported, not gated)")
+    review, stop = [], None
+    if drops:
+        review.append(f"silent drop: {len(drops)} DONE OK command(s) missing {sum(m.alignment.dropped for m in drops)} "
+                      f"report(s) (seq {_seq_list([m.seq for m in drops])}); fails spec Goal 2")
+        stop = "silent drop in M6 (fails spec Goal 2)"
+    if dm.unmeasured:
+        lines.append(f"unmeasured (listener silent from seq {dm.liveness.dead_from_seq}): {len(dm.unmeasured)}")
+        review.append(f"no key event for >= {analyze.LISTENER_DEAD_N} DONE OK commands from seq "
+                      f"{dm.liveness.dead_from_seq}: a dead listener or every report dropped; a silent drop cannot be "
+                      "ruled out")
+        stop = stop or "M6 listener silent: a silent drop cannot be ruled out"
+    return ProbeReport(lines, review, stop)
+
+
+# ---- probe M8: KBDLLHOOKSTRUCT.time (tick_ms) vs qpc_ns ------------------------------------------------
+
+M8_N = 100  # m8 sends m7's 100 taps
+M8_GRANULARITY_MS = (10.0, 16.0)
+M8_STAMP_TOLERANCE_MS = 1.0  # qpc_ns is stamped in the hook callback, a little after the tick was taken
+
+
+def m8_report(run_dir: Path) -> ProbeReport:
+    """tick_ms lags the true time by [0, granularity), so tick_ms - qpc_ns (both from the first event) spans about
+    one granularity: its p99 - p1 is the estimate. Expected 10-16 ms (listener.RawKeyEvent)."""
+    run = analyze.load_run(run_dir)
+    keys = run.keys
+    head = f"M8: {len(keys)} key events (transitions and repeats) of {len(analyze.commands_of(run))} taps"
+    if len(keys) < 2:
+        return ProbeReport([head, "M8 tick_ms granularity: n/a (fewer than 2 key events)"],
+                           ["tick_ms granularity: n/a, fewer than 2 key events"])
+    t0, q0 = keys[0]["tick_ms"], keys[0]["qpc_ns"]
+    # tick_ms is a u32 millisecond count: _wrap_us's signed u32 difference applies unchanged
+    resid = [_wrap_us(e["tick_ms"] - t0) - (e["qpc_ns"] - q0) / analyze.NS_PER_MS for e in keys]
+    steps = Counter(_wrap_us(b["tick_ms"] - a["tick_ms"]) for a, b in zip(keys, keys[1:]))
+    nonzero = sorted((d, n) for d, n in steps.items() if d != 0)
+    est = analyze.percentile(resid, 99) - analyze.percentile(resid, 1)
+    lo, hi = M8_GRANULARITY_MS
+    ok = lo <= est <= hi + M8_STAMP_TOLERANCE_MS
+    lines = [head,
+             "tick_ms - qpc_ns (ms, from the first event): " + summary(resid),
+             "nonzero tick steps between events (smallest 8, ms x count): "
+             + ", ".join(f"{d} x{n}" for d, n in nonzero[:8]) + f"; zero steps {steps.get(0, 0)}",
+             f"M8 tick_ms granularity: {'CONFIRMED' if ok else 'NOT CONFIRMED'} ~{est:.3f} ms (p99 - p1 of tick_ms - "
+             f"qpc_ns; expected {lo:g}-{hi:g} ms, +{M8_STAMP_TOLERANCE_MS:g} ms for the hook's stamp delay)"]
+    review = [] if ok else [f"tick_ms granularity ~{est:.3f} ms is outside {lo:g}-{hi:g} ms "
+                            f"(+{M8_STAMP_TOLERANCE_MS:g}): KBDLLHOOKSTRUCT.time is not the 10-16 ms tick "
+                            "listener.RawKeyEvent assumes"]
+    return ProbeReport(lines, review)
+
+
 # ---- probe M7 (first look): latency and its split ---------------------------------------------------
 
 M7_N = 100
@@ -469,6 +630,9 @@ PROBES: dict[str, Probe] = {
     "m2": Probe("m2", m2_commands, m2_report, duration="~1-1.5 min"),
     "m2_nojitter": Probe("m2_nojitter", m2_commands, lambda d: m2_report(d, jitter=False), duration="~1-1.5 min"),
     "m4": Probe("m4", m4_commands, m4_report, model=FixedChordModel, duration="~3 min"),
+    "m5": Probe("m5", m5_commands, m5_report, duration="~30 s"),
+    "m6": Probe("m6", m6_commands, m6_report, duration="~15 s"),
+    "m8": Probe("m8", m7_commands, m8_report, duration="~45 s"),
     "m7": Probe("m7", m7_commands, m7_report, duration="~45 s"),
 }
 RUN_ALONE = ("m2_nojitter",)  # needs the probe-only flash before and the HEAD reflash after (plan V1 M2)
@@ -523,7 +687,7 @@ def run_sheet() -> list[str]:
         "no key until the probe's report prints. Expected durations (inferred, not measured; each plus ~10-30 s "
         "connect and start wait): " + ", ".join(f"{n} {PROBES[n].duration or 'n/a'}" for n in first) + ".",
         "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
-        "stop. Reports: data/probe/$RUN/<probe>/report.txt.",
+        "stop (m6: a silent drop; the probes after it are not run). Reports: data/probe/$RUN/<probe>/report.txt.",
         "2. M2 with START_JITTER off (PA-rev I8), after step 1's m2 ran on HEAD's firmware:",
         f"   a. {MAPLE_CHECK}",
         f"   b. {PORT_LOOKUP}",
