@@ -82,8 +82,12 @@ closing the monitor reboots the board (see "Observed behaviour").
 
 Evidence of the reboot (record which one showed it):
 - the `Starting NimBLE work!` boot line in the reopened capture. Output printed before the monitor opens is queued in
-  a 256-byte TX ring that drops the oldest bytes when it is full, so the boot line is the first one lost if more than
-  256 bytes queued before the open. The monitor's timestamps are arrival times, not boot times.
+  HWCDC's 256-byte TX ring (esp32 core 3.3.10 `HWCDC.cpp:422`). Once the ring is full, each later line is dropped
+  whole (connected path, `:586-604`; at once with `Serial.setTxTimeoutMs(0)`), so a capture keeps the earliest
+  ≈ 256 bytes (through the `SUB` line) and loses later lines until the monitor drains the ring. The drop-oldest
+  policy (`:293-341`) applies only while `isCDC_Connected()` is false. The boot line is the earliest output, so it
+  is in the capture. Boot and connect lines past ≈ 256 bytes (`CONN ev=auth`, `MTU`, `CIREQ`, `CONN ev=params`)
+  are lost; read link state from a PING's PONG instead. The monitor's timestamps are arrival times, not boot times.
 - reading (4) later than reading (1) of the "Guiness" device's `DEVPKEY_Bluetooth_LastConnectedTime`. Compare the two
   readings with each other, not with the reset time: the value can be earlier than esptool's exit (03:54:36.35 for a
   run that exited at 03:54:36.46, see "Observed behaviour"). A second `OnConnect` line in the capture means a later
