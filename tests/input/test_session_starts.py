@@ -285,6 +285,13 @@ def test_tap_seen_needs_down_then_up_of_e_after_the_tap(tmp_path):
     assert tap_seen(p, VK_E, 100)
 
 
+def test_tap_seen_does_not_count_an_os_repeat_as_the_down(tmp_path):
+    # A-V2prep-R m1: the tap's real down is stale (before the tap); only an OS repeat of E falls after it
+    p = tmp_path / "keys.jsonl"
+    _keys(p, [(10, VK_E, True, False), (115, VK_E, True, True), (120, VK_E, False, False)])
+    assert not tap_seen(p, VK_E, 100)
+
+
 def test_tap_seen_ignores_a_partly_written_line_and_a_missing_file(tmp_path):
     p = tmp_path / "keys.jsonl"
     assert not tap_seen(p, VK_E, 0)
