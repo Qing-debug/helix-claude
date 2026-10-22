@@ -10,6 +10,8 @@ path (normal end, abort, Ctrl-C):
   (opened with ``newline="\\n"``, A-D3-LF). `drain()` moves `link.take_pongs()` into `pongs.jsonl` and the
   `link.faults()` entries not yet logged into `link_faults.jsonl`; `run_command` calls it after every command and
   `close()` once more.
+- `keys.jsonl`: truncated on open (the listener, started after the writer, appends to it), so a reused run dir holds
+  one run's events only.
 - `link.log`: a `logging.FileHandler` (mode 'w', as the other files) on logger ``src.input.link``, level WARNING,
   a filter that stamps
   ``record.perf_ns = time.perf_counter_ns()`` (filters run in `Handler.handle`, in the logging thread, before
@@ -211,6 +213,7 @@ class RunWriter:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         for name in (COMMANDS_FILE, PONGS_FILE, LINK_FAULTS_FILE, FAULTS_FILE):
             self._files[name] = open(self.run_dir / name, "w", encoding="utf-8", newline="\n")
+        (self.run_dir / listener.KEYS_FILE).write_bytes(b"")  # the listener appends: start it on a fresh file (m2)
         self._attach_link_log()
         self.session["start_ns"] = _clock()
 

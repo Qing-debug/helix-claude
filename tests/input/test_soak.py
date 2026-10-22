@@ -301,6 +301,23 @@ def test_link_log_is_overwritten_when_the_run_dir_is_reused(tmp_path):
     assert len(lines) == 1 and lines[0].endswith("WARNING second run")
 
 
+def test_keys_jsonl_is_truncated_when_the_run_dir_is_reused(tmp_path, driver_clock):
+    # A-H2-fix3 m2: the listener appends to keys.jsonl, so the soak starts the file fresh (as link.log, M1): a reused
+    # --out dir must not hand H3 the events of an earlier run. The fake sink writes one event, as the listener would.
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "keys.jsonl").write_bytes(b'{"qpc_ns": 1, "vk": 37}\n')  # the earlier run's event
+    sink = DriverSink()
+
+    def start(run_dir):
+        with open(run_dir / "keys.jsonl", "a", encoding="utf-8", newline="\n") as fh:  # as listener.py:254
+            fh.write('{"qpc_ns": 2, "vk": 39}\n')
+        return sink
+
+    assert run_soak(_cfg(tmp_path, 2), DriverLink(driver_clock), start) == 0
+    assert (run / "keys.jsonl").read_bytes() == b'{"qpc_ns": 2, "vk": 39}\n'
+
+
 def test_link_log_handler_removed_on_ctrl_c(tmp_path):
     logger = logging.getLogger("src.input.link")
     before_handlers = list(logger.handlers)
