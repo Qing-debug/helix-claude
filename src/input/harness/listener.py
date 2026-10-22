@@ -301,18 +301,22 @@ class Listener:
         root.destroy()
         del root
 
+    def _spawn(self, target, name: str) -> None:
+        th = threading.Thread(target=target, name=name, daemon=True)
+        self._threads.append(th)
+        th.start()
+
     def _start(self) -> None:
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
-        for target, name in ((self._writer_thread, "listener-writer"),
-                             (self._hook_thread, "listener-hook"),
-                             (self._sink_thread, "listener-sink")):
-            th = threading.Thread(target=target, name=name, daemon=True)
-            self._threads.append(th)
-            th.start()
+        # The writer goes first and alone: if it fails, no hook exists yet, so stop() has nothing to unhook (N1).
+        self._spawn(self._writer_thread, "listener-writer")
         if not self._writer_ready.wait(_STARTUP_TIMEOUT_S) or self._writer_error:
             err = self._writer_error or "writer thread did not start"
-            self.stop()
+            self.stop()  # fewer than 3 threads: returns at once
+            self._queue.put(_STOP)  # a writer that is merely late must still exit
             raise OSError(err)
+        self._spawn(self._hook_thread, "listener-hook")
+        self._spawn(self._sink_thread, "listener-sink")
         if not self._hook_ready.wait(_STARTUP_TIMEOUT_S) or self._hook_error:
             err = self._hook_error or "hook thread did not start"
             self.stop()

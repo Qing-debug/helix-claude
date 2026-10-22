@@ -290,6 +290,56 @@ def test_start_raises_oserror_when_the_keys_file_cannot_be_opened(tmp_path, monk
     _fake_sink_ok(lst)
     with pytest.raises(OSError, match="keys.jsonl"):
         lst._start()
+    assert len(lst._threads) == 1  # only the writer: the hook and sink threads were never started (N1)
+
+
+def test_start_does_not_start_the_hook_or_sink_before_the_writer_is_ready(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    release_writer = threading.Event()
+    started = []
+
+    def slow_writer():
+        release_writer.wait(5)
+        lst._writer_ready.set()
+
+    def hook():
+        started.append("hook")
+        lst._hook_ready.set()
+
+    def sink():
+        started.append("sink")
+        lst.sink_hwnd = SINK
+        lst._sink_ready.set()
+
+    lst._writer_thread, lst._hook_thread, lst._sink_thread = slow_writer, hook, sink
+    starter = threading.Thread(target=lst._start, daemon=True)
+    starter.start()
+    time.sleep(0.2)  # the writer is still "opening the file"
+    try:
+        assert started == []
+    finally:
+        release_writer.set()
+        starter.join(5)
+    assert not starter.is_alive()
+    assert sorted(started) == ["hook", "sink"]
+
+
+def test_start_stops_the_writer_when_it_does_not_come_up_in_time(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    monkeypatch.setattr(listener_mod, "_STARTUP_TIMEOUT_S", 0.1)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    never = threading.Event()
+    lst._writer_thread = lambda: never.wait(5)  # alive but never ready
+    _fake_hook_ok(lst)
+    _fake_sink_ok(lst)
+    try:
+        with pytest.raises(OSError, match="writer thread did not start"):
+            lst._start()
+        assert lst._queue.get_nowait() is _STOP  # a late writer still gets told to stop
+        assert len(lst._threads) == 1
+    finally:
+        never.set()
 
 
 def test_start_raises_oserror_carrying_the_sink_threads_error(tmp_path, monkeypatch):
