@@ -5,8 +5,10 @@ the clock are fakes. `ProbeLink.play()` writes the listener transitions its step
 perfect keyboard) into a shared key log that `ProbeSink.stop()` writes as the probe dir's `keys.jsonl`, so the
 probe reports run analyze.py / realism.py on real C5 files.
 """
+import asyncio
 import json
 import math
+import threading
 
 import pytest
 from returns.result import Failure, Success
@@ -206,10 +208,9 @@ class Rig:
 @pytest.fixture
 def clock(monkeypatch):
     fc = FakeClock()
-    for mod in (soak, input_layer):
+    for mod in (soak, input_layer, probe):
         monkeypatch.setattr(mod, "_clock", fc.clock)
         monkeypatch.setattr(mod, "_sleep", fc.sleep)
-    monkeypatch.setattr(probe, "_clock", fc.clock)
     monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
     monkeypatch.setattr(probe, "_board_list_json", lambda cli: Success(ONE_PORT))
     return fc
@@ -511,7 +512,8 @@ def test_delivery_is_seeded(tmp_path, clock):
 
 def test_cli_defaults_and_probe_selection():
     cfg = probe.config_from_args(probe.parse_args(["--seed", "3"]))
-    assert cfg.probes == probe.default_probes() == ("delivery", "m2", "m4", "m5", "m6", "m8", "m7")
+    assert cfg.probes == probe.default_probes() == ("delivery", "m2", "m4", "m5", "m6", "m8", "m7",
+                                                        "release_mid_hold", "release_ordering")
     assert cfg.seed == 3
     assert cfg.out.parent == probe.PROBE_ROOT and cfg.cli == probe.CLI_DEFAULT
     cfg = probe.config_from_args(probe.parse_args(["--probes", "delivery", "--run", "r1", "--cli", "x.exe"]))
@@ -700,7 +702,8 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     monkeypatch.setattr(soak, "_process_names", boom)
     assert probe.main(["--run-sheet"]) == probe.EXIT_OK
     out = capsys.readouterr().out
-    assert '--probes delivery,m2,m4,m5,m6,m8,m7 --run "$RUN" --seed "$SEED"' in out
+    assert ('--probes delivery,m2,m4,m5,m6,m8,m7,release_mid_hold,release_ordering --run "$RUN" '
+            '--seed "$SEED"') in out
     assert ('"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build/probe-nojitter '
             '--build-property "compiler.cpp.extra_flags=-DSTART_JITTER=0" $REPO/firmware/Helix_BLE') in out
     assert '"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE' in out
@@ -815,3 +818,184 @@ def test_m8_reviews_a_granularity_outside_10_to_16_ms(tmp_path, clock):
     assert code == probe.EXIT_OK
     rep = _report(tmp_path, "m8")
     assert "M8 tick_ms granularity: NOT CONFIRMED" in rep and "[review] m8: tick_ms granularity" in rep
+
+
+# ---- piece 4: release-all probes (a second thread) ---------------------------------------------------------
+
+class ReleaseLink(ProbeLink):
+    """A BleLink for the release-all probes. play() stamps its send, runs the `_before_write` hook the probe set on
+    this instance (P4's m4 seam, as BleLink._play awaits it before the write) and then, as a board holding the keys,
+    waits for the second thread's release_all(): the schedule's transitions before the release call are logged;
+    the release lifts every key still down at its done_ns + `up_shift_ns` (unless `lift` is False) and the play
+    ends Failure(ABORTED). `reorder`: the PLAY reaches the board after the RELEASE_ALL, so its whole schedule plays
+    from the release's done_ns + 50 ms and the play ends Success. release_all() is done 4 ms after its call."""
+
+    def __init__(self, clock, keys, reorder=False, lift=True, up_shift_ns=-1 * MS, **kw):
+        super().__init__(clock, keys, **kw)
+        self.reorder = reorder
+        self.lift = lift
+        self.up_shift_ns = up_shift_ns
+        self.released = threading.Event()
+        self.release_call_ns = self.release_done_ns = None
+        self.release_threads = []
+
+    async def _before_write(self, seq):
+        pass
+
+    def play(self, steps):
+        self.plays += 1
+        assert self.plays <= self.MAX_PLAYS, "runaway probe loop"
+        self.events.append("play")
+        self.released.clear()
+        sent = self.clock.clock()
+        asyncio.run(self._before_write(self.plays))
+        assert self.released.wait(10), "no release_all() from the second thread"
+        rel, done = self.release_call_ns, self.release_done_ns
+        trans = [(t * 100_000, VK_BY_KEY[k], d) for t, k, d in transitions(steps)]
+        if self.reorder:
+            rows = [self._key(done + 50 * MS + t, vk, d) for t, vk, d in trans]
+        else:
+            rows = [self._key(sent + MS + t, vk, d) for t, vk, d in trans if sent + MS + t < rel]
+            held = [vk for vk in dict.fromkeys(r["vk"] for r in rows)
+                    if [r["down"] for r in rows if r["vk"] == vk][-1]]
+            if self.lift:
+                rows += [self._key(done + self.up_shift_ns, vk, False) for vk in held]
+        self.keys.extend(rows)
+        self.clock.now = max([self.clock.now] + [r["qpc_ns"] for r in rows]) + 20 * MS
+        if not self.reorder:
+            return Failure(InputError.ABORTED)
+        return Success(SendReport(seq=self.plays, sent_ns=sent, written_ns=sent + 1_000, accepted_ns=sent + 2_000,
+                                  done_ns=self.clock.clock(), accepted=Accepted(self.plays, 0),
+                                  done=Done(seq=self.plays, status=0, fail_step=None, rc=0, t0_us=0, late_us=())))
+
+    def release_all(self):
+        self.events.append("release_all")
+        self.release_threads.append(threading.current_thread().name)
+        self.release_call_ns = self.clock.clock()
+        self.release_done_ns = self.release_call_ns + 4 * MS
+        self.released.set()
+        return Success(SendReport(seq=0, sent_ns=self.release_call_ns, written_ns=self.release_call_ns + 1_000,
+                                  accepted_ns=None, done_ns=self.release_done_ns, accepted=None,
+                                  done=Done(seq=0, status=0, fail_step=None, rc=0, t0_us=0, late_us=())))
+
+
+class ReleaseRig(Rig):
+    def new_link(self):
+        self._keys = []
+        link = ReleaseLink(self.clock, self._keys, **self.link_kw)
+        self.links.append(link)
+        return link
+
+
+def _releases(tmp_path, name):
+    return _rows(tmp_path / "run" / name / probe.RELEASES_FILE)
+
+
+def test_release_mid_hold_walks_right_and_chords_right_e_with_a_release_from_a_second_thread(tmp_path, clock):
+    code, rig = _run(tmp_path, clock, probes=("release_mid_hold",), rig=ReleaseRig(clock))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "release_mid_hold" / "commands.jsonl")
+    n = probe.RELEASE_MID_N
+    assert [r["action"] for r in rows] == ["walk"] * n + ["chord_hold"] * n
+    assert all(r["intended_ms"] == 3000.0 for r in rows[:n]) and all(r["error"] == "ABORTED" for r in rows)
+    rel = _releases(tmp_path, "release_mid_hold")
+    assert [r["seq"] for r in rel] == list(range(2 * n)) and all(r["release_status"] == "OK" for r in rel)
+    delays = [(r["release_call_ns"] - r["write_ns"]) / MS for r in rel]
+    assert all(500 <= d <= 2500.01 for d in delays) and len(set(round(d) for d in delays)) > 10
+    # every release_all() ran on the second thread, none on the probe's (no abort path either)
+    assert len(rig.links[0].release_threads) == 2 * n and "MainThread" not in rig.links[0].release_threads
+    rep = _report(tmp_path, "release_mid_hold")
+    assert f"walk: {n} trials, play ABORTED {n}, release_all OK {n}, keys left down 0, no up after the call 0" in rep
+    assert f"chord_hold: {n} trials, play ABORTED {n}" in rep
+    # release call -> last up of a held key: done (call + 4 ms) - 1 ms = 3 ms (+1 us: the fake clock's read)
+    assert "walk release_all() -> all keys up: n 20 min 3.001 ms p50 3.001 ms p99 3.001 ms max 3.001 ms" in rep
+    assert "chord_hold release_all() -> all keys up: n 20 min 3.001 ms" in rep
+    assert "[review]" not in rep
+
+
+def test_release_mid_hold_chord_holds_right_and_e_together():
+    plan = probe.raw_plan("chord_hold", probe.RELEASE_CHORD_STEPS)
+    assert [(t, k, d) for t, k, d in transitions(plan.steps)] == [
+        (0, Key.RIGHT, True), (0, Key.E, True), (30_000, Key.E, False), (30_000, Key.RIGHT, False)]
+
+
+def test_release_mid_hold_reviews_a_key_left_down_but_does_not_stop(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("release_mid_hold",), rig=ReleaseRig(clock, link_kw={"lift": False}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "release_mid_hold")
+    assert "keys left down 20, no up after the call 20" in rep
+    assert "[review] release_mid_hold: walk: " in rep and "[review] release_mid_hold: chord_hold: " in rep
+
+
+def test_release_ordering_e_holds_released_by_a_second_thread_within_20_ms(tmp_path, clock):
+    code, rig = _run(tmp_path, clock, probes=("release_ordering",), rig=ReleaseRig(clock))
+    assert code == probe.EXIT_OK
+    rows = _rows(tmp_path / "run" / "release_ordering" / "commands.jsonl")
+    n = probe.RELEASE_ORDER_N
+    assert len(rows) == n and {r["action"] for r in rows} == {"e_hold"}
+    assert all(r["error"] == "ABORTED" and r["stimulus_ns"] is not None for r in rows)
+    rel = _releases(tmp_path, "release_ordering")
+    delays = [(r["release_call_ns"] - r["write_ns"]) / MS for r in rel]
+    assert len(rel) == n and all(0 <= d <= 20.01 for d in delays)
+    assert "MainThread" not in rig.links[0].release_threads
+    rep = _report(tmp_path, "release_ordering")
+    assert f"play ABORTED {n} of {n}" in rep and f"release_all OK {n} of {n}" in rep
+    # a trial released before the E-down (delay < 1 ms on the fake) has no E event at all
+    assert "E-up - release done_ns: n " in rep and " min -1.000 ms p50 -1.000 ms p99 -1.000 ms max -1.000 ms" in rep
+    assert "key-downs past done_ns + CI + 5 ms: 0" in rep and "E holds >= 500 ms: 0" in rep
+    assert "release-all ordering: as expected in 50 of 50" in rep and "[review]" not in rep
+
+
+def test_release_ordering_a_reordered_play_stops_with_a_review_item(tmp_path, clock, monkeypatch, capsys):
+    monkeypatch.setattr(probe, "PROBES", {"release_ordering": probe.PROBES["release_ordering"], "two": _dummy("two")})
+    rig = ReleaseRig(clock, link_kw={"reorder": True})
+    code, _ = _run(tmp_path, clock, probes=("release_ordering", "two"), rig=rig)
+    assert code == probe.EXIT_STOP and len(rig.links) == 1
+    rep = _report(tmp_path, "release_ordering")
+    assert "play ABORTED 0 of 50 (other: OK 50)" in rep
+    assert "key-downs past done_ns + CI + 5 ms: 50" in rep and "E holds >= 500 ms: 50" in rep
+    assert "[review] release_ordering: the writes can reorder" in rep and "P4's abort rules" in rep
+    err = capsys.readouterr().err
+    assert "not run: two" in err
+
+
+def test_release_ordering_an_e_up_late_past_done_ns_is_reported_not_gated(tmp_path, clock):
+    # E-up 30 ms after done_ns (PC-side path skew): reported only; the E hold is still far below 500 ms
+    rig = ReleaseRig(clock, link_kw={"up_shift_ns": 30 * MS})
+    code, _ = _run(tmp_path, clock, probes=("release_ordering",), rig=rig)
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "release_ordering")
+    assert " min 30.000 ms p50 30.000 ms p99 30.000 ms max 30.000 ms (reported, not gated" in rep
+    assert "[review]" not in rep
+
+
+def test_release_probe_focus_lost_aborts_without_a_second_thread_release(tmp_path, clock):
+    rig = ReleaseRig(clock, sink_kw={"away_from_check": 2})
+    code, _ = _run(tmp_path, clock, probes=("release_ordering",), rig=rig)
+    assert code == probe.EXIT_ABORT
+    # only the abort path's release_all (on the probe's thread); the second thread never released
+    assert rig.links[0].release_threads == ["MainThread"] and rig.links[0].plays == 0
+    path = tmp_path / "run" / "release_ordering" / probe.RELEASES_FILE
+    assert not path.exists() or _rows(path) == []
+    assert [t for t in threading.enumerate() if t.name == probe.RELEASE_THREAD] == []
+
+
+def test_release_trial_on_a_real_ble_link_aborts_a_written_play(tmp_path):
+    # P4's seam on a real BleLink (test_link's FakeBoard answers as F5): the hook runs before the PLAY write, the
+    # second thread's release_all() covers the written PLAY, the board's DONE 3 ends it ABORTED.
+    from types import SimpleNamespace
+    from test_link import FakeBoard, connected_link
+    from src.input.protocol import OP_PLAY
+    board = FakeBoard()
+    lk = connected_link(board)
+    try:
+        ctx = SimpleNamespace(link=lk, run_dir=tmp_path)
+        row = {"seq": 7, "action": "e_hold"}
+        out = probe.release_trial(ctx, lambda: soak.CommandOutcome(row, lk.play(probe.RELEASE_ORDER_STEPS), None),
+                                  0.01, lk.release_all)
+        assert out.result.failure() == InputError.ABORTED and len(board.ops(OP_PLAY)) == 1
+        (rel,) = _rows(tmp_path / probe.RELEASES_FILE)
+        assert rel["seq"] == 7 and rel["release_status"] == "OK"
+        assert rel["write_ns"] + 10 * MS <= rel["release_call_ns"] < rel["release_done_ns"]
+    finally:
+        lk.close()

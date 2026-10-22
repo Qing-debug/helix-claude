@@ -32,6 +32,7 @@ import json
 import math
 import subprocess
 import sys
+import threading
 import time
 import zlib
 from collections import Counter
@@ -49,12 +50,13 @@ from src.input.harness.soak import (EXIT_ABORT, EXIT_INTERRUPTED, EXIT_OK, EXIT_
                                     START_WAIT_S, Command, CommandOutcome, RunWriter)
 from src.input.actions import Plan
 from src.input.input_layer import ActionRecord, InputLayer
-from src.input.link import BleLink, InputError, SessionInfo
+from src.input.link import BleLink, InputError, SendReport, SessionInfo
 from src.input.protocol import MAX_STEPS, Key, Step, validate_schedule
 from src.input.timing import TimingModel, TimingType, truncated_cdf
 
-# Seam the tests monkeypatch (as soak.py); _clock is perf_counter_ns, the clock of every C5 file.
+# Seams the tests monkeypatch (as soak.py); _clock is perf_counter_ns, the clock of every C5 file.
 _clock = time.perf_counter_ns
+_sleep = time.sleep
 
 EXIT_BLOCKED = 3  # a precondition failed (MapleStory, board port, sink never in front); nothing was sent
 EXIT_STOP = 4  # a probe's report asked to stop (plan V1: "stop and report")
@@ -625,6 +627,210 @@ def m7_report(run_dir: Path) -> ProbeReport:
     return ProbeReport(check.render(), review)
 
 
+# ---- release-all probes: release_all() from a second thread (PA-adj2-D1 mid-hold, PA-rev m5 ordering) ------
+
+RELEASES_FILE = "releases.jsonl"  # the probe's per-trial log next to the C5 files (analyze.py ignores it)
+RELEASE_THREAD = "probe-release"
+RELEASE_MID_N = 20  # per case
+RELEASE_MID_WALK_MS = 3000.0
+RELEASE_MID_DELAY_S = (0.5, 2.5)  # after the PLAY write starts
+# Right + E both down for 3 s (C1: one key change per step, so the second down is a 0-delta step)
+RELEASE_CHORD_STEPS = (Step(0, Key.RIGHT), Step(0, Key.RIGHT | Key.E), Step(30_000, Key.RIGHT), Step(0, Key(0)))
+RELEASE_ORDER_N = 50
+RELEASE_ORDER_DELAY_S = (0.0, 0.02)
+RELEASE_ORDER_STEPS = (Step(0, Key.E), Step(10_000, Key(0)))  # a 1 s E hold
+RELEASE_ORDER_MARGIN_MS = 5.0  # a key-down later than the release's done_ns + one CI + this is a reorder
+RELEASE_ORDER_HOLD_MAX_MS = 500.0  # a reordered PLAY would hold E the full 1 s after the release
+
+
+def release_trial(ctx: ProbeContext, send: Callable[[], CommandOutcome], delay_s: float,
+                  release: Callable[[], Result[SendReport, InputError]]) -> CommandOutcome:
+    """One command (`send()`, on this thread) and `release()` from a second thread `delay_s` after the command's PLAY
+    write starts. The start is P4's `_before_write` seam (PA-rev m4) set on this probe's link instance: BleLink._play
+    awaits it on the link's loop just before the write, after the REACTION wait. A command that ends without a
+    PLAY write (e.g. FOCUS_LOST) gets no release. The trial goes to releases.jsonl."""
+    written = threading.Event()
+    stamps: dict = {}
+
+    async def before_write(seq: int) -> None:
+        stamps.setdefault("write_ns", _clock())
+        written.set()
+
+    def second() -> None:
+        written.wait()
+        if "write_ns" not in stamps:  # woken by the command's end, not by a write
+            return
+        _sleep(delay_s)
+        stamps["release_call_ns"] = _clock()
+        stamps["release"] = release()
+        stamps["release_returned_ns"] = _clock()
+
+    ctx.link._before_write = before_write
+    thread = threading.Thread(target=second, name=RELEASE_THREAD, daemon=True)
+    thread.start()
+    try:
+        outcome = send()
+    finally:
+        written.set()
+        thread.join()
+    released = stamps.get("release")
+    rep = released.unwrap() if released is not None and is_successful(released) else None
+    row = {"seq": outcome.row["seq"], "action": outcome.row["action"], "delay_ms": delay_s * 1000,
+           "write_ns": stamps.get("write_ns"), "release_call_ns": stamps.get("release_call_ns"),
+           "release_returned_ns": stamps.get("release_returned_ns"),
+           "release_status": None if released is None else ("OK" if rep is not None else str(released.failure())),
+           "release_sent_ns": rep.sent_ns if rep is not None else None,
+           "release_done_ns": rep.done_ns if rep is not None else None}
+    with open(ctx.run_dir / RELEASES_FILE, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(row) + "\n")
+    return outcome
+
+
+def release_mid_hold_commands(ctx: ProbeContext) -> None:
+    """walk(RIGHT, 3000) x20, then a raw 3 s Right + E hold x20; each released 0.5-2.5 s into the hold."""
+    for _ in range(RELEASE_MID_N):
+        cmd = Command("walk", (Key.RIGHT,), RELEASE_MID_WALK_MS)
+        release_trial(ctx, lambda: ctx.issue(cmd), float(ctx.rng.uniform(*RELEASE_MID_DELAY_S)),
+                      ctx.layer.release_all)
+    chord = raw_plan("chord_hold", RELEASE_CHORD_STEPS)
+    for _ in range(RELEASE_MID_N):
+        release_trial(ctx, lambda: play_raw(ctx, chord), float(ctx.rng.uniform(*RELEASE_MID_DELAY_S)),
+                      ctx.layer.release_all)
+
+
+def release_ordering_commands(ctx: ProbeContext) -> None:
+    """A 1 s E hold x50, each with link.release_all() 0-20 ms after its PLAY write starts."""
+    plan = raw_plan("e_hold", RELEASE_ORDER_STEPS)
+    for _ in range(RELEASE_ORDER_N):
+        release_trial(ctx, lambda: play_raw(ctx, plan), float(ctx.rng.uniform(*RELEASE_ORDER_DELAY_S)),
+                      ctx.link.release_all)
+
+
+def _release_trials(run_dir: Path) -> list[tuple[analyze.Row, analyze.Row | None, list[analyze.Row]]]:
+    """(command row, its releases.jsonl row or None, the key events in its window) per command. Windows are
+    analyze's: from stimulus_ns + WINDOW_OFFSET_NS to the next command's."""
+    run = analyze.load_run(run_dir)
+    rows = analyze.commands_of(run)
+    path = run_dir / RELEASES_FILE
+    rel = {r["seq"]: r for r in analyze.read_jsonl(path)} if path.exists() else {}
+    qpcs = [e["qpc_ns"] for e in run.keys]
+    out = []
+    for i, row in enumerate(rows):
+        lo = bisect.bisect_left(qpcs, row["stimulus_ns"] + analyze.WINDOW_OFFSET_NS)
+        hi = (bisect.bisect_left(qpcs, rows[i + 1]["stimulus_ns"] + analyze.WINDOW_OFFSET_NS) if i + 1 < len(rows)
+              else len(qpcs))
+        out.append((row, rel.get(row["seq"]), run.keys[lo:hi]))
+    return out
+
+
+def _left_down(events: Sequence[analyze.Row]) -> set[int]:
+    """The vks down at the end of `events` (an OS repeat is a down)."""
+    down: set[int] = set()
+    for e in events:
+        (down.add if e["down"] else down.discard)(e["vk"])
+    return down
+
+
+def _statuses(rows: Sequence[analyze.Row], expected: str, of: int | None = None) -> str:
+    """'<count of `expected`>[ of <of>][ (other: <status> <count>, ...)]' over the rows' errors (OK for none)."""
+    c = Counter(r["error"] or "OK" for r in rows)
+    other = ", ".join(f"{k} {v}" for k, v in c.items() if k != expected)
+    return f"{c.get(expected, 0)}" + (f" of {of}" if of is not None else "") + (f" (other: {other})" if other else "")
+
+
+def release_mid_hold_report(run_dir: Path) -> ProbeReport:
+    """Per case: release_all() call -> the listener's last up after it (all keys up) p50 / max, the pending call's
+    result (expected ABORTED) and keys left down. Reported, not gated (PA-adj2-D1): a miss is a [review] item."""
+    trials = _release_trials(run_dir)
+    lines = ["Release-all mid-hold (PA-adj2-D1): release_all() from a second thread "
+             f"{RELEASE_MID_DELAY_S[0]:g}-{RELEASE_MID_DELAY_S[1]:g} s after the PLAY write; reported, not gated"]
+    review = []
+    for action in ("walk", "chord_hold"):
+        mine = [t for t in trials if t[0]["action"] == action]
+        latency, left, no_up, rel_ok = [], 0, 0, 0
+        for row, rel, events in mine:
+            call = rel["release_call_ns"] if rel is not None else None
+            rel_ok += rel is not None and rel["release_status"] == "OK"
+            stuck = bool(_left_down(events))
+            left += stuck
+            ups = [e["qpc_ns"] for e in events if not e["down"] and call is not None and e["qpc_ns"] >= call]
+            if not ups:
+                no_up += 1
+            elif not stuck:
+                latency.append((max(ups) - call) / analyze.NS_PER_MS)
+        aborted = sum(1 for row, _, _ in mine if row["error"] == str(InputError.ABORTED))
+        lines.append(f"{action}: {len(mine)} trials, play ABORTED {_statuses([t[0] for t in mine], 'ABORTED')}, "
+                     f"release_all OK {rel_ok}, keys left down {left}, no up after the call {no_up}")
+        lines.append(f"{action} release_all() -> all keys up: " + summary(latency))
+        if aborted != len(mine) or left:
+            review.append(f"{action}: {len(mine) - aborted} of {len(mine)} pending call(s) did not return "
+                          f"Failure(ABORTED), {left} trial(s) left a key down")
+    return ProbeReport(lines, review)
+
+
+def release_ordering_report(run_dir: Path) -> ProbeReport:
+    """Expected every time: play() ABORTED, release_all() OK, no key-down later than the release's done_ns + one CI
+    (the PONG in force) + 5 ms, every E hold < 500 ms (none left down). Any other outcome: the writes can reorder,
+    stop (PA-rev m5). E-up - done_ns is reported only (PC-side path skew, PA-rev3b m-b)."""
+    trials = _release_trials(run_dir)
+    pongs = _pongs(run_dir)
+    e_vk = listener.VK_BY_KEY[Key.E]
+    rel_ok = late = long_hold = left = bad = 0
+    holds, e_up, kinds = [], [], Counter()
+    for row, rel, events in trials:
+        reasons = []
+        if row["error"] != str(InputError.ABORTED):
+            reasons.append(f"play {row['error'] or 'OK'}")
+        done = rel["release_done_ns"] if rel is not None and rel["release_status"] == "OK" else None
+        if done is None:
+            reasons.append("release_all not OK")
+        else:
+            rel_ok += 1
+            ci = ci_ms_at(pongs, done) or 0.0
+            limit = done + (ci + RELEASE_ORDER_MARGIN_MS) * analyze.NS_PER_MS
+            if any(e["down"] and e["qpc_ns"] > limit for e in events):
+                late += 1
+                reasons.append("key-down past the margin")
+            ups = [e["qpc_ns"] for e in events if e["vk"] == e_vk and not e["down"]]
+            if ups:
+                e_up.append((ups[-1] - done) / analyze.NS_PER_MS)
+        down_ns, too_long = None, False
+        for e in events:
+            if e["vk"] != e_vk:
+                continue
+            if e["down"]:
+                down_ns = down_ns if down_ns is not None else e["qpc_ns"]
+            elif down_ns is not None:
+                holds.append((e["qpc_ns"] - down_ns) / analyze.NS_PER_MS)
+                too_long |= holds[-1] >= RELEASE_ORDER_HOLD_MAX_MS
+                down_ns = None
+        if too_long:
+            long_hold += 1
+            reasons.append(f"E hold >= {RELEASE_ORDER_HOLD_MAX_MS:g} ms")
+        if down_ns is not None:
+            left += 1
+            reasons.append("E left down")
+        kinds.update(reasons)
+        bad += bool(reasons)
+    n = len(trials)
+    lines = [f"Release-all ordering (PA-rev m5): {n} trials of a {RELEASE_ORDER_STEPS[1].delta_100us / 10_000:g} s "
+             f"E hold, link.release_all() from a second thread {1000 * RELEASE_ORDER_DELAY_S[0]:g}-"
+             f"{1000 * RELEASE_ORDER_DELAY_S[1]:g} ms after the PLAY write starts",
+             f"play ABORTED {_statuses([t[0] for t in trials], 'ABORTED', n)}; release_all OK {rel_ok} of {n}",
+             f"key-downs past done_ns + CI + {RELEASE_ORDER_MARGIN_MS:g} ms: {late} trial(s)",
+             f"E holds >= {RELEASE_ORDER_HOLD_MAX_MS:g} ms: {long_hold} trial(s); E left down: {left} trial(s)",
+             "E hold (down -> up): " + summary(holds),
+             "E-up - release done_ns: " + summary(e_up) + " (reported, not gated: PC-side path skew, PA-rev3b m-b)",
+             f"release-all ordering: as expected in {n - bad} of {n}"
+             + (f"; other outcomes: {', '.join(f'{k} {v}' for k, v in kinds.items())}" if bad else "")]
+    if not bad:
+        return ProbeReport(lines)
+    review = [f"the writes can reorder: {bad} of {n} trial(s) not as expected ("
+              + ", ".join(f"{k} {v}" for k, v in kinds.items()) + "); against P4's abort rules (PA-fix1c ordering)"]
+    return ProbeReport(lines, review, stop=f"release-all ordering: {bad} of {n} trial(s) show a reorder or another "
+                                           "outcome (P4's abort rules)")
+
+
 PROBES: dict[str, Probe] = {
     "delivery": Probe("delivery", delivery_commands, delivery_report, duration="~3-4 min"),
     "m2": Probe("m2", m2_commands, m2_report, duration="~1-1.5 min"),
@@ -634,6 +840,10 @@ PROBES: dict[str, Probe] = {
     "m6": Probe("m6", m6_commands, m6_report, duration="~15 s"),
     "m8": Probe("m8", m7_commands, m8_report, duration="~45 s"),
     "m7": Probe("m7", m7_commands, m7_report, duration="~45 s"),
+    "release_mid_hold": Probe("release_mid_hold", release_mid_hold_commands, release_mid_hold_report,
+                              duration="~1.5 min"),
+    "release_ordering": Probe("release_ordering", release_ordering_commands, release_ordering_report,
+                              duration="~15 s"),
 }
 RUN_ALONE = ("m2_nojitter",)  # needs the probe-only flash before and the HEAD reflash after (plan V1 M2)
 
@@ -687,7 +897,8 @@ def run_sheet() -> list[str]:
         "no key until the probe's report prints. Expected durations (inferred, not measured; each plus ~10-30 s "
         "connect and start wait): " + ", ".join(f"{n} {PROBES[n].duration or 'n/a'}" for n in first) + ".",
         "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
-        "stop (m6: a silent drop; the probes after it are not run). Reports: data/probe/$RUN/<probe>/report.txt.",
+        "stop (m6: a silent drop; release_ordering: the writes can reorder; the probes after it are not run). "
+        "Reports: data/probe/$RUN/<probe>/report.txt.",
         "2. M2 with START_JITTER off (PA-rev I8), after step 1's m2 ran on HEAD's firmware:",
         f"   a. {MAPLE_CHECK}",
         f"   b. {PORT_LOOKUP}",
