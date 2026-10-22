@@ -954,3 +954,47 @@ def test_session_end_while_a_write_timeout_is_expiring(link, board):
     assert wait_until(lambda: board.client.disconnect_calls == 1)
     assert fault_errors(link) == [InputError.LINK_LOST]
     assert link.play(tap_steps()).failure() == InputError.NOT_CONNECTED
+
+
+# ---------------------------------------------------------------- connect() returns Failure, never raises (A-P4-R m1)
+
+
+def test_connect_returns_failure_when_the_client_factory_raises(board):
+    calls = []
+
+    def factory(device, **kwargs):
+        calls.append(device)
+        if len(calls) == 1:
+            raise RuntimeError("no adapter")
+        return board.factory(device, **kwargs)
+
+    lk = BleLink(client_factory=factory, scanner=FakeScanner())
+    try:
+        r = lk.connect(timeout_s=5.0)
+        assert "client failed" in r.failure() and "no adapter" in r.failure()
+        assert board.clients == [] and lk.faults() == []
+        assert is_successful(lk.connect(timeout_s=5.0))  # the link is still usable
+    finally:
+        lk.close()
+
+
+def test_connect_returns_failure_and_disconnects_when_mtu_size_raises(board):
+    class MtuRaises(FakeClient):
+        @property
+        def mtu_size(self):
+            raise RuntimeError("no mtu")
+
+        @mtu_size.setter
+        def mtu_size(self, value):
+            pass
+
+    def factory(device, disconnected_callback=None, **kwargs):
+        board.clients.append(MtuRaises(board, device, disconnected_callback, **kwargs))
+        return board.client
+
+    lk = BleLink(client_factory=factory, scanner=FakeScanner())
+    r = lk.connect(timeout_s=5.0)
+    assert "mtu_size failed" in r.failure() and "no mtu" in r.failure()
+    assert board.client.disconnect_calls == 1
+    assert lk.faults() == []
+    assert lk.play(tap_steps()).failure() == InputError.NOT_CONNECTED

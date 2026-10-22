@@ -330,14 +330,22 @@ class BleLink:
             return Failure(f"device {self._name!r} not found in scan")
         if remaining() <= 0:
             return Failure("timeout in scan")
-        client = self._client_factory(device, disconnected_callback=self._on_disconnected, timeout=remaining(),
-                                      winrt={"use_cached_services": False})
+        try:
+            client = self._client_factory(device, disconnected_callback=self._on_disconnected, timeout=remaining(),
+                                          winrt={"use_cached_services": False})
+        except Exception as e:  # noqa: BLE001 - reported as the connect Failure (A-P4-R m1)
+            return Failure(f"client failed: {e!r}")
         opened = await self._open(client, remaining)
         if not is_successful(opened):
             await self._disconnect(client)
             return opened
         pong = opened.unwrap()
-        session = _Session(client, client.mtu_size, loop.time())
+        try:
+            mtu = client.mtu_size
+        except Exception as e:  # noqa: BLE001 - reported as the connect Failure (A-P4-R m1)
+            await self._disconnect(client)
+            return Failure(f"mtu_size failed: {e!r}")
+        session = _Session(client, mtu, loop.time())
         self._session = session
         session.keepalive = loop.create_task(self._keepalive(session))
         return Success(SessionInfo(device.address, session.mtu, pong))
