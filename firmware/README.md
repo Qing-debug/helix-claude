@@ -84,7 +84,8 @@ Evidence of the reboot (record which one showed it):
 - the `Starting NimBLE work!` boot line in the reopened capture. Output printed before the monitor opens is queued in
   HWCDC's 256-byte TX ring (esp32 core 3.3.10 `HWCDC.cpp:422`). Once the ring is full, each later line is dropped
   whole (connected path, `:586-604`; at once with `Serial.setTxTimeoutMs(0)`), so a capture keeps the earliest
-  ≈ 256 bytes (through the `SUB` line) and loses later lines until the monitor drains the ring. The drop-oldest
+  ≈ 256 bytes (with the F5 firmware, through the `SUB` line) and loses later lines until the monitor drains the
+  ring. The drop-oldest
   policy (`:293-341`) applies only while `isCDC_Connected()` is false. The boot line is the earliest output, so it
   is in the capture. Boot and connect lines past ≈ 256 bytes (`CONN ev=auth`, `MTU`, `CIREQ`, `CONN ev=params`)
   are lost; read link state from a PING's PONG instead. The monitor's timestamps are arrival times, not boot times.
