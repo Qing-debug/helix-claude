@@ -7,7 +7,7 @@ import time
 
 from returns.pipeline import is_successful
 from returns.result import Failure, Success
-from winrt.windows.devices.radios import RadioAccessStatus
+from winrt.windows.devices.radios import RadioAccessStatus, RadioState
 
 from src.input.harness import faults
 from src.input.harness.faults import FaultStamps, bluetooth_off_on, reset_board
@@ -136,13 +136,36 @@ def test_reset_board_nonzero_exit_after_the_reset_line_keeps_the_stamp(monkeypat
 # ---- bluetooth_off_on: radio path and fallback (G2, G3, PA-rev4a m2/m3/m5) ------------
 
 class FakeRadio:
-    def __init__(self, off_status, on_status=RadioAccessStatus.ALLOWED):
+    """A radio whose state follows an ALLOWED request after ``lag`` state reads (the real transition is queued and
+    observed later, SetStateAsync Remarks). ``applies`` maps on/off to whether an ALLOWED request takes effect at
+    all (hardware or policy can override it)."""
+
+    def __init__(self, off_status, on_status=RadioAccessStatus.ALLOWED, *, initial=RadioState.ON, lag=0,
+                 applies=None):
         self.off_status, self.on_status = off_status, on_status
+        self.current, self.lag = initial, lag
+        self.applies = applies if applies is not None else {False: True, True: True}
+        self.pending = None  # (target state, reads left)
         self.calls = []  # (on, perf_counter_ns at the call)
+        self.events = []  # ("set", on) / ("read", RadioState), in order
 
     def set_state(self, on):
         self.calls.append((on, time.perf_counter_ns()))
-        return self.on_status if on else self.off_status
+        self.events.append(("set", on))
+        status = self.on_status if on else self.off_status
+        if status == RadioAccessStatus.ALLOWED and self.applies[on]:
+            self.pending = (RadioState.ON if on else RadioState.OFF, self.lag)
+        return status
+
+    def state(self):
+        if self.pending is not None:
+            target, left = self.pending
+            if left == 0:
+                self.current, self.pending = target, None
+            else:
+                self.pending = (target, left - 1)
+        self.events.append(("read", self.current))
+        return self.current
 
 
 def _fake_radio(monkeypatch, radio):
@@ -258,10 +281,10 @@ class RaisingRadio(FakeRadio):
         self.raise_on = raise_on
 
     def set_state(self, on):
-        super().set_state(on)
         if on == self.raise_on:
+            self.calls.append((on, time.perf_counter_ns()))
             raise OSError(-2147024891, "Access is denied")
-        return self.on_status if on else self.off_status
+        return super().set_state(on)
 
 
 def test_radio_off_call_raising_takes_the_fallback_like_a_refusal(monkeypatch):
@@ -300,3 +323,62 @@ def test_fallback_enable_failure_keeps_the_stamp_and_fails(monkeypatch):
     result = bluetooth_off_on(0, stamps)
     assert not is_successful(result) and "Enable" in result.failure()
     assert stamps.injected_ns is not None
+
+
+# ---- bluetooth_off_on confirms each transition by re-reading the state (A-V2prep-R I1) --------------------
+# SetStateAsync "returns after the request is queued; the observable transition may complete later", and hardware or
+# policy "can override an Allowed request" (learn.microsoft.com/en-us/uwp/api/windows.devices.radios.radio.setstateasync).
+
+def _short_timeouts(monkeypatch):
+    monkeypatch.setattr(faults, "_RADIO_OFF_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(faults, "_RADIO_ON_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(faults, "_RADIO_POLL_S", 0.01)
+
+
+def test_radio_off_and_on_are_each_confirmed_before_moving_on(monkeypatch):
+    radio = FakeRadio(RadioAccessStatus.ALLOWED, lag=3)
+    _fake_radio(monkeypatch, radio)
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    assert bluetooth_off_on(0, stamps) == Success(None)
+    on_call = radio.events.index(("set", True))
+    assert radio.events[on_call - 1] == ("read", RadioState.OFF)  # ON only once OFF was observed
+    assert radio.events[-1] == ("read", RadioState.ON)  # returns only once ON was observed
+    assert radio.current == RadioState.ON and stamps.injected_ns is not None and ran == []
+
+
+def test_radio_that_never_turns_off_fails_with_no_stamp_and_is_switched_on(monkeypatch):
+    _short_timeouts(monkeypatch)
+    radio = FakeRadio(RadioAccessStatus.ALLOWED, applies={False: False, True: True})
+    _fake_radio(monkeypatch, radio)
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    result = bluetooth_off_on(0, stamps)
+    assert not is_successful(result)
+    assert "did not turn off" in result.failure() and "ON" in result.failure()
+    assert stamps.injected_ns is None  # the fault never took effect
+    assert [on for on, _ in radio.calls] == [False, True]  # ON was still requested before returning
+    assert ran == []
+
+
+def test_radio_that_never_turns_back_on_fails_saying_bluetooth_left_off(monkeypatch):
+    _short_timeouts(monkeypatch)
+    radio = FakeRadio(RadioAccessStatus.ALLOWED, applies={False: True, True: False})
+    _fake_radio(monkeypatch, radio)
+    stamps = FaultStamps()
+    start = time.monotonic()
+    result = bluetooth_off_on(0, stamps)
+    assert not is_successful(result)
+    assert "did not turn on" in result.failure() and "left off" in result.failure()
+    assert stamps.injected_ns is not None  # the radio did go off
+    assert time.monotonic() - start >= 0.2  # it waited the ON timeout
+
+
+def test_radio_not_on_before_the_fault_fails_and_toggles_nothing(monkeypatch):
+    radio = FakeRadio(RadioAccessStatus.ALLOWED, initial=RadioState.OFF)
+    _fake_radio(monkeypatch, radio)
+    ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
+    stamps = FaultStamps()
+    result = bluetooth_off_on(0, stamps)
+    assert not is_successful(result) and "OFF" in result.failure()
+    assert radio.calls == [] and ran == [] and stamps == FaultStamps()
