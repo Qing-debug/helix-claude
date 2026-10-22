@@ -1,8 +1,10 @@
 """Tests for the H1 keystroke listener's pure parts (no hook, no Tk, no keystrokes)."""
+import ctypes
 import io
 import json
 import threading
 import time
+from ctypes import wintypes
 
 import pytest
 
@@ -456,3 +458,42 @@ def test_main_is_quiet_on_stderr_when_the_sink_is_foreground(monkeypatch, tmp_pa
     assert rc == 0
     assert "foreground=True" in out
     assert err == ""
+
+
+# ---- the real Tk sink window (A-LF): a real window on the sink thread, no hook, no keystrokes ----------------
+
+WM_CLOSE = 0x0010
+_u32 = ctypes.WinDLL("user32", use_last_error=True)
+_u32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_u32.PostMessageW.restype = wintypes.BOOL
+_u32.IsWindow.argtypes = [wintypes.HWND]
+_u32.IsWindow.restype = wintypes.BOOL
+
+
+def _real_sink(tmp_path, monkeypatch):
+    """A Listener whose sink thread is the real Tk window (hook faked; the writer writes to tmp_path)."""
+    thread_errors = []
+    monkeypatch.setattr(threading, "excepthook", thread_errors.append)  # what an uncaught thread error reaches
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    lst._start()
+    return lst, thread_errors
+
+
+def test_closing_the_sink_window_ends_its_thread_without_a_traceback(tmp_path, monkeypatch):
+    # Tk's default WM_DELETE_WINDOW handler destroys the window, so the later root.destroy() raised TclError
+    # (v2-faults-1 console). The close must instead end the sink thread cleanly, and the window must be gone, so the
+    # focus check (GetForegroundWindow == sink_hwnd) goes False and the soak's FOCUS_LOST / abort path is unchanged.
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        hwnd, sink_th = lst.sink_hwnd, lst._threads[2]
+        assert _u32.IsWindow(hwnd)
+        assert _u32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        sink_th.join(3)
+        assert not sink_th.is_alive()
+        assert thread_errors == []
+        assert not _u32.IsWindow(hwnd)
+        assert lst.sink_is_foreground() is False
+    finally:
+        lst.stop()
+    assert thread_errors == []

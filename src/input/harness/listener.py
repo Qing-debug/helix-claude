@@ -274,6 +274,11 @@ class Listener:
 
             root = tk.Tk()
             root.title(SINK_TITLE)
+            # Tk's default WM_DELETE_WINDOW handler destroys the window ("At start-up Tk installs a handler for this
+            # protocol, which responds by destroying the window", tcl-lang.org/man/tcl8.6/TkCmd/wm.htm), so the
+            # root.destroy() below raised TclError. Closing now ends the thread the way stop() does; the window still
+            # goes away, so the focus check goes False and the soak / probe FOCUS_LOST abort is unchanged.
+            root.protocol("WM_DELETE_WINDOW", self._sink_stop.set)
             root.geometry("360x120")
             # Labels only: no focusable Button/Checkbutton/Radiobutton/Entry/Text widget (H1 test-window rule).
             tk.Label(root, text=SINK_TITLE, font=("Segoe UI", 12)).pack(expand=True)
