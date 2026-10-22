@@ -22,6 +22,10 @@ from src.input.timing import Sample, TimingModel, TimingType
 _clock = time.perf_counter_ns
 _sleep = time.sleep
 
+# play() failures after which the PC cannot know whether a key is down (PA-adj1b-D1). The others need no release:
+# REJECTED / TOO_LONG pressed nothing, ABORTED means a release already ran, LINK_LOST / NOT_CONNECTED have no link.
+_UNCERTAIN = frozenset({InputError.NOTIFY_FAILED, InputError.ACK_TIMEOUT, InputError.WRITE_FAILED})
+
 
 @dataclass(frozen=True)
 class ActionRecord:
@@ -79,5 +83,9 @@ class InputLayer:
         """The one place `link.play()` is called."""
         played = self._link.play(plan.steps)
         if not is_successful(played):
+            if played.failure() in _UNCERTAIN:
+                # A key may be down: release once, discard that result, keep the play's error. A failed release is
+                # never retried (PA-adj1b-D1, PA-rev I2(vii)).
+                self._link.release_all()
             return played
         return Success(ActionRecord(plan, reaction, waited_ms, played.unwrap()))

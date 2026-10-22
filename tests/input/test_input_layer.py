@@ -4,6 +4,8 @@ A fake link and a stub timing model stand in for BleLink and TimingModel. The mo
 monkeypatched (C3 constructor unchanged, A-PF m6).
 """
 import math
+import threading
+import time
 
 import pytest
 from returns.pipeline import is_successful
@@ -260,3 +262,99 @@ def test_sequence_of_eight_keys_plays_sixteen_steps(clock, link):
     assert len(link.calls) == 1
     assert len(link.calls[0][1]) == 16
     assert record.plan.steps == link.calls[0][1]
+
+
+# --- Failure policy (piece 2): one release after an uncertain play failure (PA-adj1b-D1) ---
+
+UNCERTAIN = [InputError.NOTIFY_FAILED, InputError.ACK_TIMEOUT, InputError.WRITE_FAILED]
+NO_RELEASE = [InputError.REJECTED, InputError.TOO_LONG, InputError.ABORTED, InputError.LINK_LOST,
+              InputError.NOT_CONNECTED]
+
+
+def test_the_two_error_lists_cover_every_input_error():
+    assert sorted(UNCERTAIN + NO_RELEASE) == sorted(InputError)
+
+
+@pytest.mark.parametrize("release_result", [Success(_report(8)), Failure(InputError.ACK_TIMEOUT)],
+                         ids=["release_ok", "release_ack_timeout"])
+@pytest.mark.parametrize("error", UNCERTAIN, ids=[e.name for e in UNCERTAIN])
+@pytest.mark.parametrize("name, call, build", METHODS, ids=METHOD_IDS)
+def test_an_uncertain_play_failure_releases_once_after_play_and_returns_the_play_error(
+        clock, link, name, call, build, error, release_result):
+    link.play_result = Failure(error)
+    link.release_result = release_result
+    expected = build(StubModel())
+
+    result = call(InputLayer(link, StubModel()))
+
+    assert result.failure() is error  # the release's own result does not replace it
+    assert link.calls == [("play", expected.steps), ("release_all",)]  # once, after play, never retried
+
+
+@pytest.mark.parametrize("error", NO_RELEASE, ids=[e.name for e in NO_RELEASE])
+@pytest.mark.parametrize("name, call, build", METHODS, ids=METHOD_IDS)
+def test_other_play_failures_send_no_release(clock, link, name, call, build, error):
+    link.play_result = Failure(error)
+    expected = build(StubModel())
+
+    result = call(InputLayer(link, StubModel()))
+
+    assert result.failure() is error
+    assert link.calls == [("play", expected.steps)]
+
+
+def test_a_successful_play_sends_no_release(clock, link):
+    InputLayer(link, StubModel()).tap(Key.E).unwrap()
+
+    assert [c[0] for c in link.calls] == ["play"]
+
+
+class BlockingLink:
+    """`play` blocks until `release_all` is called, then returns ABORTED, as BleLink does (PA-adj2-D1)."""
+
+    def __init__(self):
+        self.play_started = threading.Event()
+        self._released = threading.Event()
+        self.play_calls = 0
+        self.release_calls = 0
+
+    def play(self, steps):
+        self.play_calls += 1
+        self.play_started.set()
+        if not self._released.wait(5.0):  # safety bound so a broken layer cannot hang the suite
+            return Success(_report(7))
+        return Failure(InputError.ABORTED)
+
+    def release_all(self):
+        self.release_calls += 1
+        self._released.set()
+        return Success(_report(8))
+
+
+def test_feedback_release_from_another_thread_aborts_the_walk_without_waiting():
+    link = BlockingLink()
+    layer = InputLayer(link, StubModel())
+    walk_result = []
+    action_thread = threading.Thread(target=lambda: walk_result.append(layer.walk(Key.RIGHT, 3000.0)))
+
+    action_thread.start()  # thread A: the action thread
+    assert link.play_started.wait(2.0)
+    time.sleep(0.2)
+    release_result = []
+
+    def feedback():  # thread B: the feedback thread
+        t0 = time.perf_counter()
+        release_result.append((layer.release_all(), time.perf_counter() - t0))
+
+    feedback_thread = threading.Thread(target=feedback)
+    feedback_thread.start()
+    feedback_thread.join(2.0)
+    action_thread.join(2.0)
+
+    assert not feedback_thread.is_alive() and not action_thread.is_alive()
+    released, elapsed_s = release_result[0]
+    assert is_successful(released)
+    assert elapsed_s < 0.1
+    assert walk_result[0].failure() is InputError.ABORTED
+    assert link.play_calls == 1
+    assert link.release_calls == 1  # ABORTED triggers no second release
