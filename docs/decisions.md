@@ -464,3 +464,59 @@ Affects: the shared golden-vector file format and its two readers (`firmware/tes
 Cost if wrong: wrap `vectors.json`, edit the C++ test's `main()` and P1's loader line, re-run both tests.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F4-R-D1); undo: no commit to revert for the ratification (it keeps `ea2d641` as is), so make the test-side edits: `vectors.json` line 1 `[` → `{"version": 1, "vectors": [` and line 41 `]` → `]}`; `test_protocol.cpp` `main()` :244-248 takes `root.at("vectors")`, checks it is a non-empty array and that `root.at("version").num == 1`, and loops over it; `tests/input/test_protocol.py:30` loads `["vectors"]` and asserts `version == 1`. Then re-run F4 step 2's g++ command (expect `ALL PASS`) and `$PY -m pytest -q tests/input/test_protocol.py`. For the C1 clause, `git revert eabd3bb` (reverse-applies clean as of this entry's commit), then write the wrapper into C1 instead. Line numbers are as of `67667fe`.
+
+## A-F5-D1 (2026-10-22): F5's `onWrite` treats only a PING / RELEASE_ALL that `proto::parse` accepts as special
+
+Question: how does `onWrite` recognise the two frames it handles itself (PING → PONG at once; RELEASE_ALL → count `abortRequested`, then queue)? Options: A. run the full `proto::parse` in `onWrite`; only a *valid* PING or RELEASE_ALL is special, and every other frame, a malformed PING or RELEASE_ALL included, is queued uncounted and the executor rejects it (as built in `747b708`). B. test the header bytes only (`len >= 2`, `ver == 1`, op 3 → PONG, op 2 → counted), so a malformed PING still gets a PONG and a malformed RELEASE_ALL still aborts the running PLAY before it is rejected.
+
+Ruling: A (ruled as Hong while away, adjudicated by A-F5-adj).
+
+Reason: the opus-xhigh adjudicator (A-F5-adj) found that A keeps one definition of validity (`proto::parse`, shared with F4 and P1 through `vectors.json`) and that a rejected frame never has a side effect. Under B a malformed PING is answered with a PONG, against C1's "the board rejects" and F4's reject-2 vector for that frame, and a malformed RELEASE_ALL aborts and is then REJECTED. B's only gain, a malformed RELEASE_ALL that still aborts, does not occur: the PC's encoders always emit the 4-byte header (`src/input/protocol.py:116-121`), every schedule is closed (≤ 10 s, ends all-up, PA-D5), and InputLayer's recovery uses the valid encoder (PA-adj1b-D1). Under A F5's "`parse` rejects it" branch for a counted item is unreachable but harmless, since the decrement happens at dequeue before `parse`.
+
+Affects: the firmware's frame handling in `onWrite` (concurrency: which frames bypass the queue or raise the abort count); plan A task F5. Plan lines as of `4174c3e`: F5 :793, :801-806. Applied in `747b708` (firmware, `CommandCallbacks::onWrite`) and `2de8cae` (plan text, E1; rewrapped in `4174c3e`).
+
+Cost if wrong: a malformed RELEASE_ALL, which only a PC bug or a foreign writer can produce, does not pre-empt; the running hold ends on its own within ≤ 10 s, all-up. No stuck key.
+
+Undo: in `CommandCallbacks::onWrite` (`firmware/Helix_BLE/Helix_BLE.ino:178-186` as of `5a779b6`), keep the `proto::parse` call (it still fills `cmd.seq` when `len >= 4`, `protocol.h:48`) and replace the two `valid && cmd.op == proto::PING` / `proto::RELEASE_ALL` tests with header tests: `item.len >= 2 && item.bytes[0] == proto::VER && item.bytes[1] == proto::PING` (and `proto::RELEASE_ALL`). Then compile, flash and check the serial log per F5 step 5. For the plan text, restore F5 :793 and :801-806 to their `79ba1b2` wording (`git show 79ba1b2:docs/superpowers/plans/2026-10-21-p1a-input.md`, :789, :797-800); `git revert 4174c3e 2de8cae` undoes all four F5 rulings' plan text at once.
+
+## A-F5-D2 (2026-10-22): F5 sends HID reports with notify()'s two NimBLE calls, made directly, so DONE carries the rc
+
+Question: how does the HID report-send helper send, given C1 says a DONE NOTIFY_FAILED carries "`rc` = NimBLE code" but `NimBLECharacteristic::notify()` returns only a bool? Options: A. call `ble_hs_mbuf_from_flat(report, 8)` (NULL → `BLE_HS_ENOMEM`) and `ble_gattc_notify_custom(connHandle, inputReport->getHandle(), om)` directly and return that rc (as built in `747b708`). B. `return inputReport->notify(report, 8, handle) ? 0 : -1;`, so every failure is −1.
+
+Ruling: A (ruled as Hong while away, adjudicated by A-F5-adj). This amends PA-D4's send call (decisions.md:166, "send with `notify(report, 8, connHandle)`"): the same NimBLE calls `notify()` makes, made directly so DONE carries the rc. PA-D4's substance stands: the library's `sendReport` is bypassed and each report goes out as a direct per-handle notify.
+
+Reason: the opus-xhigh adjudicator (A-F5-adj) found that `notify(value, len, handle)` → `sendValue`'s single-peer custom branch makes exactly these two calls (NimBLE-Arduino 2.5.0, `NimBLECharacteristic.cpp:275-293`) but on failure only logs the rc and returns false (`:322-325`), and the log is compiled out at our FQBN's default debug level. So only A meets C1's "`rc` = NimBLE code" (C1 :153, :160-161); B would make ENOMEM, ENOTCONN and HCI errors all −1, the same as "lookup failed". Plan F5's old "returning false with `rc` on failure" misdescribed `notify()`. The rc is diagnostic only (the PC decodes it into `Done.rc` and branches on nothing), so A costs nothing on the PC.
+
+Affects: the firmware send path (`sendKeyReport`) and the meaning of DONE's `rc` field; amends PA-D4; plan A contract C1 and task F5. Plan lines as of `4174c3e`: C1 :153, F5 :756, :773-781, :815. Applied in `747b708` (firmware, `sendKeyReport`) and `2de8cae` (plan text, E2a-E2d).
+
+Cost if wrong: about 5 lines of low-level NimBLE C API to keep in step with the library: a later NimBLE-Arduino that changes `sendValue` (for example, adds a check) is not inherited. Low risk while the library stays 2.5.0.
+
+Undo: replace the body of `sendKeyReport` (`firmware/Helix_BLE/Helix_BLE.ino:147-154` as of `5a779b6`) with `if (inputReport == nullptr) return -1; uint8_t report[8]; proto::mask_to_report(mask, report); return inputReport->notify(report, 8, handle) ? 0 : -1;`, then compile, flash and check the serial log per F5 step 5. In the plan, C1 :153 and :160-161 then say "`rc` = −1 (notify() exposes no NimBLE code)", and F5 :756, :773-781, :815 go back to their `79ba1b2` wording (:756, :773-775, :809); `git revert 4174c3e 2de8cae` undoes all four F5 rulings' plan text at once.
+
+## A-F5-D3 (2026-10-22): F5's per-command serial log lines are always on, printed after the command's last notification
+
+Question: plan F5 step 5 asked for "`ACCEPTED`/`DONE` lines per command at debug level"; are these lines always on, and in what form? Options: A. always on, in the format as built in `747b708`, printed only after the command's last notification and never inside a schedule or in `onWrite`: `ACCEPTED seq=%u t0_us=%lu` with `DONE seq=%u status=%u …` or `DROP seq=%u disconnected after n=%u`; `REJECTED seq=%u reason=%u`; `DONE seq=%u status=3 n=0 (queued)`; `DONE seq=%u release_all status=%u rc=%d`; plus the connect-time `PEERS count=%u` / `WARN PEERS count=%u`. B. the per-command lines behind a compile-time sketch flag (off by default).
+
+Ruling: A (ruled as Hong while away, adjudicated by A-F5-adj), on condition that A-F5-adj-D1 → A holds (it does: `5a779b6`). Had A-F5-adj-D1 been B, D3 would have switched to B with the flag off by default.
+
+Reason: the opus-xhigh adjudicator (A-F5-adj) found that no task after F5 opens a serial monitor or parses these lines (F5 step 6 checks notifications on the PC; A-F3-R-b already records that no H, V or D task parses `CONN` lines), so the format is free, and they are the only on-board record of each command. "At debug level" read as the core's `log_d` would be compiled out by our FQBN (DebugLevel none), so step 5 could not see them; read as a sketch flag it is B. Printing after the last notification keeps them off the timing path: all-up and DONE go out before the print.
+
+Affects: the firmware's serial log format (`runPlay`, `runReleaseAll`, `loop()`, `onConnect`); plan A task F5. Plan lines as of `4174c3e`: F5 :782-783 (PEERS), :866-869 (step 5). Applied in `747b708` (firmware) and `2de8cae` (plan text, E3).
+
+Cost if wrong: if serial writes could block, the loop task would stall ≈ 2 s after each command once a monitor had been closed in the current boot (latency, QUEUE_FULL, F5 step 6's 100 ms check). No stuck key. That hazard is covered by A-F5-adj-D1.
+
+Undo: delete the per-command `Serial.printf` calls in `firmware/Helix_BLE/Helix_BLE.ino` (as of `5a779b6`: `runPlay` :349, :360, :365, :371; `runReleaseAll` :381; `loop()` :406, :413, :418; each with its continuation line), or wrap each in `#if HELIX_CMD_LOG` after `#ifndef HELIX_CMD_LOG` / `#define HELIX_CMD_LOG 0` / `#endif`; leave `onConnect`'s `PEERS` line, since F5 requires the count to be logged. Then compile, flash and check the serial log per F5 step 5. For the plan text, restore F5 :866-869 to `79ba1b2`'s :853 and drop the PEERS clause at :782-783; `git revert 4174c3e 2de8cae` undoes all four F5 rulings' plan text at once.
+
+## A-F5-adj-D1 (2026-10-22): F5's firmware makes serial log writes non-blocking (`Serial.setTxTimeoutMs(0)`)
+
+Question: should the firmware make serial writes non-blocking, given that the ESP32-S3's USB serial (HWCDC, esp32 core 3.3.10) can block each write ≈ 2 s once a host has read the port and then stopped reading? Options: A. one line after `Serial.begin(115200)`: `Serial.setTxTimeoutMs(0);` (`HWCDC.cpp:504-506`), so a line that does not fit the TX ring is dropped instead of waited for. B. no code change; a procedure rule that a capture monitor must be reading (or the board freshly reset) during any command run.
+
+Ruling: A (ruled as Hong while away; analysed and raised by A-F5-adj, which recommended verifying the stall first, then A). A-F5b's probe confirmed it before the fix was kept.
+
+Reason: a log write must never stall the executor or `onWrite` in timing-critical firmware. With the default 100 ms timeout, `HWCDC::write` retries up to 20 × 100 ms while the host is still "plugged" but not reading (`HWCDC.cpp:582-603`) and leaves `connected` true, so every later line waits again. That would stall `loop()` ≈ 2 s per command (D3's lines) and the NimBLE host task ≈ 2 s per `CONN`/`SUB`/`DISC` line (`onWrite`, PONG, P4 `connect()`'s PING after a reconnect). B is fragile: every V/H soak and P4 `connect()` after a capture would inherit the stall. A-F5b's probe (no keystrokes; monitor opened and closed, then 15 RELEASE_ALLs with no monitor) measured write→DONE ≈ 30 ms × 8 then ≈ 1994-2010 ms × 7 on `747b708`, and 15/15 at 29.7-43.9 ms on `5a779b6`. `HWCDC.cpp` 3.3.10 :544, :590, :593-603, :625-627 confirm that at timeout 0 a write returns and drops the line if there is no room.
+
+Affects: serial logging timing for every line the firmware prints (loop and NimBLE host tasks); plan A task F5. Plan lines as of `4174c3e`: F5 :853-859. Applied in `5a779b6` (firmware, `setup()`) and `2de8cae` (plan text).
+
+Cost if wrong (no real hazard): one harmless line. Cost of the fix itself: serial log lines are dropped when no host reads, so captures keep a monitor open and reading for the whole run. `Serial.flush()` at timeout 0 discards pending output (`HWCDC.cpp:646-658`); the sketch never calls it.
+
+Undo: `git revert 5a779b6` (it only adds the call and its comment in `setup()`, `firmware/Helix_BLE/Helix_BLE.ino:299-302`), then compile, flash and check the serial log per F5 step 5. For the plan text, delete F5 :853-859.
