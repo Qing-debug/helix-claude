@@ -1,5 +1,6 @@
 """Tests for src/input/link.py (plan A task P4). The board is a scripted fake that runs on the link's loop thread."""
 import asyncio
+import gc
 import logging
 import struct
 import subprocess
@@ -74,6 +75,9 @@ class FakeClient:
         self.notify_uuid = None
         self.connected = False
         self.disconnect_calls = 0
+        self.gone = asyncio.Event()  # set when the link is torn down: ends the writes a dead_peer handler holds
+        self.hold_past_disconnect = False  # True: disconnect() leaves them held (release_held() ends them)
+        self.in_flight = None  # seq of the write a dead_peer handler took as the one in flight
 
     async def connect(self, **kwargs):
         await self.board.on_connect(self)
@@ -92,6 +96,8 @@ class FakeClient:
     async def disconnect(self):
         self.disconnect_calls += 1
         self.connected = False
+        if not self.hold_past_disconnect:
+            self.gone.set()
 
     def notify(self, data):
         if self.cb is not None and self.connected:
@@ -164,7 +170,38 @@ class FakeBoard:
 
 
 async def hang(*args):
+    """A write that never completes but ends at once when cancelled."""
     await asyncio.Event().wait()
+
+
+def dead_peer(queued_cancel=False):
+    """A board handler for a write to a peer that is gone, as bleak runs it on WinRT: winrt's wrap_async
+    (winrt/runtime/_internals.py:237-243) answers a cancel with `op.cancel(); await event.wait(); raise`, so a cancel
+    is held until the op completes, and the op completes only when the link is torn down (A-V2link). With
+    queued_cancel, only the first write is in flight and a cancel ends a later (queued) one at once: the model that
+    reproduced the live ~0.97 s detection (A-V2link repro row 2)."""
+
+    async def handler(client, seq, data):
+        in_flight = client.in_flight is None
+        if in_flight:
+            client.in_flight = seq
+        try:
+            await client.gone.wait()
+        except asyncio.CancelledError:
+            if in_flight or not queued_cancel:
+                await client.gone.wait()
+            raise
+        raise OSError("peer gone")
+
+    return handler
+
+
+held = dead_peer()
+
+
+def release_held(lk, client):
+    """End the writes a dead_peer handler still holds (hold_past_disconnect), so no task is left pending."""
+    lk._loop.call_soon_threadsafe(client.gone.set)
 
 
 def make_link(board, scanner=None):
@@ -293,12 +330,16 @@ def test_disconnect_during_long_play_is_link_lost_within_1s(link, board):
     assert [e for _, e in link.faults()] == [InputError.LINK_LOST]
 
 
-def test_keepalive_pong_loss_is_fault_within_1s(link, board):
-    board.ping = hang
-    t = time.perf_counter()
-    assert wait_until(lambda: link.faults(), timeout=1.0)
-    assert time.perf_counter() - t <= 1.0
+@pytest.mark.parametrize("handler", [hang, held, dead_peer(queued_cancel=True)],
+                         ids=["cancel_ends_write", "writes_held", "in_flight_write_held"])
+def test_keepalive_pong_loss_is_fault_within_0_8s_of_the_last_pong(link, board, handler):
+    """Designed: the next tick's PING (<= 250 ms after the last PONG) + its 500 ms limit, also when the write to the
+    dead peer ignores its cancel (A-LK); the old code took ~1.0 s (in_flight_write_held) or never ended (writes_held)."""
+    board.ping = handler
+    assert wait_until(lambda: link.faults(), timeout=2.0)
     assert [e for _, e in link.faults()] == [InputError.LINK_LOST]
+    last_pong_ns = link.take_pongs()[-1][0]
+    assert (link.faults()[0][0] - last_pong_ns) / 1e9 <= 0.8
 
 
 def test_too_long_against_client_mtu():
@@ -534,11 +575,13 @@ def test_release_all_write_raises(link, board):
     assert link.release_all().failure() == InputError.WRITE_FAILED
 
 
-def test_release_all_write_never_completes(link, board):
-    board.release = hang
+@pytest.mark.parametrize("handler", [hang, held], ids=["cancel_ends_write", "write_held"])
+def test_release_all_write_never_completes(link, board, handler):
+    board.release = handler
     t = time.perf_counter()
-    assert link.release_all().failure() == InputError.WRITE_FAILED
-    assert time.perf_counter() - t < 0.8
+    bg = Bg(link.release_all)
+    assert bg.join().failure() == InputError.WRITE_FAILED
+    assert bg.t_end - t < 0.8
 
 
 @pytest.mark.parametrize("note,err", [(lambda s: n_done(s, 1, 1, fail_step=0, rc=-1), InputError.NOTIFY_FAILED),
@@ -685,7 +728,7 @@ def test_keepalive_schedule_and_blocked_write(link, board):
 
     async def block(client, seq, data):
         blocked.append(time.perf_counter_ns())
-        await asyncio.Event().wait()
+        await held(client, seq, data)
 
     bg = Bg(link.play, walk_steps(3000))
     assert wait_until(lambda: board.ops(OP_PLAY))
@@ -840,15 +883,16 @@ def test_other_failures_are_not_faults(link, board, handler, err):
     assert link.faults() == []
 
 
-@pytest.mark.parametrize("handler", [hang, answering()], ids=["write_blocked", "no_pong"])
+@pytest.mark.parametrize("handler", [hang, held, answering()], ids=["write_blocked", "write_held", "no_pong"])
 def test_ping_ack_timeout_is_a_fault_and_the_session_stays_live(board, monkeypatch, handler):
     monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)  # after connect(), only this ping() writes
     lk = connected_link(board)
     try:
         board.ping = handler
         t = time.perf_counter()
-        assert lk.ping().failure() == InputError.ACK_TIMEOUT
-        assert time.perf_counter() - t < 0.6
+        bg = Bg(lk.ping)
+        assert bg.join().failure() == InputError.ACK_TIMEOUT
+        assert bg.t_end - t < 0.6
         assert fault_errors(lk) == [InputError.ACK_TIMEOUT]
         board.ping = board.default_ping
         assert is_successful(lk.ping())
@@ -888,11 +932,16 @@ def test_ping_write_failure_is_returned_and_the_session_stays_live(board, monkey
     ("drop", InputError.LINK_LOST, [InputError.LINK_LOST]),
     ("close", InputError.NOT_CONNECTED, []),
 ])
-def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults):
+@pytest.mark.parametrize("handler", [answering(), held], ids=["no_pong", "write_held"])
+def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults, handler):
+    """no_pong: the write completes, the PONG never comes. write_held: the write never completes, not even at the
+    disconnect, and ignores its cancel (A-LK; plan P4: a ping() blocked in its write returns within its 0.5 s)."""
     monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)
     lk = connected_link(board)
+    client = board.client
+    client.hold_past_disconnect = True
     try:
-        board.ping = answering()  # the write completes, the PONG never comes
+        board.ping = handler
         n0 = len(board.ops(OP_PING))
         bg = Bg(lk.ping)
         assert wait_until(lambda: len(board.ops(OP_PING)) > n0)
@@ -903,6 +952,7 @@ def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults
         assert fault_errors(lk) == faults
     finally:
         lk.close()
+        release_held(lk, client)
 
 
 # ---------------------------------------------------------------- a write blocked at session end (A-P4-R I2, P4 :1084-1086)
@@ -914,10 +964,10 @@ def test_command_blocked_in_its_write_fails_at_once_on_link_lost(link, board, ca
 
     async def block_ping(client, seq, data):
         blocked.append(time.perf_counter())
-        await asyncio.Event().wait()
+        await held(client, seq, data)
 
     board.ping = block_ping
-    board.play = board.release = hang
+    board.play = board.release = held
     assert wait_until(lambda: blocked)
     time.sleep(0.3)  # the keepalive miss lands 0.5 s after the first blocked PING: this command is mid-write by then
     bg = Bg(link.play, tap_steps()) if call == "play" else Bg(link.release_all)
@@ -928,32 +978,45 @@ def test_command_blocked_in_its_write_fails_at_once_on_link_lost(link, board, ca
 
 
 @pytest.mark.parametrize("end", ["close", "drop"])
-def test_play_blocked_in_its_write_fails_at_once_when_the_session_ends(link, board, end):
-    board.play = hang
+@pytest.mark.parametrize("handler", [hang, held], ids=["cancel_ends_write", "write_held"])
+def test_play_blocked_in_its_write_fails_at_once_when_the_session_ends(link, board, end, handler):
+    """write_held: the write ignores its cancel and outlives the disconnect (A-LK)."""
+    client = board.client
+    client.hold_past_disconnect = True
+    board.play = handler
     bg = Bg(link.play, tap_steps())
-    assert wait_until(lambda: board.ops(OP_PLAY))
-    t = time.perf_counter()
-    board.client.drop() if end == "drop" else link.close()
-    assert bg.join().failure() == (InputError.LINK_LOST if end == "drop" else InputError.NOT_CONNECTED)
-    assert bg.t_end - t < 0.1
+    try:
+        assert wait_until(lambda: board.ops(OP_PLAY))
+        t = time.perf_counter()
+        client.drop() if end == "drop" else link.close()
+        assert bg.join().failure() == (InputError.LINK_LOST if end == "drop" else InputError.NOT_CONNECTED)
+        assert bg.t_end - t < 0.1
+    finally:
+        release_held(link, client)
 
 
-def test_session_end_while_a_write_timeout_is_expiring(link, board):
-    """The write's own timeout has fired (task cancelled, not yet unwound) when the session ends: still a clean end."""
-    board.play = hang
-    bg = Bg(link.play, tap_steps())
-    assert wait_until(lambda: board.ops(OP_PLAY))
+def test_abandoned_writes_leave_no_unretrieved_task_exception(board):
+    """A PING returns on its PONG without waiting for its write (A-LK); a write that fails after that is retrieved,
+    so asyncio never reports "Task exception was never retrieved" (nor a pending task destroyed)."""
+    async def pong_then_fail(client, seq, data):
+        board.send_pong(client, seq)
+        await asyncio.sleep(0.02)
+        raise RuntimeError("write failed after its PONG")
 
-    async def expire_then_end():
-        (cm,) = link._session.writes
-        cm.reschedule(link._loop.time())  # runs the timeout handler on the next loop iteration ...
-        link._loop.call_soon(link._end_session, InputError.LINK_LOST)  # ... and this right after it, before the task unwinds
-
-    asyncio.run_coroutine_threadsafe(expire_then_end(), link._loop).result(2.0)
-    assert bg.join().failure() == InputError.LINK_LOST
-    assert wait_until(lambda: board.client.disconnect_calls == 1)
-    assert fault_errors(link) == [InputError.LINK_LOST]
-    assert link.play(tap_steps()).failure() == InputError.NOT_CONNECTED
+    lk = connected_link(board)
+    reported = []
+    lk._loop.set_exception_handler(lambda loop, ctx: reported.append(ctx.get("message")))
+    try:
+        board.ping = pong_then_fail
+        assert is_successful(lk.ping())
+        time.sleep(0.6)  # >= 2 keepalive ticks, each a PING whose write fails after its PONG
+        assert lk.faults() == []
+    finally:
+        lk.close()
+    time.sleep(0.05)
+    del lk
+    gc.collect()
+    assert reported == []
 
 
 # ---------------------------------------------------------------- connect() returns Failure, never raises (A-P4-R m1)
