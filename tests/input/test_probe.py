@@ -6,10 +6,12 @@ perfect keyboard) into a shared key log that `ProbeSink.stop()` writes as the pr
 probe reports run analyze.py / realism.py on real C5 files.
 """
 import asyncio
+import io
 import json
 import math
 import random
 import re
+import sys
 import threading
 
 import pytest
@@ -558,6 +560,21 @@ def test_main_runs_the_selected_probes(tmp_path, clock, monkeypatch):
     monkeypatch.setattr(probe, "PROBES", {"one": _dummy("one"), "two": _dummy("two")})
     assert probe.main(["--probes", "two", "--out", str(tmp_path / "x"), "--seed", "1"]) == probe.EXIT_OK
     assert (tmp_path / "x" / "two" / "report.txt").exists() and not (tmp_path / "x" / "one").exists()
+
+
+def test_main_prints_reports_verbatim_through_a_cp1252_stdout(tmp_path, clock, monkeypatch):
+    # A-V1live-D1: a redirected stdout is cp1252 on Windows and the reports quote analyze's "≥"/"≤" targets, so the
+    # first report print crashed (UnicodeEncodeError) without PYTHONIOENCODING=utf-8 in the environment
+    rig = Rig(clock)
+    monkeypatch.setattr(probe, "_new_link", rig.new_link)
+    monkeypatch.setattr(probe, "_start_sink", rig.start_sink)
+    monkeypatch.setattr(probe, "PROBES", {"one": _dummy("one", report=lambda run_dir: probe.ProbeReport(
+        ["target: ≥10,000 commands, p99 ≤ 100 ms"]))})
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="cp1252"))
+    assert probe.main(["--probes", "one", "--out", str(tmp_path / "x"), "--seed", "1"]) == probe.EXIT_OK
+    sys.stdout.flush()
+    assert "target: ≥10,000 commands, p99 ≤ 100 ms" in buf.getvalue().decode("utf-8")
 
 
 # ---- piece 2: shared helpers --------------------------------------------------------------------------

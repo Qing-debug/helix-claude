@@ -1078,6 +1078,8 @@ def config_from_args(args: argparse.Namespace) -> ProbeConfig:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")   # reports quote "≥"/"≤"; a redirected stdout is cp1252 on Windows
     args = parse_args(argv)
     if args.run_sheet:
         for line in run_sheet():
