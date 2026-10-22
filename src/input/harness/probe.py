@@ -575,12 +575,28 @@ def m6_report(run_dir: Path) -> ProbeReport:
 
 M8_N = 100  # m8 sends m7's 100 taps
 M8_GRANULARITY_MS = (10.0, 16.0)
-M8_STAMP_TOLERANCE_MS = 1.0  # qpc_ns is stamped in the hook callback, a little after the tick was taken
+M8_TICK_TOLERANCE_MS = 1.0  # tick_ms is a whole ms count (a 15.625 ms grid reads as 15/16 ms steps): the grid fit's
+#                             tolerance, and the slack above the band's top
+M8_FIT_RANGE_MS = (1.0, 40.0)  # periods tried, 1 us apart, largest first
+
+
+def _tick_grid_ms(diffs: Sequence[int]) -> float:
+    """The largest period g in M8_FIT_RANGE_MS such that every tick difference is within M8_TICK_TOLERANCE_MS of a
+    multiple of g. A submultiple of the true period fits too, which taking the largest g rules out. Integer-ms ticks
+    always fit the 1 ms floor of the range."""
+    lo_us, hi_us = (round(v * 1000) for v in M8_FIT_RANGE_MS)
+    for us in range(hi_us, lo_us, -1):
+        g = us / 1000
+        if all(abs(d - round(d / g) * g) <= M8_TICK_TOLERANCE_MS for d in diffs):
+            return g
+    return M8_FIT_RANGE_MS[0]
 
 
 def m8_report(run_dir: Path) -> ProbeReport:
-    """tick_ms lags the true time by [0, granularity), so tick_ms - qpc_ns (both from the first event) spans about
-    one granularity: its p99 - p1 is the estimate. Expected 10-16 ms (listener.RawKeyEvent)."""
+    """The tick_ms granularity is a grid fit on tick_ms differences (_tick_grid_ms), not on tick_ms - qpc_ns: over
+    BLE-HID input tick_ms trails the hook's qpc_ns by a spread of about two ticks, not one (A-M8), so the residual's
+    p99 - p1 reads about 2x the granularity. The residual and the step counts are reported as information.
+    Expected 10-16 ms (listener.RawKeyEvent)."""
     run = analyze.load_run(run_dir)
     keys = run.keys
     head = f"M8: {len(keys)} key events (transitions and repeats) of {len(analyze.commands_of(run))} taps"
@@ -589,20 +605,26 @@ def m8_report(run_dir: Path) -> ProbeReport:
                            ["tick_ms granularity: n/a, fewer than 2 key events"])
     t0, q0 = keys[0]["tick_ms"], keys[0]["qpc_ns"]
     # tick_ms is a u32 millisecond count: _wrap_us's signed u32 difference applies unchanged
-    resid = [_wrap_us(e["tick_ms"] - t0) - (e["qpc_ns"] - q0) / analyze.NS_PER_MS for e in keys]
+    diffs = [_wrap_us(e["tick_ms"] - t0) for e in keys]
+    resid = [d - (e["qpc_ns"] - q0) / analyze.NS_PER_MS for d, e in zip(diffs, keys)]
     steps = Counter(_wrap_us(b["tick_ms"] - a["tick_ms"]) for a, b in zip(keys, keys[1:]))
     nonzero = sorted((d, n) for d, n in steps.items() if d != 0)
-    est = analyze.percentile(resid, 99) - analyze.percentile(resid, 1)
-    lo, hi = M8_GRANULARITY_MS
-    ok = lo <= est <= hi + M8_STAMP_TOLERANCE_MS
     lines = [head,
              "tick_ms - qpc_ns (ms, from the first event): " + summary(resid),
              "nonzero tick steps between events (smallest 8, ms x count): "
-             + ", ".join(f"{d} x{n}" for d, n in nonzero[:8]) + f"; zero steps {steps.get(0, 0)}",
-             f"M8 tick_ms granularity: {'CONFIRMED' if ok else 'NOT CONFIRMED'} ~{est:.3f} ms (p99 - p1 of tick_ms - "
-             f"qpc_ns; expected {lo:g}-{hi:g} ms, +{M8_STAMP_TOLERANCE_MS:g} ms for the hook's stamp delay)"]
+             + ", ".join(f"{d} x{n}" for d, n in nonzero[:8]) + f"; zero steps {steps.get(0, 0)}"]
+    distinct = set(diffs) - {0}
+    if len(distinct) < 2:  # one offset fits every g that divides it: nothing to fit
+        lines.append("M8 tick_ms granularity: n/a (tick_ms showed fewer than 2 distinct offsets from the first event)")
+        return ProbeReport(lines, ["tick_ms granularity: n/a, tick_ms showed fewer than 2 distinct offsets from the "
+                                   "first event"])
+    est = _tick_grid_ms(sorted(distinct))
+    lo, hi = M8_GRANULARITY_MS
+    ok = lo <= est <= hi + M8_TICK_TOLERANCE_MS
+    lines.append(f"M8 tick_ms granularity: {'CONFIRMED' if ok else 'NOT CONFIRMED'} ~{est:.3f} ms (grid fit on "
+                 f"tick_ms differences; expected {lo:g}-{hi:g} ms, +{M8_TICK_TOLERANCE_MS:g} ms for whole-ms ticks)")
     review = [] if ok else [f"tick_ms granularity ~{est:.3f} ms is outside {lo:g}-{hi:g} ms "
-                            f"(+{M8_STAMP_TOLERANCE_MS:g}): KBDLLHOOKSTRUCT.time is not the 10-16 ms tick "
+                            f"(+{M8_TICK_TOLERANCE_MS:g}): KBDLLHOOKSTRUCT.time is not the 10-16 ms tick "
                             "listener.RawKeyEvent assumes"]
     return ProbeReport(lines, review)
 

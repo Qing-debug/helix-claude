@@ -8,6 +8,7 @@ probe reports run analyze.py / realism.py on real C5 files.
 import asyncio
 import json
 import math
+import random
 import re
 import threading
 
@@ -865,6 +866,30 @@ def test_m8_reviews_a_granularity_outside_10_to_16_ms(tmp_path, clock):
     assert code == probe.EXIT_OK
     rep = _report(tmp_path, "m8")
     assert "M8 tick_ms granularity: NOT CONFIRMED" in rep and "[review] m8: tick_ms granularity" in rep
+
+
+def _lagged_ticks(step_ms, max_lag_ticks, seed=7):
+    """tick_ms on a `step_ms` grid that trails each event by a random 0..max_lag_ticks ticks: BLE-HID input live
+    (A-M8: tick_ms trails the hook's qpc_ns by ~2 ticks, so tick_ms - qpc_ns spans ~2 ticks, not 1)."""
+    rng = random.Random(seed)
+    return lambda qpc: int(math.floor((qpc / MS - rng.uniform(0, max_lag_ticks * step_ms)) / step_ms) * step_ms)
+
+
+def test_m8_confirms_the_granularity_through_up_to_two_ticks_of_arrival_lag(tmp_path, clock):
+    # the live V1 try-3 failure: 15.625 ms ticks, p99 - p1 of tick_ms - qpc_ns read ~27 ms (A-M8)
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _lagged_ticks(15.625, 2)}))
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    est = float(re.search(r"M8 tick_ms granularity: CONFIRMED ~([\d.]+) ms", rep).group(1))
+    assert 15.5 < est < 15.75 and "[review]" not in rep
+
+
+def test_m8_a_tick_that_never_advances_is_n_a_and_reviewed(tmp_path, clock):
+    code, _ = _run(tmp_path, clock, probes=("m8",))  # the rig's default tick_ms is 0 for every event
+    assert code == probe.EXIT_OK
+    rep = _report(tmp_path, "m8")
+    assert "M8 tick_ms granularity: n/a" in rep and "[review] m8: tick_ms granularity: n/a" in rep
+    assert "CONFIRMED" not in rep
 
 
 # ---- piece 4: release-all probes (a second thread) ---------------------------------------------------------
