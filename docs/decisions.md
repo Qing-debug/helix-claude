@@ -344,3 +344,27 @@ Affects: the C5 file format (two new files) and the data flow H2 / V2 → H3; pl
 Cost if wrong: two extra harness files and their tests.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert 56443e6`.
+
+## A-PF-D2 (2026-10-22): BleLink.take_pongs() feeds C5 pongs.jsonl
+
+A′ (amended A). C3 `BleLink` gains `take_pongs() -> list[tuple[int, Pong]]`: every PONG that completes a pending PING (connect's ready wait, the keepalive, `ping()`), stamped with `perf_counter_ns` by the notify callback on decode, returned oldest first and drained. P4 bounds the buffer at `PONG_BUFFER_MAX = 4096` (drop-oldest, one WARNING per `take_pongs()` interval on `src.input.link`) and keeps it across reconnects. C5 `pongs.jsonl` now covers every PONG the link received, defines `qpc_ns` as that callback stamp, and rebuilds `flags` from `Pong`'s four bools (reserved bits 4-7 log as 0). H2 writes one row per entry after every command and on every exit path. The other option was B (H2's own 250 ms `ping()` thread); C (an `on_pong` callback) was also weighed and rejected.
+
+Reason: the opus-xhigh adjudicator (A-PF-adj1) found that the keepalive PONGs C5 asked for never left `BleLink`, and that `qpc_ns` and `flags` had no defined source. A′ reads the keepalive PONGs themselves with the decode-time stamp (the PA-fix1c-D1-adj-D1 pattern), adds no radio traffic, and keeps memory bounded for Features B-D (plain A grows ≈ 332 B per PONG, measured, ≈ 115 MB a day at 4 Hz). B doubles PING writes in the soak only, so the soak would measure latency under a load production never has; C runs harness I/O on the loop thread that stamps `accepted_ns`/`done_ns`.
+
+Affects: the C3 interface (`BleLink.take_pongs()`), P4's notify dispatch and the C5 `pongs.jsonl` definition; plan A tasks P4 and H2. Plan lines as of `cf2f9a1`: C3 :261, C5 :363-368, P4 :1011-1017 and Step 1 :1063-1067, H2 :1214-1215 and :1274-1276. Applied in `cb333ee`.
+
+Cost if wrong: low. If 4096 is too small between two drains, PONG rows drop with a WARNING (visible in `link.log`) and H2 must drain more often; the gap between drains is ≤ ~1 min (≤ ~240 PONGs).
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert cb333ee` (revert `90af6b1` first if its H2 hunks conflict).
+
+## A-PF-adj1-D3 (2026-10-22): C5 logs the REACTION sample's index
+
+A. C5 `commands.jsonl` gains `"reaction_index"` next to `"reaction_ms"`: the drawn R's `Sample.index` (C3, as A-PF-D1 defines it), null when no reaction was drawn and on a Failure row (so also on a `FOCUS_LOST` row, which draws none). H2 maps it from `ActionRecord.reaction.index`, and H2's schema test covers it. The other options were B (no field; P5 fixes the draw order, so R's index is inferred from the Plan's last sample index) and C (leave it out).
+
+Reason: the opus-xhigh adjudicator that raised it (A-PF-adj1) found that PAr-D1 §3 (`PAr-D1.md:85-86`) asks for the RNG seed and stream position of every chosen value, reaction included, and that C5 dropped the index P5 puts in `ActionRecord.reaction`. A is additive and does not rely on an unstated draw order; B breaks if the order ever changes; C leaves PAr-D1 §3 unmet for reaction. No second adjudicator: a single additive log field.
+
+Affects: the C5 file format (one field); plan A task H2. Plan lines as of `cf2f9a1`: C5 :348, :353-354 and :359-360, H2 :1216 and :1276-1277. Applied in `90af6b1`.
+
+Cost if wrong: one unused JSON field.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert 90af6b1`.
