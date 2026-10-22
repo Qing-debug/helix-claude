@@ -666,6 +666,18 @@ def test_connect_failure_aborts(tmp_path, driver_clock):
     assert code != 0 and "play" not in link.events and "release_all" in link.events
 
 
+@pytest.mark.parametrize("err", [InputError.LINK_LOST, InputError.NOT_CONNECTED])
+def test_a_link_loss_outside_a_fault_aborts_the_soak(tmp_path, driver_clock, err):
+    # A-H2-R-D2 → A: an unplanned drop ends the run through the normal abort path (it never recovers by itself)
+    link = DriverLink(driver_clock, fail_plays={3}, fail_error=err)
+    code, _, sink = _run(tmp_path, driver_clock, link=link, commands=10)
+    rows = _rows(tmp_path / "run" / "commands.jsonl")
+    assert code == soak.EXIT_ABORT
+    assert len(rows) == 3 and rows[-1]["error"] == str(err)
+    assert link.events[-2:] == ["release_all", "close"] and sink.stopped
+    assert _session(tmp_path / "run")["end_ns"] is not None
+
+
 # ---- start: wait for the operator's click on the sink (orchestrator ruling 18) ---------------------
 
 class ClickSink(DriverSink):
@@ -764,7 +776,8 @@ def test_min_hours_reached_first_runs_on_to_n(tmp_path, driver_clock):
 
 
 def test_min_hours_uses_the_span_to_the_last_done_not_the_wall_clock(tmp_path, driver_clock):
-    link = DriverLink(driver_clock, fail_plays=range(3, 11))  # plays 3..10 fail: null done_ns
+    link = DriverLink(driver_clock, fail_plays=range(3, 11),  # plays 3..10 fail: null done_ns
+                      fail_error=InputError.REJECTED)  # not a link loss, which would abort (A-H2-R-D2)
     code, _, _ = _run(tmp_path, driver_clock, link=link, commands=2, min_hours=5 * S / 3600e9)
     rows = _rows(tmp_path / "run" / "commands.jsonl")
     assert code == 0 and len(rows) == 11

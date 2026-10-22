@@ -26,7 +26,9 @@ pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not 
 Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (MapleStory check at start
 and every 60 s, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a clean
 abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
-command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C), `main` the CLI:
+command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C; a command that
+fails NOT_CONNECTED or LINK_LOST outside the one command after an injected fault is an unplanned link loss and also
+aborts, since nothing reconnects it: A-H2-R-D2), `main` the CLI:
 
     python -m src.input.harness.soak --commands 10000 --seed 1 [--min-hours H] [--out DIR] [--short]
                                      [--faults reset_board=5,bluetooth_off_on=5]
@@ -71,6 +73,7 @@ LINK_LOGGER = "src.input.link"
 LINK_LOG_FORMAT = "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
 
 FOCUS_LOST = "FOCUS_LOST"  # a harness status, not an InputError (C5)
+LINK_LOSS = (InputError.NOT_CONNECTED, InputError.LINK_LOST)  # a command Failure that aborts the run (D2)
 FOCUS_RECHECKS = 10
 FOCUS_RECHECK_PERIOD_S = 1.0
 # Start wait (orchestrator ruling 18): an agent-launched sink cannot take the foreground itself, so the run waits for
@@ -623,6 +626,10 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
                     outcome = _command(writer, sink, layer, seq, cmd)
                 if outcome.focus_lost:
                     raise _Abort(f"FOCUS_LOST at seq {seq}: the sink was not back after {FOCUS_RECHECKS} s")
+                if seq not in fault_at and not is_successful(outcome.result):
+                    lost = outcome.result.failure()
+                    if lost in LINK_LOSS:  # A-H2-R-D2: nothing reconnects an unplanned drop, so the run is over
+                        raise _Abort(f"{lost} at seq {seq}: the link was lost outside a fault")
                 if first_stimulus_ns is None:
                     first_stimulus_ns = outcome.row["stimulus_ns"]
                 if outcome.row["done_ns"] is not None:
