@@ -13,10 +13,18 @@ AsyncStatus`` and ``get_results()`` from ``_winrt_windows_foundation.pyi``). A r
 pywinrt raises a failed HRESULT) counts as a refusal too (A-H2-R M2). On a refusal it falls back to
 ``Disable-PnpDevice`` / ``Enable-PnpDevice`` on the Bluetooth adapter, which needs an elevated shell.
 
+``ALLOWED`` is not the transition (A-V2prep-R I1). Radio.SetStateAsync, Remarks
+(https://learn.microsoft.com/en-us/uwp/api/windows.devices.radios.radio.setstateasync): "The API returns after the
+request is queued; the observable transition may complete later." and "Hardware (for example, a physical kill switch)
+or policy can override an **Allowed** request, leaving the radio in its prior state. Always observe the subsequent
+StateChanged event (or re-read State) to confirm the effective state." So the radio path requires ``Radio.state`` ON
+before it starts, then re-reads it after each ``ALLOWED`` until it is OFF (then ON), within a bounded time.
+
 Stamps (PA-rev I5, PA-rev3b G2-G4; all ``perf_counter_ns``). The caller passes a ``FaultStamps``; the injector
 fills it on every path. ``injected_ns`` is the moment the fault takes effect, or None when that was not observed:
 esptool's reset line as the driver reads it from the pipe (not the launch, not the exit); for the radio, just
-before ``set_state_async(OFF)``, kept only if it returned ``ALLOWED``; for the fallback, the marker line the
+before ``set_state_async(OFF)``, kept only if it returned ``ALLOWED`` and ``Radio.state`` was then read ``OFF``; for
+the fallback, the marker line the
 PowerShell command prints right before ``Disable-PnpDevice``, kept only if the cmdlet's success line follows.
 ``launch_ns`` is esptool's start (None for ``bluetooth_off_on``). An injector can return ``Failure`` with
 ``injected_ns`` set: the fault took effect and a later part (exit code, switching back on) failed.
@@ -47,6 +55,9 @@ PNP_MARKER = "HELIX_BT_DISABLE_NOW"     # printed right before Disable-PnpDevice
 PNP_OFF_DONE = "HELIX_BT_DISABLED"      # printed after Disable-PnpDevice returned without error
 PNP_ON_DONE = "HELIX_BT_ENABLED"        # printed after Enable-PnpDevice returned without error
 _WINRT_TIMEOUT_S = 10.0
+_RADIO_OFF_TIMEOUT_S = 5.0   # A-V2prep-R I1: how long Radio.state may take to read OFF after an ALLOWED OFF
+_RADIO_ON_TIMEOUT_S = 10.0   # ... and ON after an ALLOWED ON
+_RADIO_POLL_S = 0.1
 _TAIL_LINES = 5
 
 # The Bluetooth adapter is the class-Bluetooth device on a bus (USB\ or PCI\); the rest are enumerators and
@@ -167,6 +178,8 @@ def reset_board(stamps: FaultStamps | None = None, *,
 class _Radio(Protocol):
     def set_state(self, on: bool) -> RadioAccessStatus: ...
 
+    def state(self) -> RadioState: ...
+
 
 class _WinrtRadio:
     def __init__(self, radio) -> None:
@@ -177,6 +190,9 @@ class _WinrtRadio:
         if op.wait(_WINRT_TIMEOUT_S) != AsyncStatus.COMPLETED:  # timed out, cancelled or errored: not ALLOWED
             return RadioAccessStatus.UNSPECIFIED
         return RadioAccessStatus(op.get_results())
+
+    def state(self) -> RadioState:
+        return RadioState(self._radio.state)
 
 
 def _find_bluetooth_radio() -> Result[_Radio, str]:
@@ -227,28 +243,68 @@ def _pnp_off_on(seconds: float, stamps: FaultStamps, sleep: Callable[[float], No
     return Success(None)
 
 
+def _read_state(radio: _Radio) -> Result[RadioState, str]:
+    try:
+        return Success(radio.state())
+    except OSError as e:
+        return Failure(f"reading the radio state failed: {e}")
+
+
+def _await_state(radio: _Radio, target: RadioState, timeout_s: float,
+                 sleep: Callable[[float], None]) -> Result[None, str]:
+    """Re-read ``Radio.state`` every ``_RADIO_POLL_S`` until it is ``target``; Failure after ``timeout_s``."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        state = _read_state(radio)
+        if not is_successful(state):
+            return state
+        if state.unwrap() == target:
+            return Success(None)
+        if time.monotonic() >= deadline:
+            return Failure(f"state still {state.unwrap().name} {timeout_s:g} s after {target.name} was ALLOWED")
+        sleep(_RADIO_POLL_S)
+
+
+def _radio_on(radio: _Radio, sleep: Callable[[float], None]) -> Result[None, str]:
+    """Request ON and wait until the radio reads ON. Every Failure says Bluetooth is left off."""
+    try:
+        status = radio.set_state(True)
+    except OSError as e:
+        return Failure(f"radio ON call failed: {e}; Bluetooth left off")
+    if status != RadioAccessStatus.ALLOWED:
+        return Failure(f"radio ON refused ({status.name}); Bluetooth left off")
+    on = _await_state(radio, RadioState.ON, _RADIO_ON_TIMEOUT_S, sleep)
+    return on.alt(lambda e: f"radio did not turn on ({e}); Bluetooth left off")
+
+
 def bluetooth_off_on(seconds: float, stamps: FaultStamps | None = None, *, fallback: bool = True,
                      sleep: Callable[[float], None] = time.sleep) -> Result[None, str]:
-    """Bluetooth radio off, wait ``seconds``, on. Returns once it is on again (or on the failure)."""
+    """Bluetooth radio off, wait ``seconds``, on. On the radio path each step is confirmed by reading
+    ``Radio.state`` (OFF within ``_RADIO_OFF_TIMEOUT_S``, then ON within ``_RADIO_ON_TIMEOUT_S``), so Success means
+    the radio was seen OFF and then seen ON again. Once OFF was requested, ON is always requested before returning."""
     stamps = stamps if stamps is not None else FaultStamps()
     found = _find_bluetooth_radio()
     if is_successful(found):
         radio = found.unwrap()
+        initial = _read_state(radio)
+        if not is_successful(initial):
+            return initial.alt(lambda e: f"{e}; nothing toggled")
+        if initial.unwrap() != RadioState.ON:
+            return Failure(f"Bluetooth radio is {initial.unwrap().name}, not ON, before the fault; nothing toggled")
         before_ns = time.perf_counter_ns()
         try:
             status = radio.set_state(False)
         except OSError as e:  # a failed WinRT call: a refusal like any other (A-H2-R M2)
             status, refusal = None, f"radio OFF call failed: {e}"
         if status == RadioAccessStatus.ALLOWED:
+            off = _await_state(radio, RadioState.OFF, _RADIO_OFF_TIMEOUT_S, sleep)
+            if not is_successful(off):  # the fault never took effect: no stamp; ON in case OFF lands late
+                on = _radio_on(radio, sleep)
+                back = "switched back ON" if is_successful(on) else on.failure()
+                return Failure(f"radio did not turn off ({off.failure()}); {back}")
             stamps.injected_ns = before_ns
             sleep(seconds)
-            try:
-                status_on = radio.set_state(True)
-            except OSError as e:
-                return Failure(f"radio ON call failed: {e}; Bluetooth left off")
-            if status_on != RadioAccessStatus.ALLOWED:
-                return Failure(f"radio ON refused ({status_on.name}); Bluetooth left off")
-            return Success(None)
+            return _radio_on(radio, sleep)
         if status is not None:
             refusal = f"radio OFF refused ({status.name})"
     else:
