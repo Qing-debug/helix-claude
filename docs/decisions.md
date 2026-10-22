@@ -380,3 +380,27 @@ Affects: capture data behaviour (which output and which reboots a capture contai
 Cost if wrong: if `dtr=off,rts=off` ever loses boot lines, F3's first capture shows it and the flag comes out (one plan line per step).
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F2-R); undo: `git revert 63683fb 3ffe9d8`.
+
+## walk-T (2026-10-22): C5 commands.jsonl logs a walk's intended T as intended_ms
+
+A, kept with two amends. C5 `commands.jsonl` keeps `"intended_ms"` after `"action"` (`cf2f9a1`): the T passed to `walk()`, on every WALK row (Success, Failure, `FOCUS_LOST`) and null on other actions; it is not nulled on Failure or `FOCUS_LOST` rows (driver input, like `action`). H2's Step 1 test now states this, and H4's "WALK error stats" is defined as `chosen_ms − intended_ms` per Success WALK row (mean, SD; reported, not gated). The other option was to drop the field and define the stat without it.
+
+Reason: the opus-xhigh adjudicator (PA-rev6b Q5) found that T ~ U(300, 3000) is a per-walk driver draw (H2) logged nowhere else (`chosen_ms` and `steps` hold the drawn hold, not T), so without the field H4 could only re-run H2's seeded RNG, which couples H4 to H2's draw order. PAr-D1.md:86 asks to log "For walks, the intended T" regardless of H4, and "WALK error stats" had no definition since `8faa312`. Only H4 reads the field (H3 never does); Failure and `FOCUS_LOST` WALK rows have null `samples`, so they give no pair and H4 skips them.
+
+Affects: the C5 file format (one nullable field); plan A tasks H2 (test) and H4 (stat definition). Plan lines as of `468d593`: C5 :345-346, H2 Step 1 :1319-1320, H4 :1494-1495. Applied in `cf2f9a1` (C5) and `cf37a9e` (amends).
+
+Cost if wrong: one unused nullable field in `commands.jsonl`.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in PA-rev6b); undo: remove the `intended_ms` clause at C5 :345-346 by hand (`git revert cf2f9a1` would also undo K1 and K4) and `git revert cf37a9e`.
+
+## PA-rev6b-I-1 (2026-10-22): F5's abortRequested count is atomic and never reset
+
+A. F5's `abortRequested` count (A-PF m9: `onWrite` increments it for each RELEASE_ALL, the executor decrements it on each, and a PLAY is aborted while it is > 0) is never reset by the executor: a count > 0 with an empty queue is a RELEASE_ALL that `onWrite` has counted but not yet queued. `onWrite` counts only a RELEASE_ALL it queues (on QUEUE_FULL it takes the increment back before replying), and every change is atomic (`std::atomic<int>` or a critical section), because the host task and the loop task both change it. This replaces `a848c35`'s "If the count is > 0 and the queue is empty, the executor sends all-up and sets it to 0"; m9's "> 0" and "decrements" stay (PA-rev6b Q8). The other option was to keep the reset to 0.
+
+Reason: the opus-xhigh adjudicator (PA-rev6b) found that the reset races `onWrite` (an inferred interleaving, from the plan text): `onWrite` runs on the host task and the executor on the loop task, so an executor pass between `onWrite`'s increment and its enqueue sees count 1 and an empty queue, sets 0, then dequeues the RELEASE_ALL and decrements to −1. A signed count then never pre-empts a running PLAY again; an unsigned one wraps and every PLAY is ABORTED; either is stuck until reboot. `++`/`--` from two tasks on the dual-core S3 without an atomic can also lose an update (P4 names two concurrent releases), with the same results. The old bool's "clears" was idempotent, so the race arrived with the count.
+
+Affects: the firmware concurrency model (F5's `onWrite` and executor); plan A task F5. Plan lines as of `468d593`: F5 :795-799. Applied in `0418d94`.
+
+Cost if wrong: one F5 paragraph rewritten again before F5 is built.
+
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in PA-rev6b); undo: `git revert 0418d94`.
