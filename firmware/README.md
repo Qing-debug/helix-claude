@@ -73,7 +73,11 @@ closing the monitor reboots the board (see "Observed behaviour").
 
 1. Stop the monitor, then read the "Guiness" last-connected time (command below). This is reading (1).
 2. Run the reset command. Expected: `Hard resetting via RTS pin...` and exit 0.
-3. Reopen the monitor at once with the Monitor command, with nothing in between.
+3. Reopen the monitor at once with the Monitor command, with nothing in between. From a script, hold its stdin
+   open for the whole capture, for example
+   `timeout 60 "$CLI" monitor -p "$PORT" -c baudrate=115200,dtr=off,rts=off --timestamp < <(sleep 65) > "$REPO/data/<name>.log"`.
+   arduino-cli ends the monitor when stdin reaches EOF (arduino-cli 1.5.1 `internal/cli/monitor/monitor.go:292-303`),
+   so with stdin at EOF it exits at once, exit 0, with an empty log.
 4. After the capture, stop the monitor and read the last-connected time again. This is reading (4).
 
 Evidence of the reboot (record which one showed it):
