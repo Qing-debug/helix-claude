@@ -303,3 +303,61 @@ def test_start_raises_oserror_carrying_the_sink_threads_error(tmp_path, monkeypa
     _fake_hook_ok(lst)
     with pytest.raises(OSError, match="no display for the sink"):
         lst._start()
+
+
+# ---- stop() (A-H1-R m1, m2): fake threads and a fake user32, no hook ---------------------------------
+
+class FakeThread:
+    def __init__(self, alive=False):
+        self.alive = alive
+        self.joined = []
+
+    def join(self, timeout=None):
+        self.joined.append(timeout)
+
+    def is_alive(self):
+        return self.alive
+
+
+class FakeUser32:
+    def __init__(self, post_ok):
+        self.post_ok = post_ok
+        self.posts = []
+
+    def PostThreadMessageW(self, tid, msg, w, l):
+        self.posts.append((tid, msg, w, l))
+        return 1 if self.post_ok else 0
+
+
+def _stoppable(monkeypatch, hook_alive, post_ok):
+    fake_user32 = FakeUser32(post_ok)
+    monkeypatch.setattr(listener_mod, "_user32", fake_user32)
+    lst = Listener(out_dir="unused", block=True, foreground=FakeForeground(0, True))
+    lst._threads = [FakeThread(), FakeThread(alive=hook_alive), FakeThread()]
+    lst._hook_tid = 4242
+    return lst, fake_user32
+
+
+def test_stop_on_a_listener_that_never_started_is_a_noop():
+    lst = Listener(out_dir="unused", block=True, foreground=FakeForeground(0, True))
+    lst.stop()
+    lst.stop()
+
+
+def test_stop_posts_quit_and_stays_quiet_when_the_hook_thread_exits(monkeypatch, capsys):
+    lst, u32 = _stoppable(monkeypatch, hook_alive=False, post_ok=True)
+    lst.stop()
+    assert u32.posts == [(4242, listener_mod.WM_QUIT, 0, 0)]
+    assert capsys.readouterr().err == ""
+    assert lst._sink_stop.is_set()
+
+
+def test_stop_says_so_when_the_quit_post_fails_and_the_hook_thread_stays_alive(monkeypatch, capsys):
+    lst, u32 = _stoppable(monkeypatch, hook_alive=True, post_ok=False)
+    lst.stop()  # must not raise, and must still stop the writer and the sink
+    err = capsys.readouterr().err
+    assert "WM_QUIT" in err
+    assert "hook thread did not exit" in err
+    assert "blocked" in err
+    assert lst._sink_stop.is_set()
+    assert not lst._queue.empty()  # the writer's _STOP was queued

@@ -327,10 +327,15 @@ class Listener:
         if self._stopped:
             return
         self._stopped = True
+        if len(self._threads) < 3:  # never started
+            return
         hook_th, sink_th = self._threads[1], self._threads[2]
-        if self._hook_tid is not None:
-            _user32.PostThreadMessageW(self._hook_tid, WM_QUIT, 0, 0)
+        if self._hook_tid is not None and not _user32.PostThreadMessageW(self._hook_tid, WM_QUIT, 0, 0):
+            print("could not post WM_QUIT to the hook thread", file=sys.stderr, flush=True)
         hook_th.join(_STARTUP_TIMEOUT_S)
+        if hook_th.is_alive():
+            print("hook thread did not exit; the bot keys may stay blocked until the process ends",
+                  file=sys.stderr, flush=True)
         self._queue.put(_STOP)
         self._threads[0].join(_STARTUP_TIMEOUT_S)
         self._sink_stop.set()
