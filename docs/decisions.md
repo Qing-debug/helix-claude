@@ -427,7 +427,7 @@ Affects: the firmware's serial log format (no H, V or D task parses `CONN` lines
 
 Cost if wrong: M1's request outcome stays unobserved until F5; nothing is flashed until F5 runs.
 
-Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert b100b5b`, which conflicts at F5 step 5 :842-843 only because `eded7b0` rewrapped the line above; resolve it by keeping the current wrap and restoring "a `CONN` line".
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-F3-R); undo: `git revert b100b5b`, which conflicts at F5 step 5 :846-849 (plan lines as of `4d21160`) only because `eded7b0` rewrapped the three lines above (:846-848); resolve it by keeping the current wrap and restoring "a `CONN` line" (or `git revert 210d18b eded7b0` first, which makes this revert clean, but also undoes A-F3-R-c).
 
 ## A-F3-R-c (2026-10-22): scripted capture monitors hold stdin open
 
