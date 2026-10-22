@@ -269,7 +269,7 @@ def test_radio_on_refused_after_off_keeps_the_stamp_and_fails(monkeypatch):
     _fake_radio(monkeypatch, FakeRadio(RadioAccessStatus.ALLOWED, on_status=RadioAccessStatus.DENIED_BY_SYSTEM))
     stamps = FaultStamps()
     result = bluetooth_off_on(0, stamps)
-    assert not is_successful(result) and "ON" in result.failure()
+    assert not is_successful(result) and "ON" in result.failure() and "Bluetooth left off" in result.failure()
     assert stamps.injected_ns is not None  # the radio did go off
 
 
@@ -313,6 +313,7 @@ def test_radio_on_call_raising_after_off_keeps_the_stamp_and_fails(monkeypatch):
     stamps = FaultStamps()
     result = bluetooth_off_on(0, stamps)
     assert not is_successful(result) and "ON" in result.failure() and "Access is denied" in result.failure()
+    assert "Bluetooth left off" in result.failure()
     assert stamps.injected_ns is not None and ran == []  # the radio did go off; no fallback after it
 
 
