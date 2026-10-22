@@ -331,7 +331,7 @@ Affects: plan A task order and the module boundaries / data flow between H2-H4 a
 
 Cost if wrong: the release-all ordering check now runs after H2's 200-command dry run, so the worst case is one ≤ 10 s schedule of bot keys (no Enter) into the test window during that dry run; and P4/P5 hardware bugs surface in H2's dry run, where V1's narrower probes would have isolated them faster.
 
-Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert dcb59a1` (V1 back before H2; revert `56443e6` first if its H2 hunks conflict).
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert dcb59a1` (V1 back before H2; revert `56443e6` first if its H2 hunks conflict). At a later HEAD the revert conflicts (later commits edit the same bullets, e.g. a848c35 extends E3.11's, cb333ee rewrote E4.3's); remove only this ruling's clauses by hand.
 
 ## A-PF-D4 (2026-10-22): C5 logs link faults and session starts for H3's Connection check
 
@@ -343,7 +343,7 @@ Affects: the C5 file format (two new files) and the data flow H2 / V2 → H3; pl
 
 Cost if wrong: two extra harness files and their tests.
 
-Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert 56443e6`.
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj2); undo: `git revert 56443e6`. At a later HEAD the revert conflicts (later commits edit the same bullets, e.g. a848c35 extends E3.11's, cb333ee rewrote E4.3's); remove only this ruling's clauses by hand.
 
 ## A-PF-D2 (2026-10-22): BleLink.take_pongs() feeds C5 pongs.jsonl
 
@@ -355,7 +355,7 @@ Affects: the C3 interface (`BleLink.take_pongs()`), P4's notify dispatch and the
 
 Cost if wrong: low. If 4096 is too small between two drains, PONG rows drop with a WARNING (visible in `link.log`) and H2 must drain more often; the gap between drains is ≤ ~1 min (≤ ~240 PONGs).
 
-Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert cb333ee` (revert `90af6b1` first if its H2 hunks conflict).
+Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: `git revert cb333ee` (revert `90af6b1` first if its H2 hunks conflict). At a later HEAD the revert conflicts (later commits edit the same bullets, e.g. a848c35 extends E3.11's, cb333ee rewrote E4.3's); remove only this ruling's clauses by hand.
 
 ## A-PF-adj1-D3 (2026-10-22): C5 logs the REACTION sample's index
 
@@ -373,7 +373,7 @@ Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in A-PF-adj1); undo: 
 
 A′ (amended A). Every capture monitor (Plan A tasks F2 step 6, F3 step 3 and F5 step 5) runs `"$CLI" monitor -p "$PORT" -c baudrate=115200,dtr=off,rts=off --timestamp`. The capture procedure reads the "Guiness" last-connected time (LCT) after stopping the monitor and before the reset, and again after the capture, and compares the two readings. The other options were A (the same flags, but the LCT read sits between the reset and the reopen) and B (keep the plan: default `dtr=on,rts=on`).
 
-Reason: the opus-xhigh adjudicator (A-F2-R) found that serial-monitor v0.15.0 (`main.go`) has `dtr` and `rts` settings that default to `on` and that its `getMode()` passes them as the port's initial status bits, and that arduino-cli v1.5.1 (`service_monitor.go`) applies `-c` settings before it opens the port, so `dtr=off,rts=off` opens with both lines low and nothing changes at close. HWCDC keeps output written before the host opens the port in a 256-byte TX ring (it drops the oldest bytes when the ring is full), so the plan's "output before the open is lost" inference was wrong while output stays at or under 256 bytes. A′ stops the unrequested reboot at every monitor close (F2 saw it on 3 of 3 default closes and on none with both off). A's LCT read in the reset-to-reopen gap delays the reopen against F3's 3 s host wait and the ring, and may read LCT before Windows reconnects; B reboots the board at every capture close, can add a spurious disconnect in F5 step 6, and keeps the disproved inference.
+Reason: the opus-xhigh adjudicator (A-F2-R) found that serial-monitor v0.15.0 (`main.go`) has `dtr` and `rts` settings that default to `on` and that its `getMode()` passes them as the port's initial status bits, and that arduino-cli v1.5.1 (`service_monitor.go`) applies `-c` settings before it opens the port, so `dtr=off,rts=off` opens with both lines low and (inferred, one control run) nothing changes at close. HWCDC keeps output written before the host opens the port in a 256-byte TX ring (it drops the oldest bytes when the ring is full), so the plan's "output before the open is lost" inference was wrong while output stays at or under 256 bytes. A′ stops the unrequested reboot at every monitor close (F2 saw it on 3 of 3 default closes and on none with both off). A's LCT read in the reset-to-reopen gap delays the reopen against F3's 3 s host wait and the ring, and may read LCT before Windows reconnects; B reboots the board at every capture close, can add a spurious disconnect in F5 step 6, and keeps the disproved inference.
 
 Affects: capture data behaviour (which output and which reboots a capture contains) and the capture procedure that F3 and F5 reuse; plan A tasks F2, F3 and F5. Plan lines as of `3ffe9d8`: F2 step 6 :542-558, F3 step 3 :591-594, F3 step 7 :626-629, F5 step 5 :818-820. `firmware/README.md` as of `63683fb`: Monitor row :51, capture procedure :68-93. Applied in `3ffe9d8` (plan) and `63683fb` (README).
 
