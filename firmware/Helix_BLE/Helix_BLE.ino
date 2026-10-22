@@ -44,8 +44,9 @@
 
 
 #include <NimBleKeyboard.h>
+#include "protocol.h"   // wire protocol v1 (Plan A C1); not used yet, wired in by Task F5
 
-#define SERVICE_UUID        "a723b49a-2b53-46a6-a2db-02bb9e9a577c"
+#define SERVICE_UUID       "a723b49a-2b53-46a6-a2db-02bb9e9a577c"
 #define KEYBOARDINPUTCHARACTERISTIC_UUID "61adcd67-20e9-4c38-b1d0-879445c5b732"
 #define PCRESPONSECHARACTERISTIC_UUID "89f7c2ca-89b5-4234-905c-d4a931feaa3b"
 
