@@ -296,6 +296,10 @@ HelixBLEKeyboard bleKeyboard;
 
 void setup() {
   Serial.begin(115200);
+  // Non-blocking log writes (A-F5-adj-D1): with the default 100 ms tx timeout, HWCDC::write retries up to 20 x 100 ms
+  // once a host read the port and stopped (core 3.3.10 HWCDC.cpp:582-603), stalling loop()/onWrite ~2 s per line.
+  // At 0, a line that does not fit the TX ring is dropped instead (HWCDC.cpp:544, :590).
+  Serial.setTxTimeoutMs(0);
   while (!Serial && millis() < 3000) { delay(10); }  // host wait (PA-rev I9)
   Serial.println("Starting NimBLE work!");
   linksInit();
