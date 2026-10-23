@@ -522,6 +522,27 @@ def test_release_all_preempts_play(link, board, drop_abort_done):
     assert rep.accepted is None and rep.accepted_ns is None
 
 
+def test_release_all_leaves_a_written_play_whose_done_ok_comes_first(link, board):
+    # A-final-R M-1.4: a written PLAY is covered, not aborted at once; its DONE OK, which the board sends before the
+    # RELEASE_ALL's DONE, makes play() a Success
+    held = []
+
+    async def play(client, seq, data):
+        held.append((client, seq))
+        client.notify(n_accepted(seq))
+
+    async def release(client, seq, data):
+        pc, pseq = held[0]
+        pc.notify(n_done(pseq, 0, 2))
+        asyncio.get_running_loop().call_later(0.010, client.notify, n_done(seq, 0, 1))
+
+    board.play, board.release = play, release
+    bg = Bg(link.play, tap_steps())
+    assert wait_until(lambda: held)
+    assert is_successful(link.release_all())
+    assert is_successful(bg.join())
+
+
 @pytest.mark.parametrize("release_done", [True, False], ids=["release_done", "release_done_lost"])
 def test_release_all_aborts_a_registered_unwritten_play(link, board, release_done):
     parked, gate = threading.Event(), threading.Event()
