@@ -863,7 +863,7 @@ Question: A-V2link traced the ~0.97 s link-loss detection to a cancelled PING wr
 
 Ruling: A, "after F1 lands, re-run the V2 step 4 fault soak live (right after V1 live, same sitting)" (Hong's decision).
 
-Reason: only a live run shows the fix on the real link. The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
+Reason: not recorded in the ledger (ledger.md:647 gives the ruling only). The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
 
 Affects: the order of the live runs (V1, then the V2 step 4 re-run); data in `data/soak/v2-faults-4`. No code or plan change comes from the decision itself.
 
