@@ -43,7 +43,7 @@ This feature also owns **how human-like the timing is**, because every keypress 
 ## Verification (first guess — tried early, gaps filled by Claude first)
 
 - **Serial log** from the board over USB: what it received and when.
-- **A keystroke listener on this PC** that records which key events arrive from the HID keyboard and their timing, into a focused test window — game not running.
+- **A keystroke listener on this PC** that records which key events arrive from the HID keyboard and their timing, then blocks the bot's keys so they reach no window (`--no-block` lets them through). A test window stays focused for the whole run, and the game is not running.
 - From that: every command type (single, hold, chord) arrives correctly, ordered, with no drops, over a long run (thousands of commands).
 - **Timing realism** checked statistically against the chosen human-timing model (distributions, no two identical sequences, no fixed rhythm), on the values the timing layer chose; what arrives at the PC is compared with those values separately.
 

@@ -79,7 +79,7 @@ Reason: the Bluetooth connection interval puts measured times on a grid (confirm
 
 Affects: spec A (Reliability targets rows "Delivered timing" and "Timing realism", and the Verification bullet), commit `121c59f`; the merge gate of A under H4; the analysis task of plan A (its task H4, not decision H4) and the harness, which logs both chosen and measured values.
 
-Ruling as Hong under H9; undo: revert `121c59f` and re-run the analysis step. If it proves too lax, a later finding can be re-analysed offline from the soak log, which holds chosen and measured values.
+Ruling as Hong under H9, ratified by Hong at S1 (2026-10-23, A-final-R3-D1 option A); undo: revert `121c59f` and re-run the analysis step. If it proves too lax, a later finding can be re-analysed offline from the soak log, which holds chosen and measured values.
 
 ## PA-D2 (2026-10-21): Module layout for the input layer
 
@@ -201,7 +201,7 @@ Reason: it is the only option that keeps keys out of other windows if focus chan
 
 Affects: where harness keystrokes land; what a person at the PC can type during a run (arrows, E, Alt and Space are blocked system-wide while a run is on). Does not remove the check that MapleStory is not running (the hook is no barrier against the game's Raw Input; H7).
 
-Ruling as Hong under H9; undo: plan task H1 blocking bullet (:1091-1101) to default off, plus its default-flag test; no re-run of V1–V3.
+Ruling as Hong under H9, ratified by Hong at S1 (2026-10-23, A-final-R3-D1 option A), when spec A's listener bullet was reworded to what was built; undo: plan task H1 blocking bullet (:1091-1101) to default off, plus its default-flag test, and restore the spec bullet; no re-run of V1–V3.
 
 ## PA-fix1c-D1 (2026-10-21): SendReport.accepted is None for RELEASE_ALL
 
