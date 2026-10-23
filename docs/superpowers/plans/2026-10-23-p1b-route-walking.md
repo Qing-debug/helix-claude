@@ -624,8 +624,9 @@ edge cases. **Cloud:** yes — stdlib, networkx, returns, `src.controller`, `src
      `[(48,45), (58,46), (74,45)]`, `[(42,28), (49,28), (66,28), (79,24), (90,24), (101,24), (109,23)]`,
      `[(97,43), (105,42), (118,43)]`; `platform_index` of the `(79,24)` node is 2.
   5. No LEVEL/SLOPE link spans `(74,45)`↔`(97,43)` (dx 23 > reach 19).
-  6. Synthetic: a step of dy 7 over dx 20 is not a slope (dy > 6); dy 5 over dx 8 is not (grade 0.625 > 0.5); dy 5
-     over dx 10 is; a drop of dy 30 from a `can_fall=False` node is not linked; from a `can_fall=True` node it is
+  6. Synthetic (every pair within `reach_h` 19 and with a grade the other rule would allow, so each case is decided by
+     the rule it names): a step of dy 7 over dx 18 is not a slope (dy 7 > `slope_max_dy_px` 6, although the grade
+     7/18 ≈ 0.39 ≤ 0.5); dy 5 over dx 8 is not (grade 0.625 > 0.5, although dy 5 ≤ 6); dy 5 over dx 10 is; a drop of dy 30 from a `can_fall=False` node is not linked; from a `can_fall=True` node it is
      (DOWN); a target flagged `is_right_platform_edge=True` to the left of the source is rejected (G20).
   7. Empty `nodes` → `Failure`; a node with `minimap_position=(1.5, 2)` → `Failure`.
   8. Calling `infer_terrain` twice on the same input gives equal `links` (deterministic order).
@@ -685,7 +686,9 @@ numpy and `src.input.protocol.Key`.
 **Interface created:** C7, exactly.
 
 - [ ] **Tests** (FF2 `RouteGraph`: `agent = MapleAgent(characterClass=Kanna()); agent.loadMap(fixture)`;
-  `rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()`; `rng = np.random.default_rng(0)` unless stated):
+  `rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()`; `rng = np.random.default_rng(0)` unless stated; a test that names a changed parameter, such as
+  `ability_mix_band=0` or `max_walk_ms=1000`, rebuilds `rg` with `RouteGraph.build(agent.pathGraph,
+  MovementParams(<that parameter>)).unwrap()`, because `next_move` takes no params argument and reads `rg.params`):
   1. Arrived: pos `(104,43)`, target `(105,42)` → `Decision(None, 0.0, None)`.
   2. Known case 2: pos `(101,24)`, target `(105,42)`, `ability_mix_band=0` → `Move(TELEPORT, Key.DOWN, None)`,
      `toward` the `(105,42)` node, `cost_to_go_s == approx(1.05)`. Then pos `(101,42)` (landed) → `WALK`, `Key.RIGHT`,
@@ -703,7 +706,9 @@ numpy and `src.input.protocol.Key`.
   7. Off-graph pos `(86,37)` → `Failure` starting `"off-graph"`; `walk_ms` never exceeds `max_walk_ms` (pos `(37,60)`,
      target `(48,61)`, `max_walk_ms=1000`: an 11 px walk → `walk_ms == 1000.0`).
   8. Node off the surface: target `(105,42)` and pos `(105,45)` (3 px below the node, on platform 3 by A2) →
-     arrived; pos `(105,46)` → not arrived (A2 fails, |dy| 4). In P4, pos `(48,64)` with target `(58,46)` counts as
+     arrived; pos `(105,46)` → `Failure` starting `"off-graph"` (not at the node: |dy| 4 > `arrive_px` 2, and `attach`
+     finds nothing: A1 |dy| 4 > `align_px` 2, A2 |46 − 42| = 4 > `attach_y_px` 3, A3 no platform end within `reach_h`, so
+     P2 returns A4's `Failure`; never a `Success`). In P4, pos `(48,64)` with target `(58,46)` counts as
      at `(48,61)` (|dy| 3, floor platform by A2) and gives `TELEPORT` `Key.UP`.
   9. `rng` is untouched (same next draw as a fresh `default_rng(0)`) in every case except 6.
   10. P5 WALK edge at a slope-segment start (review round 5, I1): the FF2 rows with the `(79, 24)` node moved to
@@ -900,6 +905,10 @@ returns.
 B9/B10.
 **Interface created:** C10 except `run` and `stop_now` (B13).
 
+- [ ] **Stop flag.** `RouteWalker.__init__` creates the stop flag, a private `threading.Event` (the same constructor
+  also holds `rg`, `rotation`, `layer`, `positions`, `clock`, `sink`, `rng`, `config`); `walk_leg` only reads it (steps 1, 7
+  and 8). B13's `stop_now` sets it, and B13's tests exercise it; B12 has no way to set it. B13 adds the "run finished"
+  `Event` and `Lock` to the same constructor.
 - [ ] **Loop** `walk_leg(lap, leg, src, dst)`, `start_ns = clock.now_ns()`, `best = inf`, `last_progress = start_ns`:
   1. If the stop flag is set → outcome `STOPPED`.
   2. If `leg_timeout_s` is set and now − start > it → `TIMED_OUT`.
@@ -919,7 +928,10 @@ B9/B10.
 - [ ] **Tests** (FF2 `RouteGraph`: `agent = MapleAgent(characterClass=Kanna()); agent.loadMap(fixture)`;
   `rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()`; `SimWorld` over `load_terrain(ff2_terrain.json)` with reach
   from `Kanna` + `SimLink` + `SimPositionSource`, `SimClock`, `use_stimulus=False`,
-  `rng=default_rng(0)`):
+  `rng=default_rng(0)`. Unless a test says otherwise: `SimParams()`, `NoiseConfig.off()`, `SimWorld(terrain, 19, 23,
+  params, noise, default_rng(1), start)`, `SimLink(world, clock, params)`, `SimPositionSource(world, clock, miss_p=0,
+  rng=default_rng(2))`, `InputLayer(link, TimingModel(default_rng(3)))`, `WalkerConfig(use_stimulus=False)`, a
+  `MemorySink`, and `rotation` = the nodes at the 7 blue rows of the fixture in file order):
   1. Noise off, start `(49,28)`, leg to `(101,24)` → `REACHED` in ≤ 8 moves; the moves include a WALK whose start
      `pos` is on the slope (x in 66..79) and whose `direction == "RIGHT"` (`Key.name`, never `str(Key)`).
   2. Noise off, start `(101,24)`, leg to `(105,42)` → `REACHED` in ≤ 3 moves; final settled position within 2 px.
@@ -929,8 +941,13 @@ B9/B10.
   5. `fail_next=[InputError.ACK_TIMEOUT]` → the first entry has `input == "ACK_TIMEOUT"` and the leg is still
      `REACHED`. `fail_next=[InputError.LINK_LOST]` → `LINK_DOWN` after exactly 1 entry and no further `play`.
   6. A position source scripted as `[Failure("miss"), Failure(STALE), Success(target)]` → `REACHED`, `misses == 1`.
-  7. `use_stimulus=True` with a fake layer recording `stimulus_ns` → each call gets the `now_ns()` of the read before
-     it.
+  7. `use_stimulus=True`, `leg_timeout_s=2.0`, start `(82,60)`, leg to `(48,61)`, `SimClock`, a fake layer whose `walk`,
+     `teleport` and `drop` record their `stimulus_ns` argument, return `Success(None)` and never move the world. The
+     position source is wrapped so each `read()` first advances the clock by 1 ms (`clock.advance(1_000_000)`) and
+     records the `clock.now_ns()` it then returns as `read_ns`. The leg ends `TIMED_OUT` (virtual time, no real wait,
+     so the test cannot hang); at least 2 calls were made; each call's `stimulus_ns` equals the `read_ns` of the read
+     just before it (so it is the `now_ns()` taken right after that read, not the start of the loop pass). With
+     `use_stimulus=False` every call gets `stimulus_ns is None`.
 - **Run:** `python -m pytest -q tests/route/test_walker_leg.py`
 - **Commit:** `feat(route): walk one leg with re-planning, settle and stall detection`
 
@@ -950,7 +967,7 @@ B9/B10.
   set and, if the stop guard was started, `run` joins it (timeout 1 s) before returning. Starting the guard and
   setting "run finished" happen under one `threading.Lock`: `stop_now` starts no guard once "run finished" is set,
   and the guard checks "run finished" before each `release_all`.
-  `stop_now()` (safe from any thread, more than once): sets the stop `threading.Event`; calls `layer.release_all()`;
+  `stop_now()` (safe from any thread, more than once): sets the stop `threading.Event` that `RouteWalker.__init__` created (B12); calls `layer.release_all()`;
   and, on its first call only, starts a daemon *stop guard* thread that calls `layer.release_all()` every 50 ms
   (wall time, `time.sleep`) until "run finished" is set (PB-D4). `walk_leg` checks the stop flag again immediately
   before `execute`, so a stop seen before the call sends nothing; a stop that lands inside `InputLayer`'s reaction
@@ -959,12 +976,16 @@ B9/B10.
   1. Sim as in B12 (FF2, noise off, world start `(113,60)`), `max_laps=3`, `MemorySink` → `Success(RunSummary(3, 22, "max_laps"))`; 22 leg records (1 + 3·7);
      3 lap records with `legs == 7`, `all_reached` True, `end_ns > start_ns`; leg (lap 2, leg 4) has `src (49,28)`
      and `dst (101,24)`.
+  Release counts in this task are counted on the `InputLayer` instance: replace `layer.release_all` with a function
+  that counts the call and delegates. It sees only the walker's calls (`run`, `stop_now`, the guard), not the layer's
+  own `link.release_all()` after a failed play (`input_layer.py:91`).
   2. Stop from another thread (positions from B10's `SimPositionSource` over a `SimWorld` as in test 1, start
-     `(113,60)`; test 3 the same): a fake link whose `play` blocks on an `Event` until `release_all` is called and then
-     returns `Failure(InputError.ABORTED)`; `RealClock`; a timer thread calls `stop_now()` after 0.2 s → `run`
+     `(113,60)`, with its own `SimClock` that nothing advances, because the fake link below never moves the world; test
+     3 the same): a fake link whose `play` blocks on an `Event` until `release_all` is called and then
+     returns `Failure(InputError.ABORTED)`; the walker's clock is `RealClock`; a timer thread calls `stop_now()` after 0.2 s → `run`
      returns within 1.0 s wall with reason `"stopped"`, the last leg record is `STOPPED`, and `release_all` was called
      ≥ 2 times.
-  3. Stop during the reaction wait: `use_stimulus=True`, `RealClock`, `input_layer._sleep` monkeypatched to a
+  3. Stop during the reaction wait: `use_stimulus=True`, `RealClock` (for the walker; positions as in test 2), `input_layer._sleep` monkeypatched to a
      function that blocks 0.5 s wall time; a fake link recording wall-clock times of `play` and `release_all`;
      `stop_now()` is called 0.1 s into the first reaction wait → `run` returns within 1.0 s with reason `"stopped"`,
      and if a `play` started after `stop_now()`, a `release_all` follows it within 0.1 s wall time. After `run`
@@ -974,7 +995,20 @@ B9/B10.
      play), so play 5 fails; the wrapper delegates `release_all` and everything else to the `SimLink` → reason `"link_down"`, the last leg record `LINK_DOWN`, no lap record for the
      unfinished lap.
   5. `rotation=[]` → `Failure`.
-  6. A sink whose `write_leg` returns `Failure` → the run still completes `max_laps=1`.
+  6. A sink whose `write_leg` returns `Failure("disk full")` → the run still completes `max_laps=1` (all 8 legs
+     attempted), and `"disk full"` appears exactly once in the captured stdout plus stderr (`capsys`).
+  7. A leg that times out does not end the run, and `all_reached` is False for its lap: sim as in test 1 but
+     `replace(NoiseConfig.off(), no_op_p=1)` (no move ever changes the position; start `(113,60)`),
+     `WalkerConfig(use_stimulus=False, leg_timeout_s=3.0, max_laps=1)` → `Success(RunSummary(1, 8, "max_laps"))`; the
+     approach leg is `REACHED` (already at `(113,60)`); lap 1's legs 0 to 5 are `TIMED_OUT` and leg 6
+     (`(105,42)` → `(113,60)`) is `REACHED`; the 1 lap record has `legs == 7` and `all_reached` False.
+  8. `release_all` counts (counted on the layer as above): a run to `max_laps=1` as in test 1 calls `layer.release_all`
+     exactly 1 time; the `"link_down"` run of test 4 exactly 1 time; the stop run of test 2 at least 2 times (one from
+     `stop_now`, one at the end of `run`), and none after `run` returns.
+  9. The stop flag is re-checked before `execute`: sim as in test 1 but world start `(82,60)` (so the approach leg to
+     `(113,60)` needs a move) and a wrapper around `SimPositionSource` whose first `read()` calls `walker.stop_now()` and
+     then returns the position read; `run` returns `Success(RunSummary(0, 1, "stopped"))`, the one leg record is
+     `STOPPED` with 0 moves, and `sim_link.plays == 0` (nothing was sent after the stop).
 - **Run:** `python -m pytest -q tests/route/test_walker_run.py`
 - **Commit:** `feat(route): cycle the rotation in laps, stoppable from another thread`
 
@@ -1234,7 +1268,8 @@ def main(argv: list[str] | None = None) -> int
   map path and SHA-256, git HEAD, start time). Prints "Focus the game window. Starting in 5 s. F12 stops." and waits
   `_countdown_s` s. `trigger()` only sets an `Event` (first call) that a StopControl worker thread waits on; the worker then
   calls `on_stop` (`walker.stop_now()`), so the hook procedure returns immediately and never blocks on Bluetooth
-  (Windows drops a low-level hook that is slow to return; Feature A's listener only queues, G33). On F12 or Ctrl+C; `--minutes` arms a timer that does the same (`trigger("timer")`). On every exit path after the walker
+  (Windows drops a low-level hook that is slow to return; Feature A's listener only queues, G33). F12 (`trigger("hotkey")`) and Ctrl+C (`trigger("sigint")`) stop the run; `--minutes M` (a number of minutes, `type=float`, so `0.5` is
+  allowed; `--minutes 2` as in the live check is unchanged) arms a timer that does the same (`trigger("timer")`) and is cancelled on every exit path. On every exit path after the walker
   ran, `main` writes `out/stop.json`: `{"reason": RunSummary.reason, "trigger_ns", "trigger_source"}` (the last two
   from the StopControl, null if it never triggered), and prints `stopped: <reason>`, followed by ` (<source>)` when a source is set. With
   `--record`, a `record` (B17) thread saves frames to `out/frames/`. On every exit path after a
@@ -1270,6 +1305,26 @@ def main(argv: list[str] | None = None) -> int
   kaboom"`, and `release_all` and `close` were each called at least once; (c) `run` returns
   `Success(RunSummary(0, 0, "link_down"))` → `main` returns 1 and stderr contains neither `walk failed` nor
   `walk crashed`.
+  Exits 3 and 5, the `--minutes` timer and `StopControl` (same seams as the end-to-end test unless stated; each test
+  also asserts the exit code is an `int` returned, not raised):
+  (d) exit 3: `_wait_first_frame` returns `Failure("timeout")` → 3; separately, `_make_positions` returns a source
+  whose `read()` is `Failure("miss")` → 3. In both, `_make_link` was never called (a seam that records calls), and no
+  `stop.json` exists (the walker never ran).
+  (e) exit 5: `--map` naming a file that does not exist → 5; and, with the real default `_make_positions`,
+  `CharacterLocator.from_files` monkeypatched to return `Failure("no icon")` → 5. In both, `_make_link` was never
+  called.
+  (f) timer: a fake stop control whose `trigger(source)` records the first source and `trigger_ns` and calls the
+  `on_stop` it was built with (as the real worker would), `--minutes 0.02` and no `--laps` (the simulated walker
+  would otherwise run for ever) → `main` returns 0 within 10 s wall, `stop.json` has `"reason": "stopped"`,
+  `"trigger_source": "timer"` and a non-null `trigger_ns`. With `--laps 1 --minutes 60` the run ends by `"max_laps"`,
+  the fake's `trigger` was never called, `stop.json` has `"trigger_source": null`, and no thread that `main` started
+  is still alive afterwards (compare `threading.enumerate()` before and after), so the timer was cancelled.
+  (g) `StopControl` with the real class and `_install_hook` monkeypatched to a no-op: `start()` returns `Success`;
+  the SIGINT handler now installed (`signal.getsignal(signal.SIGINT)`), called directly as `handler(signal.SIGINT,
+  None)`, makes `on_stop` run once and sets `trigger_source == "sigint"`; the test restores the previous handler in a
+  `finally`. `close()` after `start()` with no trigger: `on_stop` is never called, the worker thread has ended (it is
+  not in `threading.enumerate()` after `close()` returns), and a second `close()` does not raise. `close()` on a
+  `StopControl` that was never started does not raise.
 - [ ] **Live link check (MapleStory closed; Windows, board paired).** With the game closed there is no minimap, so
   the default `_wait_first_frame` fails (exit 3) before `connect`; this check patches the seams instead.
   This check sends real keys, so it refuses to run while MapleStory runs (PB-B19), the way Feature A's `probe`,
