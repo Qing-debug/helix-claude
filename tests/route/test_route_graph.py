@@ -10,7 +10,6 @@ from returns.pipeline import is_successful
 from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
 from src.controller.node import Node
-from src.controller.path_graph import PathGraph
 from src.route.params import MovementParams
 from src.route.route_graph import EdgeKind, RouteGraph, down_options, horizontal_cost_s
 
@@ -40,7 +39,16 @@ def ff2():
 
 
 def _node(agent, xy):
-    return next(n for n in agent.node_map.values() if n.minimap_position == xy)
+    node = next((n for n in agent.node_map.values() if n.minimap_position == xy), None)
+    assert node is not None, f"no node at {xy}"
+    return node
+
+
+def _path_graph(node_map):
+    """A PathGraph built the way the runtime builds it (Kanna's reach, the agent's tolerances), not yet built."""
+    result = MapleAgent(characterClass=Kanna()).buildPathGraphFor(node_map)
+    assert is_successful(result)
+    return result.unwrap()
 
 
 def _pos(u, v):
@@ -143,13 +151,13 @@ def test_down_options_beyond_reach_with_fall_is_drop_only():
 
 def test_build_fails_when_the_path_graph_was_not_built():
     nodes = {i: Node("blue_node", (10 * i, 10), False, False, False, False) for i in range(3)}
-    pg = PathGraph(nodes, 2, 2, REACH_H, 23)
+    pg = _path_graph(nodes)
     assert not is_successful(RouteGraph.build(pg, MovementParams()))
 
 
 def test_build_fails_when_node_map_and_graph_nodes_differ(ff2):
     agent, _ = ff2
-    pg = PathGraph(dict(agent.node_map), 2, 2, REACH_H, 23)
+    pg = _path_graph(dict(agent.node_map))
     assert is_successful(pg.buildGraph())
     pg.node_map.pop(next(iter(pg.node_map)))
     assert not is_successful(RouteGraph.build(pg, MovementParams()))
@@ -168,7 +176,7 @@ def test_path_fails_when_there_is_no_route(ff2):
     agent, rg = ff2
     nodes = {i: Node("blue_node", (10 * i, 10), False, False, False, False) for i in range(2)}
     nodes[2] = Node("blue_node", (500, 500), False, False, False, False)
-    pg = PathGraph(nodes, 2, 2, REACH_H, 23)
+    pg = _path_graph(nodes)
     assert is_successful(pg.buildGraph())
     isolated = RouteGraph.build(pg, MovementParams()).unwrap()
     result = isolated.path(nodes[0], nodes[2])
