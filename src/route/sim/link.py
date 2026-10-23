@@ -5,7 +5,10 @@ and advances a virtual `SimClock` by the link latency plus the schedule's total.
 world's position at the clock's time, rounded to minimap pixels, and misses with a set probability.
 
 Where the plan is silent: a play that fails from `fail_next` advances no time and uses no seq; `play` and
-`release_all` share one seq counter (as `BleLink` does); a read draws one `rng.random()` every call.
+`release_all` share one seq counter (as `BleLink` does); a read draws one `rng.random()` every call, even with
+`miss_p = 0`; a read rounds with Python's `round()`, so a half goes to the even integer (42.5 reads as 42); two keys
+that go down at the same tick are ordered by their step order, as the board applies them; a key never released counts
+as released at the schedule's end.
 """
 
 from collections.abc import Sequence
@@ -39,18 +42,18 @@ class SimClock:
         self._now_ns += int(ns)
 
 
-def _key_times(steps: Sequence[Step]) -> tuple[dict[Key, int], dict[Key, int], int]:
-    """Each key's first down and last up (100 us ticks from the schedule's start), and the schedule's total."""
-    first_down: dict[Key, int] = {}
+def _key_times(steps: Sequence[Step]) -> tuple[dict[Key, tuple[int, int]], dict[Key, int], int]:
+    """Each key's first down as (100 us tick from the schedule's start, step index), its last up, and the total."""
+    first_down: dict[Key, tuple[int, int]] = {}
     last_up: dict[Key, int] = {}
     t, prev = 0, 0
-    for step in steps:
+    for index, step in enumerate(steps):
         t += step.delta_100us
         mask = int(step.mask)
         for key in Key:
             bit = int(key)
             if mask & bit and not prev & bit:
-                first_down.setdefault(key, t)
+                first_down.setdefault(key, (t, index))
             elif prev & bit and not mask & bit:
                 last_up[key] = t
         prev = mask
@@ -83,11 +86,12 @@ class SimLink:
         first_down, last_up, total_100us = _key_times(steps)
         self.clock.advance(total_100us * _NS_PER_100US)
         t_end = self.clock.now_ns()
-        self._apply(first_down, last_up, t_end)
+        self._apply(first_down, last_up, total_100us, t_end)
         return Success(SendReport(seq, sent_ns, written_ns, written_ns, t_end, Accepted(seq, 0),
                                   Done(seq, 0, None, 0, 0, ())))
 
-    def _apply(self, first_down: dict[Key, int], last_up: dict[Key, int], t_end: int) -> None:
+    def _apply(self, first_down: dict[Key, tuple[int, int]], last_up: dict[Key, int], total_100us: int,
+               t_end: int) -> None:
         """Decode the keys pressed into one world move."""
         pressed = set(first_down)
         arrows = pressed & _ARROWS
@@ -102,7 +106,7 @@ class SimLink:
             return
         elif len(arrows) == 1 and not others:
             (arrow,) = arrows
-            held_ms = (last_up[arrow] - first_down[arrow]) / 10
+            held_ms = (last_up.get(arrow, total_100us) - first_down[arrow][0]) / 10
             self.world.walk(arrow, held_ms, t_end)
             return
         self.world.nothing(t_end)

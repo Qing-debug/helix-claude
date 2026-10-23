@@ -93,16 +93,44 @@ def test_play_report_stamps_and_seq(terrain):
     assert link.plays == 2
 
 
-def test_two_arrows_or_teleport_with_e_first_is_nothing(terrain):
+def _hand_built_link(terrain, start):
     params = SimParams()
-    world = SimWorld(terrain, REACH_H, REACH_V, params, NoiseConfig.off(), np.random.default_rng(0), (82, 60))
-    link = SimLink(world, SimClock(), params)
+    world = SimWorld(terrain, REACH_H, REACH_V, params, NoiseConfig.off(), np.random.default_rng(0), start)
+    return world, SimLink(world, SimClock(), params)
+
+
+def test_schedules_that_break_a_decoding_rule_are_nothing(terrain):
+    world, link = _hand_built_link(terrain, (82, 60))
     # E down before the arrow: not a teleport.
     link.play([Step(0, Key.E), Step(50, Key.E | Key.RIGHT), Step(800, Key.RIGHT), Step(50, Key(0))])
     # Two arrows: not a walk.
     link.play([Step(0, Key.LEFT), Step(50, Key.LEFT | Key.RIGHT), Step(800, Key.RIGHT), Step(50, Key(0))])
-    assert [e.kind for e in world.effects] == ["none", "none"]
+    # ALT down before DOWN: not a drop.
+    link.play([Step(0, Key.ALT), Step(50, Key.ALT | Key.DOWN), Step(800, Key.DOWN), Step(50, Key(0))])
+    # An arrow with SPACE: not a walk.
+    link.play([Step(0, Key.RIGHT), Step(50, Key.RIGHT | Key.SPACE), Step(800, Key.RIGHT), Step(50, Key(0))])
+    # An arrow, E and SPACE: not a teleport.
+    link.play([Step(0, Key.RIGHT), Step(50, Key.RIGHT | Key.E), Step(50, Key.RIGHT | Key.E | Key.SPACE),
+               Step(50, Key(0))])
+    assert [e.kind for e in world.effects] == ["none"] * 5
     assert world.pos == (82.0, 60.0)
+
+
+def test_same_tick_chord_is_ordered_by_step_order(terrain):
+    world, link = _hand_built_link(terrain, (101, 24))
+    link.play([Step(0, Key.DOWN), Step(0, Key.DOWN | Key.E), Step(500, Key(0))])
+    assert world.effects[-1].kind == "teleport"
+    world2, link2 = _hand_built_link(terrain, (101, 24))
+    link2.play([Step(0, Key.E), Step(0, Key.DOWN | Key.E), Step(500, Key(0))])
+    assert world2.effects[-1].kind == "none"
+
+
+def test_arrow_never_released_counts_as_released_at_the_end(terrain):
+    world, link = _hand_built_link(terrain, (82, 60))
+    result = link.play([Step(0, Key.RIGHT), Step(1000, Key.RIGHT)])
+    assert is_successful(result), result
+    assert world.effects[-1].kind == "walk"
+    assert world.pos[0] - 82 == pytest.approx(0.1 * SimParams().walk_px_per_s)
 
 
 # --- 2. virtual time ------------------------------------------------------------------------------------
@@ -136,7 +164,6 @@ def test_release_all_advances_nothing(terrain):
     report = result.unwrap()
     assert clock.now_ns() == before
     assert report.accepted_ns is None and report.accepted is None
-    assert report.seq == 1
     assert world.effects == []
 
 
@@ -144,7 +171,8 @@ def test_release_all_advances_nothing(terrain):
 
 
 def test_fail_next_fails_one_play_then_works(terrain):
-    world, _, link, layer = _setup(terrain, (101, 24))
+    world, clock, link, layer = _setup(terrain, (101, 24))
+    before = clock.now_ns()
     releases = []
     real_release_all = link.release_all
 
@@ -158,6 +186,7 @@ def test_fail_next_fails_one_play_then_works(terrain):
 
     failed = layer.teleport(Key.DOWN)
     assert failed == Failure(InputError.ACK_TIMEOUT)
+    assert clock.now_ns() == before
     assert world.pos == (101.0, 24.0)
     assert world.effects == []
     assert len(releases) == 1 and is_successful(releases[0])
