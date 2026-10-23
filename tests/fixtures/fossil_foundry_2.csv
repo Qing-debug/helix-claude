@@ -1,0 +1,23 @@
+# minimap_size=162,82
+nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge
+blue_node,"(113, 60)",FALSE,FALSE,FALSE,FALSE
+blue_node,"(82, 60)",FALSE,FALSE,FALSE,FALSE
+blue_node,"(48, 61)",FALSE,FALSE,FALSE,FALSE
+blue_node,"(58, 46)",TRUE,FALSE,FALSE,FALSE
+blue_node,"(49, 28)",TRUE,FALSE,FALSE,FALSE
+blue_node,"(101, 24)",TRUE,FALSE,FALSE,FALSE
+blue_node,"(105, 42)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(65, 60)",FALSE,FALSE,FALSE,FALSE
+orange_node,"(99, 60)",FALSE,FALSE,FALSE,FALSE
+orange_node,"(129, 60)",FALSE,FALSE,FALSE,FALSE
+orange_node,"(48, 45)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(74, 45)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(42, 28)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(66, 28)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(79, 24)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(90, 24)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(109, 23)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(118, 43)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(97, 43)",TRUE,FALSE,FALSE,FALSE
+orange_node,"(37, 60)",FALSE,FALSE,FALSE,FALSE
+orange_node,"(105, 60)",FALSE,FALSE,FALSE,FALSE
