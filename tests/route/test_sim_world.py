@@ -2,12 +2,14 @@
 
 import dataclasses
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
 from returns.pipeline import is_successful
 
+import src.route.sim.world as world_module
 from src.input.protocol import Key
 from src.route.sim.world import (
     InjectedError,
@@ -39,6 +41,10 @@ def _world(terrain, start, noise=None, seed=0):
 
 
 # --- 1. load_terrain -------------------------------------------------------------------------------------
+
+
+def test_load_missing_file_is_failure(tmp_path):
+    assert not is_successful(load_terrain(tmp_path / "nope.json"))
 
 
 def test_load_fixture(terrain):
@@ -184,6 +190,10 @@ def test_start_off_any_surface_is_value_error(terrain):
         _world(terrain, (82, 50))
 
 
+def test_start_within_half_a_pixel_of_a_surface_is_accepted(terrain):
+    _world(terrain, (82, 60.4))  # the floor is at 60 there
+
+
 # --- 3. injected errors ----------------------------------------------------------------------------------
 
 
@@ -264,3 +274,9 @@ def test_same_seed_gives_identical_effects(terrain):
     first = _run(terrain, 11)
     assert first == _run(terrain, 11)
     assert first != _run(terrain, 12)
+
+
+def test_world_source_has_no_teleport_reach_literals():
+    """Hard rule 4: the 19 / 23 reach comes from reach_h / reach_v, never a literal in the module."""
+    source = Path(world_module.__file__).read_text(encoding="utf-8")
+    assert re.search(r"(?<![\w.])(19|23)(?![\w.])", source) is None
