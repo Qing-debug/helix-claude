@@ -1062,6 +1062,7 @@ def test_connect_returns_failure_and_disconnects_when_mtu_size_raises(board):
     assert lk.faults() == []
     assert lk.play(tap_steps()).failure() == InputError.NOT_CONNECTED
 
+
 def test_every_reply_is_logged_at_debug_with_its_loop_time(link, board, caplog):
     """probe --link-debug (A-M6diag): each decoded reply is one DEBUG `rx` record, stamped with the ns the loop used."""
     with caplog.at_level(logging.DEBUG, logger=LOGGER):
