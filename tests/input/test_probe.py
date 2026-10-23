@@ -57,7 +57,8 @@ def _pong(itvl=12, board_us=123_456):
 class ProbeLink:
     """A BleLink stand-in. play() takes the schedule's duration + 20 ms of fake time and logs the listener
     transitions of its steps (1 ms after the send, at the scheduled offsets) into `keys`, unless the transition's
-    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`.
+    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`, after logging their transitions
+    (1 ms after the send) if `fail_delivers`.
 
     Board clock (M2 phase): with `board_offset_ns` set, the board's u32 microsecond clock reads
     (qpc_ns - board_offset_ns) / 1000, every play logs a PONG stamped at its send, DONE carries
@@ -72,13 +73,14 @@ class ProbeLink:
 
     def __init__(self, clock, keys, fail_plays=(), fail_error=InputError.LINK_LOST, drop_keys=(),
                  board_offset_ns=None, t0_shift_us=lambda play: 0, grid_ns=None, itvl=12, tick=lambda qpc: 0,
-                 injected=False, repeat=None):
+                 injected=False, repeat=None, fail_delivers=False):
         self.clock = clock
         self.keys = keys
         self.events = []
         self.plays = 0
         self.fail_plays = set(fail_plays)
         self.fail_error = fail_error
+        self.fail_delivers = fail_delivers
         self.drop_keys = set(drop_keys)
         self.n_transitions = 0
         self.pongs = []
@@ -124,6 +126,9 @@ class ProbeLink:
         assert self.plays <= self.MAX_PLAYS, "runaway probe loop"
         self.events.append("play")
         if self.plays in self.fail_plays:
+            if self.fail_delivers:
+                sent = self.clock.clock()
+                self.keys.extend(self._key(sent + MS + t * 100_000, VK_BY_KEY[k], d) for t, k, d in transitions(steps))
             self.clock.now += 5 * MS
             return Failure(self.fail_error)
         sent = self.clock.clock()
@@ -845,6 +850,7 @@ def test_m6_sends_fifty_16_step_zero_delta_e_bursts(tmp_path, clock):
     assert "DONE OK 50, NOTIFY_FAILED 0, other failures 0" in rep
     assert "reports seen on DONE OK commands: 800 of 800 expected" in rep
     assert "silent drops (DONE OK, a report missing): 0" in rep and "[review]" not in rep
+    assert "reports seen on other failed commands: n/a n 0" in rep
 
 
 def test_m6_counts_notify_failed_and_the_input_layer_releases_after_it(tmp_path, clock):
@@ -855,7 +861,18 @@ def test_m6_counts_notify_failed_and_the_input_layer_releases_after_it(tmp_path,
     rep = _report(tmp_path, "m6")
     assert "DONE OK 49, NOTIFY_FAILED 1, other failures 0" in rep
     assert "reports seen on NOTIFY_FAILED commands: n 1 min 0.000" in rep
+    assert "reports seen on other failed commands: n/a n 0" in rep    # NOTIFY_FAILED is not an "other" failure
     assert "silent drops (DONE OK, a report missing): 0" in rep
+
+
+def test_m6_says_how_many_reports_other_failed_commands_delivered(tmp_path, clock):
+    # an ACK_TIMEOUT whose 16 key reports all reached the listener (A-M6 fyi, A-FC-D4)
+    rig = Rig(clock, link_kw={"fail_plays": {3}, "fail_error": InputError.ACK_TIMEOUT, "fail_delivers": True})
+    _run(tmp_path, clock, probes=("m6",), rig=rig)
+    rep = _report(tmp_path, "m6")
+    assert "NOTIFY_FAILED 0, other failures 1" in rep
+    assert "reports seen on NOTIFY_FAILED commands: n/a n 0" in rep
+    assert "reports seen on other failed commands: n 1 min 16.000" in rep
 
 
 def test_m6_silent_drop_stops_probe_py(tmp_path, clock, monkeypatch, capsys):

@@ -554,6 +554,8 @@ def m6_report(run_dir: Path) -> ProbeReport:
                  "command's window)")
     lines.append("reports seen on NOTIFY_FAILED commands: "
                  + summary([len(m.observed) for m in dm.commands if m.row["error"] == nf], unit=""))
+    lines.append("reports seen on other failed commands: "
+                 + summary([len(m.observed) for m in dm.commands if m.row["error"] not in (None, nf)], unit=""))
     drops = [m for m in ok if m.alignment.dropped]
     lines.append(f"silent drops (DONE OK, a report missing): {len(drops)}"
                  + (f" (seq {_seq_list([m.seq for m in drops])})" if drops else ""))
