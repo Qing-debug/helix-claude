@@ -580,6 +580,7 @@ M8_GRANULARITY_MS = (10.0, 16.0)
 M8_TICK_TOLERANCE_MS = 1.0  # tick_ms is a whole ms count (a 15.625 ms grid reads as 15/16 ms steps): the grid fit's
 #                             tolerance, and the slack above the band's top
 M8_FIT_RANGE_MS = (1.0, 40.0)  # periods tried, 1 us apart, largest first
+M8_MIN_OFFSETS = 10  # fewer distinct tick offsets fit too many periods: n/a, not a verdict (A-M8fix-R m1, A-FC-D2)
 
 
 def _tick_grid_ms(diffs: Sequence[int]) -> float:
@@ -617,10 +618,11 @@ def m8_report(run_dir: Path) -> ProbeReport:
              "nonzero tick steps between events (smallest 8, ms x count): "
              + ", ".join(f"{d} x{n}" for d, n in nonzero[:8]) + f"; zero steps {steps.get(0, 0)}"]
     distinct = set(diffs) - {0}
-    if len(distinct) < 2:  # one offset fits every g that divides it: nothing to fit
-        lines.append("M8 tick_ms granularity: n/a (tick_ms showed fewer than 2 distinct offsets from the first event)")
-        return ProbeReport(lines, ["tick_ms granularity: n/a, tick_ms showed fewer than 2 distinct offsets from the "
-                                   "first event"])
+    if len(distinct) < M8_MIN_OFFSETS:  # a few offsets fit many periods (2x, false CONFIRMED): too few to fit
+        lines.append(f"M8 tick_ms granularity: n/a (tick_ms showed fewer than {M8_MIN_OFFSETS} distinct offsets from "
+                     "the first event)")
+        return ProbeReport(lines, [f"tick_ms granularity: n/a, tick_ms showed fewer than {M8_MIN_OFFSETS} distinct "
+                                   "offsets from the first event"])
     est = _tick_grid_ms(sorted(distinct))
     lo, hi = M8_GRANULARITY_MS
     ok = lo <= est <= hi + M8_TICK_TOLERANCE_MS

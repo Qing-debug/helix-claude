@@ -932,6 +932,24 @@ def test_m8_a_tick_that_never_advances_is_n_a_and_reviewed(tmp_path, clock):
     assert "CONFIRMED" not in rep
 
 
+def _n_offset_ticks(n, step_ms=15.625):
+    """Event k's tick_ms is min(k, n) whole steps of 15.625 ms: exactly n distinct nonzero offsets from the first."""
+    calls = []
+
+    def tick(qpc):
+        calls.append(qpc)
+        return int(min(len(calls) - 1, n) * step_ms)
+    return tick
+
+
+@pytest.mark.parametrize("n, verdict", [(9, "n/a (tick_ms showed fewer than 10 distinct offsets"), (10, "CONFIRMED")])
+def test_m8_is_n_a_below_10_distinct_tick_offsets(tmp_path, clock, n, verdict):
+    # A-M8fix-R m1 / A-FC-D2: with 3-9 offsets the fit gave false CONFIRMED and 2x reads; 10 is enough
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _n_offset_ticks(n)}))
+    assert code == probe.EXIT_OK
+    assert f"M8 tick_ms granularity: {verdict}" in _report(tmp_path, "m8")
+
+
 # ---- piece 4: release-all probes (a second thread) ---------------------------------------------------------
 
 class ReleaseLink(ProbeLink):
