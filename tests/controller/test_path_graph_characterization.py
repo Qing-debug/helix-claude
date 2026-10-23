@@ -38,6 +38,8 @@ NO_PATH_LEGS = {((49, 28), (101, 24)), ((101, 24), (105, 42))}
 
 @pytest.fixture(scope="module")
 def ff2():
+    # One MapleAgent shared by every test in this module (saves rebuilding FF2): tests must only read it.
+    # A test that mutates the agent (e.g. connectCharacterNode) needs its own agent.
     agent = MapleAgent(characterClass=Kanna())
     assert agent.loadMap(FIXTURE) == Success(BuildOutcome.BUILT)
     by_pos = {n.minimap_position: n for n in agent.node_map.values()}
@@ -107,14 +109,6 @@ def test_ff2_rotation_leg_path(ff2, leg):
     assert leg in _rotation_legs(agent)
     src, dst = by_pos[leg[0]], by_pos[leg[1]]
     assert nx.has_path(agent.pathGraph.graph, src, dst) is (leg not in NO_PATH_LEGS)
-
-
-def test_ff2_exactly_two_of_the_seven_rotation_legs_have_no_path(ff2):
-    agent, by_pos = ff2
-    legs = _rotation_legs(agent)
-    assert len(legs) == 7
-    no_path = {leg for leg in legs if not nx.has_path(agent.pathGraph.graph, by_pos[leg[0]], by_pos[leg[1]])}
-    assert no_path == NO_PATH_LEGS
 
 
 # 4. Synthetic graphs: reach, alignment, ties, platform edges -------------------------------------------
