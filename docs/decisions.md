@@ -856,3 +856,19 @@ Cost if wrong: revert one listener commit.
 Undo: revert `10ffa2a` (look) and/or `c7bc1e9` (close handler).
 
 Pointer: ledger.md:635 (A-V2stamp), :637 (ruling), :645 (A-LF), :650 (A-LFK-R).
+
+## A-V2link-D1 (2026-10-22): after F1 lands, the V2 step 4 fault soak is re-run live
+
+Question: A-V2link traced the ~0.97 s link-loss detection to a cancelled PING write that WinRT still awaits (fix F1, 706–731 ms offline). V3 cannot re-measure faults (plan:1779, :1793, :1795), and the live re-measure needs Hong, the board and an elevated launch (human-only). Re-run V2 step 4 after F1?
+
+Ruling: A, "after F1 lands, re-run the V2 step 4 fault soak live (right after V1 live, same sitting)" (Hong's decision).
+
+Reason: only a live run shows the fix on the real link. The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
+
+Affects: the order of the live runs (V1, then the V2 step 4 re-run); data in `data/soak/v2-faults-4`. No code or plan change comes from the decision itself.
+
+Cost if wrong: one ~15-min attended soak.
+
+Undo: none needed.
+
+Pointer: ledger.md:642 (A-V2link), :647 (decision), :710 (A-V2refault), :712 (A-V2refault-V).
