@@ -1052,3 +1052,19 @@ Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s
 Undo: revert `9683e23` and `f40a08e`.
 
 Pointer: ledger.md:783 (raised), :785 (A-FCdbg-adj), :786 (ruling); notes/A-FCdbg.md, notes/A-FCdbg-adj.md, notes/A-KA.md.
+
+## PB-B19 (2026-10-23): B19 walk failure exit code and link-check MapleStory guard
+
+Question: the PB plan-review ladder left two B19 gaps: `main` in `src/route/walk.py` has no stated reason or exit code when `run()` returns a `Failure` or raises, and the live link check sends real keys with no MapleStory-process check. Fix them in the approved plan before the build (B), or leave them as notes for the B19 builder (A)?
+
+Ruling [process] (orch 29; orchestrator ruling under H10, not Hong's): "B19 concerns → option B (amend plan B19 before the build: failure reason + exit code when run() returns Failure or raises; MapleStory-process check in the B19 link-check script, not in B20/B21 in-game runs)".
+
+Reason: 3 of the 4 ladder reviewers raised each gap on their own (PB-ladder-report §4), and the second is key safety: the link check types into the sink window, and with the game open the same keys would land in the game. The check reuses `soak.maple_check()` (`src/input/harness/soak.py:518`), which `probe`, `soak` and `session_starts` already call. B20 and B21 send keys into the game on purpose, so they get no check.
+
+Affects: plan `docs/superpowers/plans/2026-10-23-p1b-route-walking.md`: B19's exit codes (new: 6 = `run()` returned a `Failure`, 7 = `run()` raised; both print `walk failed: ...` / `walk crashed: ...` to stderr and write `stop.json` with `"reason": "error"` and an `"error"` text), B19's tests (cases a-c), B19's live link check (a guard run before the listener starts, a guard as the script's first statement, a 60 s re-check that stops the walker, exit 8, and a no-game guard test), and hard rule 2. The plan's `Status: approved` line stays, with an "Amended after approval" line under it. B19's Cloud tag stays `no`. No code changed.
+
+Cost if wrong: two more exit codes and a few test cases for the B19 builder; a guard that fails closed (an unreadable process list counts as MapleStory running) can stop a legitimate link check.
+
+Undo: revert the `docs(plan): amend B19 ...` commit on `p1b-route-walking`.
+
+Pointer: ledger.md (orch 29); notes/PB-amend.md; PB-ladder-report.md §4.

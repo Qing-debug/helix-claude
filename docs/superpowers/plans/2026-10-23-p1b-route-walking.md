@@ -2,6 +2,8 @@
 
 **Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
+Amended after approval: B19 (PB-amend, 2026-10-23)
+
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
 > (`- [ ]`) syntax. A task's text is complete on its own: read the Contracts it names, not other tasks.
@@ -45,7 +47,8 @@ H8 (git actions, pushes), H9 (autonomy), H10 (Hong is asked only about spec devi
    B merges to `master` only after the in-game sign-off (task B21) passes (H4, specB:L72); no build task merges.
 2. **No game input without Hong.** Only task B21 sends keys while MapleStory runs, and only with Hong present
    (specB:L41, "not run in the game while the user is away"). Tasks B17-B20 build and unit-test tools offline; any
-   live smoke test of them sends keys only into Feature A's "Helix input test sink" window with MapleStory closed.
+   live smoke test of them sends keys only into Feature A's "Helix input test sink" window with MapleStory closed,
+   and checks for a MapleStory process first and aborts if one runs (B19's link check does; PB-B19).
 3. **Error handling.** Graph, terrain, planner and log code return `returns.result` `Success`/`Failure` and check
    with `is_successful` (`CLAUDE.md`, "Error handling"). Simulator internals may raise `ValueError` on programmer
    error (bad constructor arguments) but return `Result` from every function a task lists as returning one.
@@ -1214,6 +1217,7 @@ def main(argv: list[str] | None = None) -> int
 #                          [--seed S] [--out data/route/<UTC stamp>] [--record]
 # exit codes: 0 done · 1 run ended link_down · 2 usage / no --supervised · 3 no first frame or no character found
 #             · 4 connect failed · 5 map, route graph or character icon failed to load
+#             · 6 run() returned a Failure · 7 run() raised an exception (PB-B19)
 ```
 
 - [ ] **Seams** (module-level names in `walk.py` that `main` calls and tests monkeypatch): `_start_capture(shared)`
@@ -1236,6 +1240,15 @@ def main(argv: list[str] | None = None) -> int
   `--record`, a `record` (B17) thread saves frames to `out/frames/`. On every exit path after a
   successful `connect`: `layer.release_all()`; on every exit path: `StopControl.close()` (if started) and
   `link.close()` (if the link was made).
+  **Failure exit (PB-B19).** `main` calls `walker.run()` inside a `try`. If `run()` returns a `Failure`, `main` prints
+  `walk failed: <reason>` (the `Failure` value) to stderr and returns 6. If `run()` raises an `Exception`, `main`
+  prints `walk crashed: <ExceptionType>: <message>` to stderr and returns 7; the exception does not escape `main`
+  (`KeyboardInterrupt` is not caught: Ctrl+C is handled by `StopControl`'s SIGINT handler). On both paths the cleanup
+  above still runs (`stop.json`, `release_all` if connected, `StopControl.close()`, `link.close()`). `stop.json` is
+  `{"reason": "error", "error": <text>, "trigger_ns", "trigger_source"}`, where `<text>` is the printed text after
+  the prefix (the `Failure` value, or `<ExceptionType>: <message>`) and the last two are as on the other paths. `main` then prints `stopped: error` (and ` (<source>)` when a source is set), as for
+  any other reason. A `RunSummary` with reason `"link_down"` is not a `Failure` and still returns 1; `"max_laps"` and
+  `"stopped"` return 0.
 - [ ] **Tests** (fakes for capture, link and hook; the module imports collect on Linux, hard rule 9): no `--supervised` → 2;
   `trigger()` returns in < 10 ms while `on_stop` blocks for 1 s; connect `Failure` → 4 and
   `release_all` not attempted on a link that never connected; `StopControl.trigger()` twice → `on_stop` once; end to end:
@@ -1248,19 +1261,49 @@ def main(argv: list[str] | None = None) -> int
   the wrapper's `release_all` and `close` were each called at least once on exit, and `stop.json` is
   `{"reason": "max_laps", "trigger_ns": null, "trigger_source": null}`. `StopControl.trigger("sigint")` then
   `trigger()` → `trigger_source == "sigint"` and `trigger_ns` unchanged by the second call.
+  Failure exit (PB-B19), with the same seams as the end-to-end test and the wrapper's `release_all` and `close`
+  calls counted: (a) `monkeypatch.setattr(RouteWalker, "run", lambda self: Failure("boom"))` → `main` returns 6,
+  stderr (`capsys`) contains `walk failed: boom`, `stop.json` is `{"reason": "error", "error": "boom",
+  "trigger_ns": null, "trigger_source": null}`, and `release_all` and `close` were each called at least once;
+  (b) `run` replaced by a function that raises `RuntimeError("kaboom")` → `main` returns 7 without raising, stderr
+  contains `walk crashed: RuntimeError: kaboom`, `stop.json` has `"reason": "error"` and `"error": "RuntimeError:
+  kaboom"`, and `release_all` and `close` were each called at least once; (c) `run` returns
+  `Success(RunSummary(0, 0, "link_down"))` → `main` returns 1 and stderr contains neither `walk failed` nor
+  `walk crashed`.
 - [ ] **Live link check (MapleStory closed; Windows, board paired).** With the game closed there is no minimap, so
   the default `_wait_first_frame` fails (exit 3) before `connect`; this check patches the seams instead.
+  This check sends real keys, so it refuses to run while MapleStory runs (PB-B19), the way Feature A's `probe`,
+  `soak` and `session_starts` do. They all call `soak.maple_check()` (`src/input/harness/soak.py:518`; it returns
+  `(ok, text)` and is not ok if any process image name contains "maple", any case, or the `tasklist` list cannot be
+  read), at `probe.py:1002`, `soak.py:553` and `session_starts.py:154`. Reuse it; do not write another check.
   Each attempt uses a fresh folder `A = data/route/linkcheck/<UTC stamp>` (the listener appends to `keys.jsonl`,
   so a retry in the same folder would mix runs).
+  0. Before the listener starts (it blocks the bot keys system-wide, so nothing may be running yet), run the guard
+     alone: `python -m data.route.linkcheck.check --guard-only`. It calls `guard()` (below), which prints its text,
+     and exits 0 if no MapleStory process is running, else exits 8. On 8, stop: close the game and start a new
+     attempt.
   1. Start `python -m src.input.harness.listener --out A --seconds 180` (the sink window).
   2. Run a throwaway script `data/route/linkcheck/check.py` (gitignored, never committed) from the repo root as
      `python -m data.route.linkcheck.check A` (so `import src...` resolves; a plain `python data/...py` puts the
-     script's folder on `sys.path` instead); it patches `walk.py`'s
-     seams as in the end-to-end test except: `_make_link` the real `BleLink`, `_make_stop_control` the real
-     `StopControl`, `_make_clock` `RealClock()`, `_countdown_s` left at 5.0, and `input_layer._clock` /
-     `input_layer._sleep` left at their defaults; then calls `main(["--map", "tests/fixtures/fossil_foundry_2.csv",
-     "--supervised", "--laps", "1", "--minutes", "2", "--out", A + "/run"])`.
+     script's folder on `sys.path` instead). It defines `guard() -> None`: `ok, text = soak.maple_check()`, print
+     `text`, and if not `ok`, `raise SystemExit(8)`. Importing the script runs nothing (the work is under
+     `if __name__ == "__main__"`). With `--guard-only` as its only argument it calls `guard()` and exits 0. Run as
+     `... check A`, it calls `guard()` as its first statement, before it patches
+     anything or touches the board, and starts a daemon thread that re-checks every `soak.PROCESS_CHECK_PERIOD_NS`
+     (60 s) while `main` runs; if that re-check is not ok, the thread prints the text and calls
+     `trigger("maple_check")` on the `StopControl` that the patched `_make_stop_control` made, which stops the walker
+     and releases every key, and the script then exits 8 after `main` returns (whatever `main` returned).
+     It patches `walk.py`'s seams as in the end-to-end test except: `_make_link` the real `BleLink`,
+     `_make_stop_control` the real `StopControl`, `_make_clock` `RealClock()`, `_countdown_s` left at 5.0, and
+     `input_layer._clock` / `input_layer._sleep` left at their defaults; then calls `main(["--map",
+     "tests/fixtures/fossil_foundry_2.csv", "--supervised", "--laps", "1", "--minutes", "2", "--out", A + "/run"])`.
   3. During the 5 s countdown click the sink window; about 30 s later press F12 once.
+  Guard test (no game or board needed; run once before the first attempt; nothing is sent). Each line runs
+  `from returns.result import Success, Failure; from src.input.harness import soak; soak._process_names = <X>;
+  from data.route.linkcheck import check; check.guard()` with `<X>` as below:
+  `lambda: Success(['MapleStory.exe'])` must exit 8 and print `MapleStory running: ['MapleStory.exe']`;
+  `lambda: Failure('x')` must exit 8 and print `process check failed: x` (an unreadable list counts as running);
+  `lambda: Success(['python.exe'])` must return normally and print `no MapleStory process`.
   Pass: `stop.json` has `reason "stopped"` and `trigger_source "hotkey"` (not `"timer"`); the last line of
   `legs.jsonl` has outcome `stopped` and `end_ns − trigger_ns ≤ 1e9` (both `perf_counter_ns`); in the listener's
   `keys.jsonl`, every event between the first and the last bot-key event is one of the seven bot keys or F12 (vk 0x7B;
