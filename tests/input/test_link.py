@@ -11,6 +11,7 @@ from collections import namedtuple
 from pathlib import Path
 
 import pytest
+from bleak.exc import BleakError, BleakGATTProtocolError
 from returns.pipeline import is_successful
 
 from src.input import link as L
@@ -738,6 +739,110 @@ def test_keepalive_schedule_and_blocked_write(link, board):
     assert (fault_ns - blocked[0]) / 1e9 < 0.8
     assert bg.join().failure() == InputError.LINK_LOST
     assert bg.t_end * 1e9 - blocked[0] < 0.8e9  # perf_counter and perf_counter_ns share a clock
+
+
+# ---------------------------------------------------------------- soft vs hard keepalive misses (A-FCdbg-D1 -> E)
+
+
+async def protocol_error(client, seq, data):
+    """The board answered the write with an ATT error: 0x11 Insufficient Resources after a burst (A-FCdbg)."""
+    raise BleakGATTProtocolError(0x11)
+
+
+async def no_pong(client, seq, data):
+    """The write completes (the board answered it), but no PONG comes."""
+
+
+async def unreachable(client, seq, data):
+    raise BleakError("Could not write value bytearray(b'') to characteristic 0013: Unreachable")
+
+
+def recording(*handlers):
+    """A ping handler that records each write's start (perf_counter_ns) in .starts. Write i uses handlers[i], the
+    last one for every later write."""
+    starts = []
+
+    async def handler(client, seq, data):
+        starts.append(time.perf_counter_ns())
+        await handlers[min(len(starts), len(handlers)) - 1](client, seq, data)
+
+    handler.starts = starts
+    return handler
+
+
+def soft_miss_warnings(caplog):
+    return [r for r in caplog.records
+            if r.name == LOGGER and r.levelno == logging.WARNING and "soft miss" in r.getMessage()]
+
+
+SOFT = pytest.mark.parametrize("soft", [protocol_error, no_pong], ids=["att_error", "no_pong"])
+
+
+@SOFT
+def test_one_soft_keepalive_miss_is_a_warning_not_a_fault(link, board, caplog, soft):
+    """T1/T2: the board answered the PING's write, so the link is alive: one WARNING, no fault, the session stays."""
+    handler = recording(soft, board.default_ping)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        board.ping = handler
+        assert wait_until(lambda: len(handler.starts) >= 4)  # the soft PING's 0.5 s limit has passed
+        time.sleep(0.1)
+    assert link.faults() == []
+    assert board.client.disconnect_calls == 0
+    assert is_successful(link.play(tap_steps()))
+    assert len(soft_miss_warnings(caplog)) == 1
+    assert not any("link fault" in r.getMessage() for r in caplog.records)
+
+
+@SOFT
+def test_third_soft_keepalive_miss_in_a_row_is_link_lost(link, board, soft):
+    """T3: K = 3. Every PING soft: LINK_LOST at the 3rd soft miss, the only fault; a pending play returns LINK_LOST."""
+    bg = Bg(link.play, walk_steps(3000))
+    assert wait_until(lambda: board.ops(OP_PLAY))
+    handler = recording(soft)
+    board.ping = handler
+    assert wait_until(lambda: link.faults(), timeout=2.0)
+    assert bg.join().failure() == InputError.LINK_LOST
+    time.sleep(0.3)  # a further tick would have written by now
+    assert fault_errors(link) == [InputError.LINK_LOST]
+    fault_ns, t0 = link.faults()[0][0], handler.starts[0]
+    if soft is no_pong:  # 3rd soft PING starts at t0 + 2 x 250 ms and misses at its 500 ms limit
+        expected = t0 + (2 * L.KEEPALIVE_PERIOD_S + L.PING_TIMEOUT_S) * 1e9
+        assert expected - 0.05e9 <= fault_ns <= expected + 0.15e9, (fault_ns - t0) / 1e9
+    else:  # the write fails at once: the fault follows the 3rd write, and no 4th PING is written
+        assert len(handler.starts) == 3, len(handler.starts)
+        assert handler.starts[2] <= fault_ns < handler.starts[2] + 0.1e9
+
+
+@SOFT
+def test_a_pong_resets_the_soft_miss_count(link, board, soft):
+    """T4: soft and answered PINGs alternating for >= 8 ticks never end the session."""
+    handler = recording(*[soft, board.default_ping] * 6)
+    board.ping = handler
+    assert wait_until(lambda: len(handler.starts) >= 11, timeout=4.0)
+    time.sleep(0.6)
+    assert link.faults() == []
+    assert is_successful(link.play(tap_steps()))
+
+
+def test_keepalive_write_unreachable_is_a_hard_miss(link, board):
+    """T5: a write error other than BleakGATTProtocolError (bleak raises plain BleakError for UNREACHABLE /
+    ACCESS_DENIED) is a hard miss: LINK_LOST at once, no soft-miss count."""
+    handler = recording(unreachable)
+    board.ping = handler
+    assert wait_until(lambda: link.faults(), timeout=1.0)
+    assert fault_errors(link) == [InputError.LINK_LOST]
+    assert (link.faults()[0][0] - handler.starts[0]) / 1e9 < 0.3
+
+
+def test_hard_miss_after_a_soft_miss_does_not_wait_for_the_count(link, board):
+    """T6: one soft miss, then every write blocked (dead peer): LINK_LOST at the first blocked PING's 500 ms limit.
+    Bound 0.7 s, not 0.8: a hard miss that went through the count would end the session at the 2nd blocked PING's
+    limit, 0.75 s after the first blocked write."""
+    handler = recording(protocol_error, held)
+    board.ping = handler
+    assert wait_until(lambda: link.faults(), timeout=2.0)
+    assert fault_errors(link) == [InputError.LINK_LOST]
+    assert (link.faults()[0][0] - handler.starts[1]) / 1e9 < 0.7
 
 
 # ---------------------------------------------------------------- PONG log (A-PF-D2)

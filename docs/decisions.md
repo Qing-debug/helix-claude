@@ -1032,3 +1032,19 @@ Cost if wrong: "a regression in a path V3 exercised, found later".
 Undo: run a V3 soak at the merged HEAD.
 
 Pointer: ledger.md:765 (A-FC1-R), :766 (ruling).
+
+## A-FCdbg-D1 (2026-10-23): a keepalive PING the board answered is a soft miss; only a hard miss or 3 soft misses in a row end the session
+
+Question: an m6 burst exhausts the board's NimBLE buffers for a moment, so a keepalive PING written then gets an ATT error response (0x11 Insufficient Resources) or no PONG, and the PC ended a live session as `LINK_LOST` (A-FCdbg). How should Helix stop that without slowing real-loss detection? Options raised: A. `LINK_LOST` after 2 consecutive failed keepalives; B. an ATT error response counts as the peer alive; C. skip or delay keepalives near a PLAY; D. firmware msys pool 12 → 24 blocks; E (the adjudicator's): B's classification widened to "the board answered the write", plus A's consecutive count applied only to those soft misses.
+
+Ruling: ruled as Hong (decide-as-Hong), adjudicated by A-FCdbg-adj. The ledger line, verbatim: "Ruling (as Hong) [plan change to link fault semantics; adjudicated, not a spec deviation]: A-FCdbg-D1 → E (hard miss = LINK_LOST at once; soft miss = WARNING, no fault; 3 soft misses in a row = LINK_LOST), because it covers both observed/inferred failure modes, leaves real-loss detection and every harness gate (reset worst case < 1 s, test_link.py:335-342) unchanged, needs no firmware change, and A/B/C/D each break a gate or leave a mode open; cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; undo: revert the fix commit + plan commit. → verdict Q for the fix review and A-final-R; flag to Hong in the end summary (interface/data-behaviour, top)."
+
+Reason: E covers both failure modes (ATT error response, and a completed write with no PONG); a hard miss (the write still pending at the 0.5 s deadline, or any write error other than `BleakGATTProtocolError`) still ends the session at once, so the reset worst case (706–730 ms, A-V2link-D1) and `test_keepalive_pong_loss_is_fault_within_0_8s_of_the_last_pong` are unchanged; no firmware change. A delays reset detection by 250 ms (~956–980 ms against the 1 s gate), B leaves the no-PONG mode open, C can break spec:L57 during a hold, D needs a new image and reflash. Not a spec deviation (the spec has no keepalive text); a plan change to P4, the same class as A-P4-D2.
+
+Affects: `src/input/link.py` (`_keepalive_ping`, `_ping_cmd` returns whether the board answered, `KEEPALIVE_SOFT_MISS_LIMIT = 3`, `_Session.soft_misses` reset by any PONG in `_on_notify`), tests T1–T6 in `tests/input/test_link.py` (`9683e23`); plan A P4 Keepalive, `ping()`, Session state, fault list, C5 and the P4 test list (`f40a08e`). A soft miss logs one WARNING on `src.input.link` and adds no `faults()` / `link_faults.jsonl` entry.
+
+Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; a board that answers writes but never sends PONG ends ~1.0 s after its first unanswered PING instead of 0.5 s.
+
+Undo: revert `9683e23` and `f40a08e`.
+
+Pointer: ledger.md:783 (raised), :785 (A-FCdbg-adj), :786 (ruling); notes/A-FCdbg.md, notes/A-FCdbg-adj.md, notes/A-KA.md.
