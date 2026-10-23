@@ -361,7 +361,7 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node,
   - else `TELEPORT` if T + |d − reach_h|/V < d/V (strict), else `WALK` with `walk_ms = min(1000·d/V, max_walk_ms)`.
     With defaults: d = 13 → TELEPORT, d = 11 → WALK, d = 4 → WALK, d = 30 → TELEPORT.
 - **P5 at g** (and g ≠ target, else P1 applied). The next path edge (g, h): `SLOPE` → `WALK` toward h, `walk_ms = min(1000·|hx − px|/V, max_walk_ms)`;
-  `UP` → `TELEPORT` `Key.UP`; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, reach_v)`: one option → that
+  `UP` → `TELEPORT` `Key.UP`; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, rg.reach_v, rg.params)`: one option → that
   one; two → let c_lo ≤ c_hi; if c_hi ≤ c_lo·(1 + `ability_mix_band`), `DROP` iff `rng.random() < 0.5`, else
   `TELEPORT` `Key.DOWN`; otherwise the cheaper (ties `TELEPORT`). `TELEPORT DOWN` is `Move(TELEPORT, Key.DOWN, None)`;
   `DROP` is `Move(DROP, None, None)`. `rng` is used only in this two-option, in-band case.
@@ -631,7 +631,7 @@ edge cases. **Cloud:** yes — stdlib, networkx, returns, `src.controller`, `src
 - [ ] **Tests** (FF2: `agent = MapleAgent(characterClass=Kanna()); agent.loadMap(fixture)`;
   `RouteGraph.build(agent.pathGraph, MovementParams())`):
   1. `Success`; 21 nodes, **51** edges; `nx.is_strongly_connected(rg.graph)` is True.
-  2. All 40 PathGraph edges are present with their B5 kinds; the 11 added edges are the 2 SLOPE edges of B4.1 and
+  2. All 40 PathGraph edges are present with their B5 kinds; the 11 added edges are the 2 SLOPE edges `(66,28)→(79,24)` and `(79,24)→(66,28)` and
      the 9 vertical links of B4.2 that PathGraph lacks: `(113,60)→(118,43)`, `(101,24)→(105,42)`,
      `(105,42)→(101,24)`, `(74,45)→(79,24)`, `(42,28)→(37,60)`, `(79,24)→(74,45)`, `(109,23)→(105,42)`,
      `(118,43)→(113,60)`, `(97,43)→(101,24)`.
@@ -785,7 +785,7 @@ class SimWorld:
   - **teleport UP:** land on `surface_below(x + landing offset, y − reach_v)` (may be the current platform);
     `settle_s` as above. **teleport DOWN:** land on `surface_below(x + landing offset, y + 1)`; none → stay;
     `settle_s = teleport_settle_s + max(0, (y_land − y) − reach_v)/fall_px_per_s`. No overshoot vertically.
-  - **drop:** if the current platform is not droppable → `kind="none"`, no move, nothing injected. Else land on
+  - **drop:** the current platform is the one whose `surface_y(x)` is within 0.5 px of y. If it is not droppable → `kind="none"`, no move, nothing injected. Else land on
     `surface_below(x + landing offset, y + 1)`; `settle_s = drop_settle_s + (y_land − y)/fall_px_per_s`.
   - **walk LEFT/RIGHT:** d = held_ms/1000 · `walk_px_per_s` (+ OVERSHOOT extra px with `overshoot_p`); x′ = x ± d;
     land on `surface_below(x′, y − 6)`; `settle_s = max(0, y_land − y)/fall_px_per_s`. UP/DOWN walk → `nothing`.
@@ -837,7 +837,7 @@ class SimPositionSource:                          # implements walker.PositionSo
   `DOWN` first → `world.drop(t_end)`; exactly one arrow and no other key → `world.walk(arrow, held_ms, t_end)` with
   held_ms = (up − down)/10; anything else → `world.nothing(t_end)`. Time: `clock.advance(link_latency_s)`, then
   advance by the schedule total; `t_end` = clock after that. Returns `Success(SendReport(seq, sent_ns, written_ns,
-  accepted_ns, done_ns, None, Done(seq, 0, None, 0, 0, ())))` with `seq` counting from 1 and the four stamps
+  accepted_ns, done_ns, Accepted(seq, 0), Done(seq, 0, None, 0, 0, ())))` (`Accepted`, G11's module) with `seq` counting from 1 and the four stamps
   non-decreasing. `release_all()` advances nothing and returns a `SendReport` with `accepted_ns=None`.
 - [ ] **Tests:**
   1. Through a real `InputLayer(SimLink(...), TimingModel(default_rng(3)))`, noise off: `teleport(Key.DOWN)` from
@@ -892,7 +892,8 @@ B9/B10.
      read if `use_stimulus` else None; `execute(layer, move, stimulus)`. `Failure(LINK_LOST)` or `Failure(NOT_CONNECTED)` → append the move entry, outcome `LINK_DOWN`. Any
      other `Failure` → entry with `input` = the error name, continue to settle.
   8. Settle: sleep `min_settle_s`; then poll every `poll_s`: settled when two consecutive successful reads are equal;
-     give up after `settle_timeout_s` (settled = last successful read, or None). Record `MoveEntry` and loop.
+     give up after `settle_timeout_s` (settled = last successful read, or None). The stop flag is checked before
+     every poll; set → record the `MoveEntry` and end `STOPPED`. Record `MoveEntry` and loop.
   Every outcome returns a `LegRecord` with `end_ns = clock.now_ns()` and `src`/`dst` positions (`src` None for None).
 - [ ] **Tests** (FF2 `RouteGraph`, `SimWorld` + `SimLink` + `SimPositionSource`, `SimClock`, `use_stimulus=False`,
   `rng=default_rng(0)`):
@@ -900,7 +901,7 @@ B9/B10.
      `pos` is on the slope (x in 66..79).
   2. Noise off, start `(101,24)`, leg to `(105,42)` → `REACHED` in ≤ 3 moves; final settled position within 2 px.
   3. Noise off, every rotation leg from its source node → `REACHED`, 0 stalls, 0 off_graph.
-  4. A link that never moves (`no_op_p=1`): leg `(82,60)`→`(48,61)` with `leg_timeout_s=25` → `TIMED_OUT`, `stalls
+  4. A link that never moves (`replace(NoiseConfig.off(), no_op_p=1)`): leg `(82,60)`→`(48,61)` with `leg_timeout_s=25` → `TIMED_OUT`, `stalls
      == 2` (10 s and 20 s windows), every move entry has `input == "ok"`.
   5. `fail_next=[InputError.ACK_TIMEOUT]` → the first entry has `input == "ACK_TIMEOUT"` and the leg is still
      `REACHED`. `fail_next=[InputError.LINK_LOST]` → `LINK_DOWN` after exactly 1 entry and no further `play`.
@@ -922,7 +923,8 @@ B9/B10.
   leg record and, after each full lap, a `LapRecord(all_reached = every leg REACHED)` goes to the sink. A sink
   `Failure` is printed once per run and does not stop the walk. A leg ending `STOPPED` → summary reason `"stopped"`;
   `LINK_DOWN` → `"link_down"`; after `max_laps` laps → `"max_laps"`. A `TIMED_OUT` leg moves on to the next leg. On
-  every return path `layer.release_all()` is called exactly once more, and a `threading.Event` "run finished" is set.
+  every return path `layer.release_all()` is called exactly once more; then a `threading.Event` "run finished" is
+  set and, if the stop guard was started, `run` joins it (timeout 1 s) before returning.
   `stop_now()` (safe from any thread, more than once): sets the stop `threading.Event`; calls `layer.release_all()`;
   and, on its first call only, starts a daemon *stop guard* thread that calls `layer.release_all()` every 50 ms
   (wall time, `time.sleep`) until "run finished" is set (PB-D4). `walk_leg` checks the stop flag again immediately
@@ -959,7 +961,7 @@ B9/B10.
 class SimReport:
     laps_requested: int; laps_completed: int; legs: int; legs_reached: int
     stalls: int; timeouts: int; link_down: int
-    known_cases: dict[str, tuple[int, int]]    # "(49, 28)->(101, 24)" -> (reached, attempted), laps >= 1 only
+    known_cases: dict[str, tuple[int, int]]    # "(x1, y1)->(x2, y2)" -> (reached, attempted), laps >= 1 only
     single_error_legs: int; single_error_within_3: int
     multi_error_legs: int; multi_error_within_bound: int     # extra <= 3 x (number of errors)
     moves: int; no_ops: int; drops: int; teleport_downs: int
@@ -971,37 +973,51 @@ class Check:
 
 def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConfig = NoiseConfig(),
             sim_params: SimParams = SimParams(), params: MovementParams = MovementParams(),
-            out_dir: Path | None = None) -> Result[SimReport, str]
+            out_dir: Path | None = None,
+            known_cases: Sequence[tuple[tuple[int, int], tuple[int, int]]] = (),
+            character: CharacterClass | None = None) -> Result[SimReport, str]   # None -> Kanna()
 def judge(report: SimReport, min_single_error_legs: int = 100) -> list[Check]
 def main(argv: list[str] | None = None) -> int
 ```
 
-- [ ] **`run_sim`:** `MapleAgent(characterClass=Kanna()).loadMap(map_csv)`, `RouteGraph.build`, `load_terrain`;
+- [ ] **`run_sim`:** `MapleAgent(characterClass=character or Kanna()).loadMap(map_csv)`, `RouteGraph.build`, `load_terrain`;
   seeds from `np.random.SeedSequence(seed).spawn(4)` → timing, planner, world, positions; the world starts at the
   first rotation node's position; `InputLayer(SimLink(...), TimingModel(rng_timing))`; `RouteWalker` with
   `use_stimulus=False`, `leg_timeout_s=60`, `max_laps=laps`, sink `JsonlLegLog(out_dir, fsync=False)` if `out_dir`
-  else `MemorySink`. **Recovery metric:** for each leg whose moves had exactly one injected error (from
-  `world.effects`), replay the same leg in a fresh noise-off world from the leg's actual start position (`world.pos` when the leg began) (same terrain,
-  a fresh `TimingModel` and planner rng seeded from the leg's number) and count its moves (nominal);
+  else `MemorySink`, wrapped in a sink that records `len(world.effects)` at each `write_leg`, so the effects between
+  two consecutive leg writes belong to that leg. `known_cases` names legs by their (src, dst) positions; each listed
+  leg gets a `known_cases` entry keyed `f"{src}->{dst}"` (Python tuple repr) counting the laps ≥ 1 in which it was
+  attempted and reached. No map position is written in `run.py` (hard rule 5). **Recovery metric:** for each leg whose moves had exactly one injected error (from
+  `world.effects`), replay the same leg in a fresh noise-off world from the leg's actual start position (`world.pos` when the leg began) (same terrain
+  and the same `RouteGraph` the run used, including any node offsets; a fresh `TimingModel` and planner rng seeded
+  from the leg's number) and count its moves (nominal);
   `extra = moves − nominal`; `single_error_within_3` counts `extra ≤ 3`. A leg with k ≥ 2 errors is replayed the
   same way and counts in `multi_error_legs`, and in `multi_error_within_bound` when `extra ≤ 3·k` (each injected
   error is allowed its own 3 extra moves).
 - [ ] **`judge`** returns these checks, in order: `laps` (`laps_completed == laps_requested` and
-  `legs_reached == legs` and `timeouts == 0` and `link_down == 0`); `stalls` (`== 0`); `known_cases` (both entries
-  have reached == attempted == laps_completed); `recovery` (`single_error_legs ≥ min_single_error_legs` and
+  `legs_reached == legs` and `timeouts == 0` and `link_down == 0`); `stalls` (`== 0`); `known_cases` (every entry has
+  reached == attempted == laps_completed; with no entries it passes with detail "none listed"); `recovery` (`single_error_legs ≥ min_single_error_legs` and
   within_3/single ≥ 0.99 and, when `multi_error_legs > 0`, within_bound/multi ≥ 0.99); `noise` (`no_ops/moves ≥ 0.05`); `abilities` (`drops > 0` and `teleport_downs > 0`).
 - [ ] **CLI:** `python -m src.route.sim.run --laps N --seed S [--map tests/fixtures/fossil_foundry_2.csv]
-  [--terrain tests/fixtures/ff2_terrain.json] [--out DIR]` prints the report and one `PASS`/`FAIL` line per check;
+  [--terrain tests/fixtures/ff2_terrain.json] [--out DIR] [--known-case X1,Y1:X2,Y2]... [--min-single-error-legs K]
+  [--class kanna]` (`--known-case` repeatable; `--min-single-error-legs` default 100; `--class` chooses from
+  `{"kanna": Kanna}`, default `kanna`) prints the report and exactly one line per check starting `PASS ` or `FAIL `;
   exit 0 iff all pass.
 - [ ] **Node offsets.** With `noise.node_offset_px = k > 0`, `run_sim` adds `rng_world.integers(-k, k + 1)` to each
   node's y in the loaded map (a copy of the CSV rows, before `loadMap`), so the planner sees hand-placed nodes off
-  the surface while `SimWorld` uses the unchanged terrain (spec goal 4, "landing slightly off").
-- [ ] **Tests:** (1) 30 laps, seed 1, defaults: every `judge(report, min_single_error_legs=10)` check passes; known
-  cases (30, 30). (2) Same seed twice → equal reports. (3) 20 laps with `SimParams(walk_px_per_s=6.5)` and with
+  the surface while `SimWorld` uses the unchanged terrain (review round 1, I8). Offsets can change which links are
+  inferred (with ±2 the FF2 slope link survives in about 2 of 3 draws, measured by review round 2), so test (3b)
+  checks only that legs complete, not which route they take.
+- [ ] **Tests** (all pass `known_cases=[((49, 28), (101, 24)), ((101, 24), (105, 42))]`): (1) 30 laps, seed 1,
+  defaults except `no_op_p=0.08`: every `judge(report, min_single_error_legs=10)` check passes; both known cases
+  (30, 30). (2) Same seed twice → equal reports. (3) 20 laps with `SimParams(walk_px_per_s=6.5)` and with
   `9.5` (planner still assumes 8.0) → `laps`, `stalls`, `known_cases` pass. (3b) 20 laps with
 `node_offset_px=2` → `laps`, `stalls`, `known_cases` pass. (4) `NoiseConfig(no_op_p=0.01)` →
-  `noise` check fails. (5) `main(["--laps", "2", "--seed", "1"])` returns 0. The 30-lap test takes < 60 s.
-- [ ] **The target run** (task step, not a pytest): `python -m src.route.sim.run --laps 1000 --seed 1` → every check
+  `noise` check fails. (5) `main(["--laps", "2", "--seed", "1", "--min-single-error-legs", "0", "--known-case", "49,28:101,24"])` prints
+  exactly 6 lines starting `PASS ` or `FAIL ` and returns 0 iff all 6 are `PASS`. (6) A `known_cases` entry for a
+  pair that is not a rotation leg → (0, 0) and the check fails. The 30-lap test takes < 60 s.
+- [ ] **The target run** (task step, not a pytest): `python -m src.route.sim.run --laps 1000 --seed 1
+  --known-case 49,28:101,24 --known-case 101,24:105,42` → every check
   PASS, exit 0. Paste its output into the task report and the commit body. If it takes more than 15 min, report the
   time; that is not a failure.
 - **Run:** `python -m pytest -q tests/route/test_sim_run.py`
@@ -1010,7 +1026,8 @@ def main(argv: list[str] | None = None) -> int
 ### Task B15: Character locator
 
 **Files:** create `src/route/character.py`; tests `tests/route/test_character.py`.
-**Class:** O — method and threshold choices for detection. **Cloud:** yes — cv2 and numpy only (synthetic frames).
+**Class:** O — method and threshold choices for detection. **Cloud:** yes — cv2 and numpy only, synthetic frames;
+it touches no file under `src/vision/` (the Appendix B rule is read by directory and imports).
 **Interface created:**
 
 ```python
@@ -1103,6 +1120,7 @@ def main(argv: list[str] | None = None) -> int
 
 ```python
 def crop_minimap(full_bgr: np.ndarray) -> Result[np.ndarray, str]   # same corner-template steps as vision.py:20-67, via vision_helper_lib
+def load_frames(frames_dir: Path) -> Result[dict[str, np.ndarray], str]   # file name -> RGB minimap, sorted by name
 def draft_labels(frames_dir: Path, out: Path) -> Result[int, str]
 def score(found: dict[str, tuple[int, int] | None], labels: dict[str, tuple[int, int]]) -> dict
 def main(argv: list[str] | None = None) -> int
@@ -1118,13 +1136,13 @@ def main(argv: list[str] | None = None) -> int
 - [ ] **Frame folders.** A folder with an `index.jsonl` is a B17 recording: its PNGs are already minimap crops,
   read with `cv2.imread` (BGR) and converted `COLOR_BGR2RGB`, no crop. Any other folder holds full-screen frames
   (as `data/recordings/ff2_2026-10-21/`): `cv2.imread`, `crop_minimap`, then `COLOR_BGR2RGB`. Both `draft` and
-  `check` handle both kinds; the locator always receives RGB.
+  `check` read frames only through `load_frames`; the locator always receives RGB.
 - [ ] **`score`:** per frame with a label: found within ±1 px in both axes → hit; found > 3 px away in either axis →
   wrong; `None` → miss. Returns `{"frames", "hits", "misses", "wrong", "hit_rate", "max_err_px"}`. `check` exits 0
   iff `hit_rate ≥ 0.995` and `wrong == 0` (specB:L67).
 - [ ] **Tests** (synthetic, no real frames): `score` on hand-made dicts: 199 hits + 1 miss → hit_rate 0.995, PASS
   path; 1 found at 4 px → wrong 1; a 2 px error is neither hit nor wrong (counts against hit_rate only). A
-  temporary folder with `index.jsonl` and one pure-red PNG written by B17's `record` is loaded as an RGB array whose
+  temporary folder with `index.jsonl` and one pure-red PNG written by B17's `record` is loaded by `load_frames` as an RGB array whose
   pixels are (255, 0, 0) and is not passed to `crop_minimap` (monkeypatch it to fail).
 - [ ] **Real run:** `check` on `data/recordings/ff2_2026-10-21/` with Hong's labels. If it fails, tune
   `CharacterLocator`'s thresholds or method in `src/route/character.py` (re-run B15's tests) until it passes. Report
@@ -1154,21 +1172,32 @@ def main(argv: list[str] | None = None) -> int
 #                          [--out data/route/<UTC stamp>] [--record]
 ```
 
-- [ ] **Behaviour of `main`:** refuses (exit 2) without `--supervised`. Loads the map with `MapleAgent` + `Kanna`,
-  builds the `RouteGraph`; starts capture; `wait_first_frame(30 s)`; one `locate` must succeed (exit 3 otherwise);
-  `BleLink().connect()` (exit 4 on `Failure`); `InputLayer(link, TimingModel(rng))`; `RouteWalker` with
-  `RealClock`, `use_stimulus=True`, `JsonlLegLog(out)` and `max_laps=--laps`; writes `session.json` (seed, params,
+- [ ] **Seams** (module-level names in `walk.py` that `main` calls and tests monkeypatch): `_start_capture(shared)`
+  (default `runtime.start_capture`), `_wait_first_frame(shared, timeout_s)` (default `runtime.wait_first_frame`),
+  `_make_positions(shared) -> PositionSource` (default `MinimapPositionSource(shared,
+  CharacterLocator.from_files(...))`), `_make_link()` (default `BleLink()`; the object needs `connect`, `play`,
+  `release_all`, `close`), `_make_clock() -> Clock` (default `RealClock()`), `_make_stop_control(on_stop)` (default
+  `StopControl`), `_countdown_s = 5.0`.
+- [ ] **Behaviour of `main`:** refuses (exit 2) without `--supervised`. Loads the map with `MapleAgent` and the
+  `--class` character (choices `{"kanna": Kanna}`, default `kanna`), builds the `RouteGraph`; `_start_capture`;
+  `_wait_first_frame(30 s)`; one `positions.read()` must succeed (exit 3 otherwise); `link.connect()` (exit 4 on
+  `Failure`); `InputLayer(link, TimingModel(rng))`; `RouteWalker` with
+  `_make_clock()`, `use_stimulus=True`, `JsonlLegLog(out)` and `max_laps=--laps`; writes `session.json` (seed, params,
   map path and SHA-256, git HEAD, start time). Prints "Focus the game window. Starting in 5 s. F12 stops." and waits
-  5 s. `trigger()` only sets an `Event` (first call) that a StopControl worker thread waits on; the worker then
+  `_countdown_s` s. `trigger()` only sets an `Event` (first call) that a StopControl worker thread waits on; the worker then
   calls `on_stop` (`walker.stop_now()`), so the hook procedure returns immediately and never blocks on Bluetooth
   (Windows drops a low-level hook that is slow to return; Feature A's listener only queues, G33). On F12 or Ctrl+C; `--minutes` arms a timer that does the same. With
   `--record`, a `record` (B17) thread saves frames to `out/frames/`. On every exit path: `layer.release_all()`,
   `StopControl.close()`, `link.close()`.
 - [ ] **Tests** (fakes for capture, link and hook; the module imports collect on Linux, hard rule 9): no `--supervised` → 2;
   `trigger()` returns in < 10 ms while `on_stop` blocks for 1 s; connect `Failure` → 4 and
-  `release_all` not attempted on a link that never connected; `StopControl.trigger()` twice → `on_stop` once; with
-  fakes, `--laps 1` on the FF2 fixture and a scripted world (the B10 sim behind a fake capture) → exit 0,
-  `legs.jsonl` has 8 lines, `laps.jsonl` 1, `release_all` called on exit.
+  `release_all` not attempted on a link that never connected; `StopControl.trigger()` twice → `on_stop` once; end to end:
+  seams patched so `_make_link` returns a wrapper around B10's `SimLink` (adds `connect() -> Success`, `close()`),
+  `_make_positions` returns B10's `SimPositionSource` over the same `SimWorld` (FF2 terrain, `NoiseConfig.off()`,
+  start at `(113,60)`), `_make_clock` returns the same `SimClock`, `_start_capture` a no-op, `_wait_first_frame`
+  `Success(None)`, `_make_stop_control` a fake, `_countdown_s = 0`; `main(["--map", fixture, "--supervised",
+  "--laps", "1", "--out", tmp])` → exit 0, `legs.jsonl` has 8 lines, `laps.jsonl` 1, `session.json` exists, and
+  the wrapper's `release_all` and `close` were each called at least once on exit.
 - [ ] **Live smoke (MapleStory closed, Feature A sink focused):** `--laps 1` against the real board sends keys only
   into the sink, writes `legs.jsonl`, and F12 stops it within 1 s.
 - **Run:** `python -m pytest -q tests/route/test_walk_cli.py`
@@ -1216,12 +1245,14 @@ frames.
 - [ ] **Step 2: record.** `record_minimap --seconds 120` while Hong moves Kanna by hand around all four platforms.
 - [ ] **Step 3: FF2 reach measurement** (specB:L13, H3). `measure_moves --reps 10`. Report the summary.
 - [ ] **Step 4: reach decision.** If `reach_h_mean` differs from 19 by more than 1 px, or `reach_v_peak_mean` (when
-  measurable) from 23 by more than 1 px: change `Kanna`'s value(s) in `classes.py` (the one place), re-run B3, B4,
-  B5 tests (their FF2 numbers may change; update them in the same commit with the measurement in the body) and B14.
+  measurable) from 23 by more than 1 px: change `Kanna`'s value(s) in `classes.py` (the one place), re-run the full suite and update the reach- and
+  default-dependent FF2 numbers in the tests of B2-B7 and B12-B14 in the same commit (the measurement in the body),
+  then re-run B14's 1000-lap run.
   Per-map reach is built only if a second map's measurement shows it is needed (specB:L13).
 - [ ] **Step 5: sim realism.** Compare `walk_px_per_s`, `teleport_settle_s`, `drop_settle_s` and the step-2 platform
   positions with `SimParams`, `MovementParams` and `ff2_terrain.json`. Any value off by > 20%, or a platform end off
-  by > 3 px: update the default or fixture, re-run B14 (1000 laps) and paste the result.
+  by > 3 px: update the default or fixture, re-run the full suite (updating default-dependent numbers in B2-B7 and
+  B12-B14 tests), re-run B14 (1000 laps) and paste the result.
 - [ ] **Step 6: detection on moving frames.** B18 `draft` + Hong's check + `check` on step 2's frames → PASS.
 - [ ] **Step 7: short runs.** `walk --supervised --laps 1` twice, then `--laps 10 --record`. Hong watches; F12 aborts
   at any sign of trouble.
@@ -1299,7 +1330,9 @@ orange_node,"(105, 60)",FALSE,FALSE,FALSE,FALSE
    `stale`; the rate is unknown).
 7. **1000-lap wall time** in the simulator (estimated well under 15 min, not run).
 8. **F12** in MapleStory: whether it is bound in Hong's key config (the hook swallows it, PB-D2).
-9. **The 307 recorded frames** show the character standing still, so they contain few distinct positions; the
+9. **Feature D** (spec D goal 3) will want the walker's current leg and state at incident time; B exposes it
+   only through the leg log. D adds a read-only accessor when it is planned.
+10. **The 307 recorded frames** show the character standing still, so they contain few distinct positions; the
    detection target on moving frames depends on B21.
 
 ## Open questions
@@ -1373,3 +1406,4 @@ made provisionally · undo: B13 (remove the guard thread and its test)
 | Round | Reviewer (model, effort) | C / I / m | What changed |
 |---|---|---|---|
 | 1 | PB-rev1, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 8 / 12 | I1: B2↔B3 swapped so params are stage 1; deps fixed. I2: hard rule 9 + function-level Windows imports. I3: stop re-check + guard thread, new decision PB-D4, race test. I4: `StopControl.trigger()` non-blocking + test. I5: B18 reads B17 folders, BGR→RGB. I6: recovery also judges multi-error legs (extra ≤ 3·k). I7: B16→O, B17→S, B20→S; M shortfall (5) stated. I8: "at a node" rule, P6 removed, `node_offset_px` sim option + tests. Minors 9-20 fixed (spec cites re-mapped, counts, SD 210, G14/G21 cites, A3 height check, approx, noise test bands, tolerances, LF transcription wording, deps, merge wording). |
+| 2 | PB-rev2, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 5 / 12 | I1: `--min-single-error-legs` CLI arg; test (5) checks 6 PASS/FAIL lines. I2: `known_cases` and `--known-case` parameters, no FF2 positions in `run.py`. I3: `run` joins the stop guard before returning; stop checked during settle. I4: B19 seams named, end-to-end test fully specified. I5: B18 `load_frames`. Minors: test (1) `no_op_p=0.08`; (3b) caveat and cite; B21 re-run scope; `down_options` args; slope edges listed in B5; drop's current platform; replay graph and leg split; `NoiseConfig.off()` base in B12.4; `Accepted(seq, 0)`; `--class` arg; B15 Cloud rationale; Feature D accessor noted. |
