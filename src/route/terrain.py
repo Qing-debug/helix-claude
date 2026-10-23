@@ -52,7 +52,9 @@ def _bad_position(node: Node) -> bool:
     return not (isinstance(pos, tuple) and len(pos) == 2 and _is_int(pos[0]) and _is_int(pos[1]))
 
 
-def _walk_links(nodes: Sequence[Node], align_px: int, reach_h: int, params: MovementParams) -> list[tuple[int, int, LinkKind]]:
+def _walk_links(
+    nodes: Sequence[Node], align_px: int, reach_h: int, params: MovementParams
+) -> list[tuple[int, int, LinkKind]]:
     """R1. Returns (src index, dst index, kind) in emission order."""
     out = []
     for i, a in enumerate(nodes):
@@ -94,8 +96,11 @@ def _platforms(nodes: Sequence[Node], walk: list[tuple[int, int, LinkKind]]) -> 
     groups: dict[int, list[int]] = {}
     for i in range(len(nodes)):
         groups.setdefault(find(i), []).append(i)
-    # dict insertion order follows the first member seen = the earliest member, so platforms are ordered by it
-    return [sorted(members, key=lambda k: (nodes[k].minimap_position[0], k)) for members in groups.values()]
+    # the root is the earliest member, so sorting by it orders the platforms by their earliest member
+    return [
+        sorted(members, key=lambda k: (nodes[k].minimap_position[0], k))
+        for _, members in sorted(groups.items())
+    ]
 
 
 def _is_blocked(a: Node, b: Node, nodes: Sequence[Node], platforms: list[list[int]], own: set[int]) -> bool:
@@ -120,18 +125,14 @@ def _is_blocked(a: Node, b: Node, nodes: Sequence[Node], platforms: list[list[in
     return False
 
 
-def infer_terrain(nodes: Sequence[Node], align_px: int, reach_h: int, reach_v: int,
-                  params: MovementParams) -> Result[Terrain, str]:
-    if len(nodes) == 0:
-        return Failure("nodes is empty")
-    for n in nodes:
-        if _bad_position(n):
-            return Failure(f"minimap_position must be a 2-tuple of ints, got {n.minimap_position!r}")
-
-    walk = _walk_links(nodes, align_px, reach_h, params)
-    platforms = _platforms(nodes, walk)
-    platform_of = {k: pi for pi, members in enumerate(platforms) for k in members}
-
+def _vertical_links(
+    nodes: Sequence[Node],
+    reach_v: int,
+    params: MovementParams,
+    platforms: list[list[int]],
+    platform_of: dict[int, int],
+) -> list[Link]:
+    """R3. Near-aligned UP/DOWN links in emission order (per node: UP, then DOWN)."""
     vertical: list[Link] = []
     for i, a in enumerate(nodes):
         ax, ay = a.minimap_position
@@ -162,6 +163,23 @@ def infer_terrain(nodes: Sequence[Node], align_px: int, reach_h: int, reach_v: i
             if not PathGraph._isVerticalEdgeValid(a, b):
                 continue
             vertical.append(Link(a, b, kind))
+    return vertical
+
+
+def infer_terrain(
+    nodes: Sequence[Node], align_px: int, reach_h: int, reach_v: int, params: MovementParams
+) -> Result[Terrain, str]:
+    """Infer walk links (R1), platforms (R2) and vertical links (R3). Failure for no nodes or a bad position."""
+    if len(nodes) == 0:
+        return Failure("nodes is empty")
+    for n in nodes:
+        if _bad_position(n):
+            return Failure(f"minimap_position must be a 2-tuple of ints, got {n.minimap_position!r}")
+
+    walk = _walk_links(nodes, align_px, reach_h, params)
+    platforms = _platforms(nodes, walk)
+    platform_of = {k: pi for pi, members in enumerate(platforms) for k in members}
+    vertical = _vertical_links(nodes, reach_v, params, platforms, platform_of)
 
     links = tuple(Link(nodes[i], nodes[j], kind) for i, j, kind in walk) + tuple(vertical)
     return Success(Terrain(links, tuple(tuple(nodes[k] for k in members) for members in platforms)))
