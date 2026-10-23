@@ -904,3 +904,19 @@ Cost if wrong: revert one probe.py commit.
 Undo: revert `bbdc10c`.
 
 Pointer: ledger.md:668 (A-M8), :669 (ruling), :677 (A-M8fix), :703 (A-M8fix-R).
+
+## A-M6live-D1 (2026-10-23): the m6diag-2 data stands although the agent raised the sink window by a Win32 call
+
+Question: in A-M6live's run m6diag-2 the agent, not Hong, brought the sink window to the front by a Win32 call (no key typed, `focus_pauses` empty). Does the run count?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A, "m6diag-2 stands although the agent raised the sink window by Win32 call, no keys typed, focus_pauses []". A-M6fix-R upheld it (Q4 UPHOLD).
+
+Reason: "because done_rc is measured on the board and doesn't depend on who raised the window; not a spec deviation".
+
+Affects: the m6 diagnosis (`data/probe/m6diag-2`) behind A-M6-fix. The live run sheets now let the agent raise the sink itself when the operator cannot (`7e7012c`, `533cbbd`).
+
+Cost if wrong: one ~10-min attended re-run.
+
+Undo: re-run the m6 diagnostic with Hong clicking the sink.
+
+Pointer: ledger.md:717 (A-M6live), :718 (ruling), :729 (A-M6fix-R).
