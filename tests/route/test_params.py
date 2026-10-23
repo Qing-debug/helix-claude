@@ -1,11 +1,11 @@
 import dataclasses
-import math
 import re
 from pathlib import Path
 
 import pytest
-from returns.result import Failure, Success
+from returns.pipeline import is_successful
 
+import src.route.params as params_module
 from src.route.params import MovementParams, validate
 
 
@@ -32,7 +32,7 @@ def test_defaults_match_contract_c3():
 def test_validate_defaults_returns_same_object():
     p = MovementParams()
     result = validate(p)
-    assert isinstance(result, Success)
+    assert is_successful(result)
     assert result.unwrap() is p
 
 
@@ -62,17 +62,17 @@ def test_validate_defaults_returns_same_object():
 )
 def test_validate_rejects_bad_field_and_names_it(field, kwargs):
     result = validate(MovementParams(**kwargs))
-    assert isinstance(result, Failure)
+    assert not is_successful(result)
     assert field in result.failure()
 
 
 def test_ability_mix_band_zero_is_valid():
-    assert isinstance(validate(MovementParams(ability_mix_band=0)), Success)
+    assert is_successful(validate(MovementParams(ability_mix_band=0)))
 
 
 def test_slope_max_grade_one_and_max_walk_5000_are_valid():
-    assert isinstance(validate(MovementParams(slope_max_grade=1.0)), Success)
-    assert isinstance(validate(MovementParams(max_walk_ms=5000.0)), Success)
+    assert is_successful(validate(MovementParams(slope_max_grade=1.0)))
+    assert is_successful(validate(MovementParams(max_walk_ms=5000.0)))
 
 
 def test_params_are_frozen():
@@ -82,5 +82,5 @@ def test_params_are_frozen():
 
 
 def test_params_source_has_no_teleport_reach_literals():
-    src = (Path(__file__).resolve().parents[2] / "src" / "route" / "params.py").read_text()
+    src = Path(params_module.__file__).read_text()
     assert re.search(r"(?<![\w.])(19|23)(?![\w.])", src) is None
