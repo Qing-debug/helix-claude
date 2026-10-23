@@ -1,3 +1,5 @@
+"""Tests for src.route.terrain (plan contract C4): FF2 fixture expectations and synthetic rule cases."""
+
 from pathlib import Path
 
 import pytest
@@ -51,7 +53,9 @@ def _node(x, y, can_fall=False, left_edge=False, right_edge=False):
 
 
 def _links(nodes, reach_h=REACH_H, reach_v=REACH_V, kinds=None):
-    terrain = infer_terrain(nodes, ALIGN, reach_h, reach_v, MovementParams()).unwrap()
+    result = infer_terrain(nodes, ALIGN, reach_h, reach_v, MovementParams())
+    assert is_successful(result)
+    terrain = result.unwrap()
     return [l for l in terrain.links if kinds is None or l.kind in kinds]
 
 
