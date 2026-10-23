@@ -455,7 +455,7 @@ Affects: the firmware concurrency model (F5's `onWrite`, queue item and executor
 
 Cost if wrong: one F5 paragraph rewritten before F5 runs.
 
-Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert 94c376c b3b476b` (reverse-applies clean as of `94c376c`; `b3b476b` alone now conflicts).
+Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert 94c376c b3b476b` (reverse-applies clean as of `94c376c`; `b3b476b` alone now conflicts). At a later HEAD the revert conflicts (A-final-R M-3.2: the plan diff fails at plan :807); remove only this ruling's clauses from F5 by hand. The ruling also lives in the firmware (`Helix_BLE.ino:125` `bool counted`, `:130` "Never reset", `:285`): remove the counted-flag lines there too, then reflash.
 
 ## A-F4-R-D1 (2026-10-22): `vectors.json` is ratified as F4 committed it (one top-level array)
 
