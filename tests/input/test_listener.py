@@ -415,6 +415,27 @@ def test_stop_says_so_when_the_quit_post_fails_and_the_hook_thread_stays_alive(m
     assert not lst._queue.empty()  # the writer's _STOP was queued
 
 
+def test_a_failed_hook_install_raises_without_a_spurious_wm_quit_message(tmp_path, monkeypatch, capsys):
+    # A-H1-fix2-R: the hook thread returns at once when SetWindowsHookExW fails, so its thread id is no longer valid
+    # and PostThreadMessageW fails (ERROR_INVALID_THREAD_ID); stop() must not post or print about it.
+    _fast_startup(monkeypatch)
+    fake_user32 = FakeUser32(post_ok=False)
+    monkeypatch.setattr(listener_mod, "_user32", fake_user32)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+
+    def hook_fails():
+        lst._hook_tid = 4242
+        lst._hook_error = "SetWindowsHookExW failed, GetLastError=5"
+        lst._hook_ready.set()
+    lst._hook_thread = hook_fails  # shadows the bound method: no SetWindowsHookExW
+    _fake_sink_ok(lst)
+    with pytest.raises(OSError, match="SetWindowsHookExW failed"):
+        lst._start()
+    assert fake_user32.posts == []
+    assert "WM_QUIT" not in capsys.readouterr().err
+    assert lst._sink_stop.is_set()
+
+
 # ---- CLI cue when the sink is not in front (A-H1-R m6) -------------------------------------------
 
 class FakeCliListener:
