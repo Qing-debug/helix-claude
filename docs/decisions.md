@@ -936,3 +936,19 @@ Cost if wrong: revert one firmware commit (and reflash).
 Undo: revert `08646be`, then `d4a3fec`, and reflash.
 
 Pointer: ledger.md:719 (ruling), :724 (A-M6fix), :729 (A-M6fix-R), :731 (A-M6fixlive), :743 (A-FC piece 1), :765 (A-FC1-R).
+
+## H13 (2026-10-23): live tests run unattended on the night of 2026-10-23
+
+Question: can the A-M6fix live re-run and the V3 2 h soak run while Hong is away? The conditions set out to him: PC on and unlocked with no sleep or lock, MapleStory closed, board plugged in; the risk that a pop-up stealing focus takes a few stray bot keys before the soak pauses; the sink can be raised by script, with no human click.
+
+Ruling: "run the live test unattended tonight" (Hong's decision, 2026-10-23 night). It applies to the A-M6fix live re-run (flash the fix, m6 alone, flash back) and the V3 2 h soak. Live briefs: the agent raises the sink by Win32 call, checks the session is unlocked before each run (MapleStory too, until Hong said it is closed), never types, and on any doubt stops and leaves the board on HEAD / verified firmware.
+
+Reason: Hong was away (decide-as-Hong mode from that night). Both runs passed: A-M6fixlive (m6 DONE OK 50/50) and A-V3 (all 6 V3 rows PASS, verified by A-V3-V).
+
+Affects: how A-M6fixlive and A-V3 were run; the run sheets' sink-raise text (`7e7012c`, `533cbbd`).
+
+Cost if wrong: a live run repeated with Hong present.
+
+Undo: none needed.
+
+Pointer: ledger.md:721 (decision), :722 (away mode), :723 (MapleStory), :731, :734, :736.
