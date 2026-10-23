@@ -1,15 +1,15 @@
 # Helix_BLE firmware
 
 `Helix_BLE/Helix_BLE.ino` is the ESP32-S3 BLE keyboard sketch (NimBLE), advertised as "Guiness". It began as a copy of
-`~/Documents/Arduino/Helix_BLE/Helix_BLE.ino` (Plan A Task F1) and has since diverged (Tasks F3 to F5 and the A-M6fix
-reply-notify retry: bonding, connection logging, the command queue and executor, wire protocol v1). That sketchbook
-copy is read-only; edit and flash only this one.
+`~/Documents/Arduino/Helix_BLE/Helix_BLE.ino` (Plan A Task F1) and has since diverged (Tasks F3 to F5, the A-M6fix
+reply-notify retry and the A-FC all-up report retry: bonding, connection logging, the command queue and executor,
+wire protocol v1). That sketchbook copy is read-only; edit and flash only this one.
 
 | Path | What |
 |---|---|
 | `Helix_BLE/Helix_BLE.ino` | the sketch |
 | `Helix_BLE/protocol.h` | wire protocol v1: command parser and notification encoders (header-only, no Arduino includes) |
-| `Helix_BLE/notify_retry.h` | the bounded retry of a refused reply notify (A-M6fix) |
+| `Helix_BLE/notify_retry.h` | the bounded retry of a refused reply notify (A-M6fix) and of the loop task's all-up HID report after a refused key report or a RELEASE_ALL (A-FC) |
 | `test/` | host-compiled tests of the two headers, and `vectors.json` (below) |
 | `build/` | compile output (gitignored) |
 
@@ -127,8 +127,8 @@ g++ -std=c++17 -Wall -Werror -I$REPO/firmware/Helix_BLE $REPO/firmware/test/test
 g++ -std=c++17 -Wall -Werror -I$REPO/firmware/Helix_BLE $REPO/firmware/test/test_notify_retry.cpp -o $REPO/firmware/build/test_notify_retry.exe && $REPO/firmware/build/test_notify_retry.exe
 ```
 
-Each prints `ALL PASS` and exits 0 (at 16ee18c: `test_protocol` 25 command vectors, 13 notification vectors, 211
-checks; `test_notify_retry` 87 checks). `test_protocol.cpp` is driven by `firmware/test/vectors.json`, the golden
+Each prints `ALL PASS` and exits 0 (at 08646be: `test_protocol` 25 command vectors, 13 notification vectors, 211
+checks; `test_notify_retry` 92 checks). `test_protocol.cpp` is driven by `firmware/test/vectors.json`, the golden
 vectors the Python protocol tests share.
 
 ## Compile-time flags
