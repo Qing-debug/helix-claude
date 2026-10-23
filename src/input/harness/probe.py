@@ -584,8 +584,9 @@ M8_FIT_RANGE_MS = (1.0, 40.0)  # periods tried, 1 us apart, largest first
 
 def _tick_grid_ms(diffs: Sequence[int]) -> float:
     """The largest period g in M8_FIT_RANGE_MS such that every tick difference is within M8_TICK_TOLERANCE_MS of a
-    multiple of g. A submultiple of the true period fits too, which taking the largest g rules out. Integer-ms ticks
-    always fit the 1 ms floor of the range."""
+    multiple of g. A submultiple of the true period fits too, which taking the largest g rules out. With the 1 ms
+    tolerance any g <= 3 ms fits integer-ms differences, so a 1 ms tick reads ~3 ms, and the final return (the range's
+    floor) is never reached for integer input."""
     lo_us, hi_us = (round(v * 1000) for v in M8_FIT_RANGE_MS)
     for us in range(hi_us, lo_us, -1):
         g = us / 1000

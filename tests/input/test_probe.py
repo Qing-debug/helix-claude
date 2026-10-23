@@ -872,7 +872,7 @@ def test_m8_confirms_a_tick_granularity_of_10_to_16_ms(tmp_path, clock):
 
 
 def test_m8_reviews_a_granularity_above_the_upper_bound(tmp_path, clock):
-    # A-V1-Rb m1: ~20 ms ticks are past 16 ms + the 1 ms stamp tolerance
+    # A-V1-Rb m1: ~20 ms ticks are past 16 ms + the 1 ms tolerance for whole-ms ticks
     code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(20)}))
     assert code == probe.EXIT_OK
     rep = _report(tmp_path, "m8")
