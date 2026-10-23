@@ -1186,7 +1186,7 @@ def main(argv: list[str] | None = None) -> int
   pure-red RGB frame reads back from the PNG as red in RGB); `main(["--out", "/tmp/x"])` → 2. Stop (B19-record-D1):
   a fake `frames` that returns a new array on every call and sets a `threading.Event` on its 3rd call, with
   `seconds=None, stop=<that event>` → `Success(3)`, 3 files and 3 index lines; `seconds=None, stop=None` →
-  `Failure`, and `out_dir` is not created (or holds no files). `shared_frames` is covered by B19's `--record` end-to-end test.
+  `Failure`, called with a not-yet-existing `tmp_path/"rec"` as `out_dir`, and that directory still does not exist afterwards. `shared_frames` is covered by B19's `--record` end-to-end test.
 - **Run:** `python -m pytest -q tests/route/test_record_minimap.py`
 - **Commit:** `feat(route): minimap frame recorder for supervised sessions`
 
@@ -1344,8 +1344,8 @@ def main(argv: list[str] | None = None) -> int
       raise held
   ```
 
-  Through steps 1-6 a Ctrl+C or F12 still lands on StopControl (idempotent), so the cleanup cannot be cut short; after
-  step 7 Ctrl+C is the normal `KeyboardInterrupt`. On the exits before the walker (2, 3, 4, 5, 9) only the steps whose
+  Once `start()` has succeeded, through steps 1-6 a Ctrl+C or F12 still lands on StopControl (idempotent), so the
+  cleanup cannot be cut short; after step 7 Ctrl+C is the normal `KeyboardInterrupt`. On the exits before the walker (2, 3, 4, 5, 9) only the steps whose
   thing exists apply: exits 2, 3 and 5 have none (the link is made after them); exit 4 has `link.close`; exit 9 has
   `release_all` (connect succeeded), `leg_log` (built with the walker), `link.close` and `stop.close`.
   **`StopControl.close()` (PB-amend2-D1).** `close()` undoes `start()` in this order (worker first, SIGINT last, so Ctrl+C during `close()` still lands on
@@ -1402,7 +1402,7 @@ def main(argv: list[str] | None = None) -> int
   `Success(RunSummary(0, 0, "link_down"))` → `main` returns 1 and stderr contains neither `walk failed` nor
   `walk crashed`.
   Exits 3, 5 and 9, the `--minutes` timer, `StopControl` and cleanup failures (same seams as the end-to-end test unless stated; each test
-  also asserts the exit code is an `int` returned, not raised):
+  also asserts the exit code is an `int` returned, not raised, except (k)'s `KeyboardInterrupt` case):
   (d) exit 3: `_wait_first_frame` returns `Failure("timeout")` → 3; separately, `_make_positions` returns a source
   whose `read()` is `Failure("miss")` → 3. In both, `_make_link` was never called (a seam that records calls), and no
   `stop.json` exists (the walker never ran).
@@ -1467,7 +1467,7 @@ def main(argv: list[str] | None = None) -> int
   `release_all` first) -> 0 and two `cleanup failed:` lines, `release_all` first, then `link.close`. A step raising
   `KeyboardInterrupt` (the link wrapper's `close()`): `main` raises `KeyboardInterrupt` (`pytest.raises`) and the fake
   stop control's `close` was still called.
-  (l) stop control fails to start (PB-amend2c-D2), end-to-end seams plus `--record --minutes 60` (no `--laps`):
+  (l) stop control fails to start (PB-amend2c-D2), end-to-end seams plus `--laps 1 --record --minutes 60`:
   `_make_stop_control` returns a fake whose `start()` is `Failure("hook")` -> `main` returns 9 (an int, not raised),
   stderr contains `stop control failed: hook`, the link wrapper saw no `play`, its `release_all` and `close` were each
   called, the fake's `close` was called, and there is no `stop.json`, no `session.json`, no `tmp/frames`, and no
