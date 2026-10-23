@@ -1,3 +1,5 @@
+"""Movement parameters for route walking (plan contract C3): tunable numbers and their validation."""
+
 import math
 from dataclasses import dataclass, fields
 
@@ -31,6 +33,10 @@ def _is_int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _is_real(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def validate(p: MovementParams) -> Result[MovementParams, str]:
     for f in fields(p):
         v = getattr(p, f.name)
@@ -47,12 +53,8 @@ def validate(p: MovementParams) -> Result[MovementParams, str]:
         return Failure(f"slope_max_grade must be <= 1, got {p.slope_max_grade!r}")
     if p.max_walk_ms > _MAX_WALK_MS_LIMIT:
         return Failure(f"max_walk_ms must be <= {_MAX_WALK_MS_LIMIT}, got {p.max_walk_ms!r}")
-    if not p.min_settle_s < p.settle_timeout_s:
+    if p.min_settle_s >= p.settle_timeout_s:
         return Failure(
             f"min_settle_s ({p.min_settle_s!r}) must be < settle_timeout_s ({p.settle_timeout_s!r})"
         )
     return Success(p)
-
-
-def _is_real(v: object) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
