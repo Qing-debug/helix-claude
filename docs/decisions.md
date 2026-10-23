@@ -952,3 +952,19 @@ Cost if wrong: a live run repeated with Hong present.
 Undo: none needed.
 
 Pointer: ledger.md:721 (decision), :722 (away mode), :723 (MapleStory), :731, :734, :736.
+
+## A-FC-D1 (2026-10-23): failed `commands.jsonl` rows keep null stage times
+
+Question: a Failure row in `commands.jsonl` (e.g. `ACK_TIMEOUT`) has null `sent` / `written` / `accepted` / `done` times, which hides which stage timed out (A-M6 [review]). Keep the C5 format, or record the times on Failure rows?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A, "no change: commands.jsonl Failure rows keep null times, record it". A-FC1-R kept it (Q5 KEEP, plan C5 :359).
+
+Reason: "because A keeps the C5 format as specced (no deviation) and NOTIFY_DIAG + retry cover the diagnosis".
+
+Affects: nothing changes; the C5 `commands.jsonl` format stays as specced.
+
+Cost if wrong: one small format unit later (Hong-gated).
+
+Undo: none needed.
+
+Pointer: ledger.md:744 (ruling), :765 (A-FC1-R); notes/A-M6.md:169-171.
