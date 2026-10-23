@@ -840,3 +840,19 @@ Cost if wrong: one analyze.py check to drop; for the definition, "one `< first` 
 Undo: revert `0c1089a`.
 
 Pointer: ledger.md:636 (ruling), :646 (definition), :650 (A-LFK-R), :710 (v2-faults-4).
+
+## A-V2stamp-Q4 (2026-10-22): closing the sink window ends it cleanly, and the window is large, centred, topmost, bright yellow and flashes the taskbar
+
+Question: Hong missed the sink window twice, and closing it raised a TclError in the listener (v2-faults-1). Should the sink window change (A-V2stamp Q4: (a) a close handler, (b) a window that is easy to find)?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "sink-window fixes Q4(a)+(b) go in now (no-op close handler; centred, larger, topmost, bright, taskbar flash)". As built by A-LF: the close button sets the same stop flag as `stop()` (`FOCUS_LOST` unchanged), and the window is ¼ of the screen width (at least 600×300), centred, topmost, yellow with a plain label, and calls `FlashWindowEx`.
+
+Reason: "because Hong missed the window twice and V1/V3 live runs need it; implementation detail, focus check unaffected per A-V2stamp's test" (topmost leaves `GetForegroundWindow` unchanged; `FlashWindowEx` does not change the active window). A-LFK-R approved the commits.
+
+Affects: what the user sees during a soak or probe run: the sink window in `src/input/harness/listener.py` (`c7bc1e9` close handler, `10ffa2a` look). The run sheets and plan V2/V3 steps describe the window (`7e7012c`, `533cbbd`).
+
+Cost if wrong: revert one listener commit.
+
+Undo: revert `10ffa2a` (look) and/or `c7bc1e9` (close handler).
+
+Pointer: ledger.md:635 (A-V2stamp), :637 (ruling), :645 (A-LF), :650 (A-LFK-R).
