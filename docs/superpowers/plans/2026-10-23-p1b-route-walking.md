@@ -1,6 +1,6 @@
 # Plan: Phase 1 · Feature B — Walking the route
 
-**Status: draft (not approved after 6 review rounds; see Review record)** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
+**Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -863,7 +863,8 @@ class SimPositionSource:                          # implements walker.PositionSo
      the quantised schedule, G13); `tap(Key.E)` and `jump()` move nothing.
   2. The clock advances by 30 ms + the schedule total per `play`; `SimClock.sleep(0.25)` advances 250 000 000 ns.
   3. `fail_next=[InputError.ACK_TIMEOUT]` → that `play` returns the Failure, the world does not move, the next
-     `play` works; `InputLayer` then also calls `release_all` once (G7) and it succeeds.
+     `play` works; `InputLayer` then also calls `release_all` once (G7) and it succeeds; afterwards `plays == 2` (the
+     failed play counts).
   4. `SimPositionSource` with `miss_p=0`: reads during a fall return x = end x and a y between start and end;
      after settle the rounded end. With `miss_p=1` every read is `Failure("miss")`.
 - **Run:** `python -m pytest -q tests/route/test_sim_link.py`
@@ -1170,10 +1171,12 @@ def main(argv: list[str] | None = None) -> int
   minimap); any position found on such a frame counts as wrong, and absent frames are left out of `frames`, `hits`,
   `misses` and `hit_rate` (spec L67's rate is against a hand-checked position, which they lack). `null` (unusable)
   frames are skipped. Per other frame with a label: found within ±1 px in both axes → hit; found > 3 px away in Euclidean distance →
-  wrong (spec "never reported > 3 px away", read as straight-line distance); `None` → miss. Returns `{"frames", "hits", "misses", "wrong", "hit_rate", "max_err_px"}`. `check` exits 0
+  wrong (spec "never reported > 3 px away", read as straight-line distance); `None` → miss. Returns `{"frames", "hits", "misses", "wrong", "hit_rate", "max_err_px"}`; `max_err_px` is over frames with an
+  `[x, y]` label and a position found (absent frames stay out of it). `check` exits 0
   iff `hit_rate ≥ 0.995` and `wrong == 0` (specB:L67).
 - [ ] **Tests** (synthetic, no real frames): `score` on hand-made dicts: 199 hits + 1 miss → hit_rate 0.995, PASS
-  path; 1 found at 4 px → wrong 1; a 2 px error is neither hit nor wrong (counts against hit_rate only); an `"absent"` frame with a position found → wrong 1. A
+  path; 1 found at 4 px → wrong 1; a 2 px error is neither hit nor wrong (counts against hit_rate only); an `"absent"` frame with a position found → wrong 1; 199 hits + 1 miss + 3 `"absent"` frames with `None` found
+  → `frames` 200, `hit_rate` 0.995, `wrong` 0. A
   temporary folder with `index.jsonl` and one pure-red PNG written by B17's `record` is loaded by `load_frames` as an RGB array whose
   pixels are (255, 0, 0) and is not passed to `crop_minimap` (monkeypatch it to fail).
 - [ ] **Real run:** `check` on `data/recordings/ff2_2026-10-21/` with Hong's labels. If it fails, tune
@@ -1197,7 +1200,8 @@ class StopControl:
                                                # a seam tests replace), installs a SIGINT handler, then starts the
                                                # worker thread that waits for trigger() and calls on_stop once
     def trigger(self, source: str = "hotkey") -> None   # hook: "hotkey", SIGINT: "sigint", --minutes timer: "timer";
-                                               # idempotent; returns at once; the first call sets trigger_ns and
+                                               # idempotent; returns at once; called from three threads, so the
+                                               # first call, under a threading.Lock, sets trigger_ns and
                                                # trigger_source
     trigger_ns: int | None                     # time.perf_counter_ns() at the first trigger(), else None
     trigger_source: str | None
@@ -1217,7 +1221,7 @@ def main(argv: list[str] | None = None) -> int
   `_make_positions(shared) -> PositionSource` (default: `CharacterLocator.from_files(assets/chr/chr.png,
   assets/chr/chr_mask.png)`, exit 5 on `Failure`, else `MinimapPositionSource(shared, locator)`), `_make_link()` (default `BleLink()`; the object needs `connect`, `play`,
   `release_all`, `close`), `_make_clock() -> Clock` (default `RealClock()`), `_make_stop_control(on_stop)` (default
-  `StopControl`), `_countdown_s = 5.0`.
+  `StopControl`; the object needs `start`, `close`, `trigger(source)`, `trigger_ns`, `trigger_source`), `_countdown_s = 5.0`.
 - [ ] **Behaviour of `main`:** refuses (exit 2) without `--supervised`. Loads the map with `MapleAgent` and the
   `--class` character (choices `{"kanna": Kanna}`, default `kanna`), builds the `RouteGraph`; `_start_capture`;
   `_wait_first_frame(30 s)`; one `positions.read()` must succeed (exit 3 otherwise); `link.connect()` (exit 4 on
@@ -1228,7 +1232,7 @@ def main(argv: list[str] | None = None) -> int
   calls `on_stop` (`walker.stop_now()`), so the hook procedure returns immediately and never blocks on Bluetooth
   (Windows drops a low-level hook that is slow to return; Feature A's listener only queues, G33). On F12 or Ctrl+C; `--minutes` arms a timer that does the same (`trigger("timer")`). On every exit path after the walker
   ran, `main` writes `out/stop.json`: `{"reason": RunSummary.reason, "trigger_ns", "trigger_source"}` (the last two
-  from the StopControl, null if it never triggered), and prints `stopped: <reason> (<source>)`. With
+  from the StopControl, null if it never triggered), and prints `stopped: <reason>`, followed by ` (<source>)` when a source is set. With
   `--record`, a `record` (B17) thread saves frames to `out/frames/`. On every exit path after a
   successful `connect`: `layer.release_all()`; on every exit path: `StopControl.close()` (if started) and
   `link.close()` (if the link was made).
@@ -1246,17 +1250,21 @@ def main(argv: list[str] | None = None) -> int
   `trigger()` → `trigger_source == "sigint"` and `trigger_ns` unchanged by the second call.
 - [ ] **Live link check (MapleStory closed; Windows, board paired).** With the game closed there is no minimap, so
   the default `_wait_first_frame` fails (exit 3) before `connect`; this check patches the seams instead.
-  1. Start `python -m src.input.harness.listener --out data/route/linkcheck --seconds 180` (the sink window).
-  2. Run a throwaway script kept under `data/route/linkcheck/` (gitignored, never committed) that patches `walk.py`'s
+  Each attempt uses a fresh folder `A = data/route/linkcheck/<UTC stamp>` (the listener appends to `keys.jsonl`,
+  so a retry in the same folder would mix runs).
+  1. Start `python -m src.input.harness.listener --out A --seconds 180` (the sink window).
+  2. Run a throwaway script `data/route/linkcheck/check.py` (gitignored, never committed) from the repo root as
+     `python -m data.route.linkcheck.check A` (so `import src...` resolves; a plain `python data/...py` puts the
+     script's folder on `sys.path` instead); it patches `walk.py`'s
      seams as in the end-to-end test except: `_make_link` the real `BleLink`, `_make_stop_control` the real
      `StopControl`, `_make_clock` `RealClock()`, `_countdown_s` left at 5.0, and `input_layer._clock` /
      `input_layer._sleep` left at their defaults; then calls `main(["--map", "tests/fixtures/fossil_foundry_2.csv",
-     "--supervised", "--laps", "1", "--minutes", "2", "--out", "data/route/linkcheck/run"])`.
+     "--supervised", "--laps", "1", "--minutes", "2", "--out", A + "/run"])`.
   3. During the 5 s countdown click the sink window; about 30 s later press F12 once.
   Pass: `stop.json` has `reason "stopped"` and `trigger_source "hotkey"` (not `"timer"`); the last line of
   `legs.jsonl` has outcome `stopped` and `end_ns − trigger_ns ≤ 1e9` (both `perf_counter_ns`); in the listener's
-  `keys.jsonl`, every event between the first and the last bot-key event is one of the seven bot keys (F12 may be
-  absent: StopControl's hook swallows it, PB-D2), and every bot key that went down also went up. The simulated world
+  `keys.jsonl`, every event between the first and the last bot-key event is one of the seven bot keys or F12 (vk 0x7B;
+  F12 may also be absent, since StopControl's hook may swallow it before the listener sees it, PB-D2), and every bot key that went down also went up. The simulated world
   does not follow the real keys, so legs may stall; only delivery and the stop are checked here. F12 in game is
   checked again in B21 step 7.
 - **Run:** `python -m pytest -q tests/route/test_walk_cli.py`
@@ -1477,3 +1485,4 @@ made provisionally · undo: B13 (remove the guard thread and its test)
 | 4 | PB-rev4, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 2 / 9 | I1: B16 → S (counts O 6, S 11). I2: B16 test uses a lock wrapper (`threading.Lock` cannot be subclassed on 3.14). Minors: `direction = Key.name` + test; overshoot covered by existing checks; B7/B12/B13 build recipes and start; B21 commands in full; `StopControl._install_hook` seam and worker start; known cases by rotation index; B15 Cloud reading recorded; H8/H10 cited; mid-left drawn to x 80. |
 | 5 | PB-rev5b, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 2 / 5 | I1: C7 P5 gains a `WALK` case (g′ advanced along WALK edges, P4 off-slope rule) for a character at a slope-segment start; B7 test 10. I2: B19 live smoke could never pass (no minimap with the game closed → exit 3); now a link check through the seams with the real `BleLink` and `StopControl`, and an F12 check added to B21 step 7. Minors: B13 tests name the position source and world start, test 4 arms `fail_next` from `plays`; B8 copies `FakeLink`/`StubModel`; B14 writes shifted rows to a temporary CSV; B18 `"absent"` label counts found positions as wrong; B5 `rg.path` takes nodes. **Not approved after 5 rounds**; the round-5 fixes are unreviewed. |
 | 6 | PB-rev6, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown), scoped to the round-5 fixes | 0 / 1 / 5 | Round-5 fixes confirmed (B7 test 10 re-derived: TELEPORT RIGHT toward (101,24), d = 24). I1: B19 link check made checkable: listener `--seconds 180`, 5 s countdown kept, layer clocks left at defaults, script location named; `StopControl.trigger(source)` records `trigger_ns`/`trigger_source`; `main` writes `stop.json` and prints the reason; pass criteria from `stop.json`, `legs.jsonl` and `keys.jsonl`. Minors: `SimLink.plays` defined, B13 wrapper delegates `release_all`; B18 `score` signature widened, absent frames out of `hit_rate`; B21 step 7 reads `stop.json`/`legs.jsonl`; typo. Round-6 fixes unreviewed. |
+| 7 | PB-rev7, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown), scoped to the round-6 fixes | 0 / 0 / 5 | **APPROVED.** Minors applied: B10 test 3 checks `plays == 2`; B18 test with absent frames and `max_err_px` scope; B19 link check allows F12 in `keys.jsonl`, uses a fresh `<UTC stamp>` folder per attempt and runs its script with `python -m`; `_make_stop_control` seam lists its members, `trigger`'s first-call record is under a lock; the stop line prints the source only when set. |
