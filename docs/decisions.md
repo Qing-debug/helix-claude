@@ -165,6 +165,8 @@ Ruling as Hong under H9; undo: drop the P5 lines and the test. Cost if wrong is 
 
 Keep the T-vK / Berg0162 ESP32 NimBLE Keyboard library for the HID setup, bypass its `sendReport` using the public NimBLE lookup copied from `NimBLEHIDDevice.cpp:157-167` (run in `onStarted`), and send with `notify(report, 8, connHandle)`.
 
+Amended by A-F5-D2 (below): F5 sends with `notify()`'s two NimBLE calls (`ble_hs_mbuf_from_flat` + `ble_gattc_notify_custom`) made directly, so DONE carries the NimBLE rc.
+
 Reason: all 15 claims checked out. `sendReport` coalesces key-down and key-up (`ble_gatts.c:2139-2146`, `:2370`) and returns void, and the alternatives end in the same notify call with more code to own.
 
 Affects: firmware send path and the dependency use; plan A task F5.
@@ -405,6 +407,8 @@ Cost if wrong: one F5 paragraph rewritten again before F5 is built.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in PA-rev6b); undo: `git revert 0418d94`.
 
+Amended by PA-rev6c-D1 (below): each queued RELEASE_ALL carries a `counted` flag that decrements the count exactly once at dequeue.
+
 ## A-F3-R-a (2026-10-22): F3's HID check matches the Keyboard class by board address
 
 B. Plan A task F3 step 6 checks that Windows installed the keyboard with `Get-PnpDevice -PresentOnly -Class Keyboard | Where-Object InstanceId -match '1020BA4E2771' | Select-Object Status, Class, FriendlyName` and expects one row `OK Keyboard HID Keyboard Device`. The other options were A (keep `Get-PnpDevice -PresentOnly | Where-Object FriendlyName -match 'Guiness'`, expecting a Bluetooth entry plus a HID entry) and C (walk `DEVPKEY_Device_Children` from the "Guiness" BTHLE device, as `data/F3-pnp.ps1` does).
@@ -571,7 +575,7 @@ Question: when a public `ping()` fails while the session is live, does `BleLink`
 
 Ruling: A′ (ruled as Hong while away, adjudicated by A-P4-R); confirmed KEEP by A-P4-R2.
 
-Reason: the keepalive already detects a dead link within about 0.75 s, and ending the session from `ping()` would add a third session-ending path the plan lacks (only a keepalive miss and `disconnected_callback` end a session; P4 Session state). V2 step 3 is the only Phase 1 caller and writes no `link_faults.jsonl`, so the entry has no Phase 1 consumer and no gate effect. No session end does not mean no fault: a missed PONG is an `ACK_TIMEOUT` fault entry, while a write that raises is `WRITE_FAILED` with no entry. One asymmetry is by design (A-P4-R2 Q2): a `ping()` whose write blocks for the whole 0.5 s is `ACK_TIMEOUT` (a fault), because `_ping_cmd` has one limit over write + PONG, while a `play()` / `release_all()` whose write blocks is `WRITE_FAILED` (not a fault). A `ping()` blocked in its write is not cut short at session end; it returns `LINK_LOST` / `NOT_CONNECTED` within its own 0.5 s (A-P4-R2 Q4).
+Reason: the keepalive already detects a dead link within about 0.75 s (amended by A-FCdbg-D1, below: on the soft-miss path, a board that answers writes but sends no PONG, it is ~1.0 s after the first unanswered PING), and ending the session from `ping()` would add a third session-ending path the plan lacks (only a keepalive miss and `disconnected_callback` end a session; P4 Session state). V2 step 3 is the only Phase 1 caller and writes no `link_faults.jsonl`, so the entry has no Phase 1 consumer and no gate effect. No session end does not mean no fault: a missed PONG is an `ACK_TIMEOUT` fault entry, while a write that raises is `WRITE_FAILED` with no entry. One asymmetry is by design (A-P4-R2 Q2): a `ping()` whose write blocks for the whole 0.5 s is `ACK_TIMEOUT` (a fault), because `_ping_cmd` has one limit over write + PONG, while a `play()` / `release_all()` whose write blocks is `WRITE_FAILED` (not a fault). A `ping()` blocked in its write is not cut short at session end; it returns `LINK_LOST` / `NOT_CONNECTED` within its own 0.5 s (A-P4-R2 Q4).
 
 Affects: `BleLink.ping()` (C3); plan A task P4, `ping()` bullet and the Keepalive bullet's last sentence. Applied in `7c0de44` (`_public_ping`, cherry-pick of `1ce4acb`), the fault entry in `d15c32b` (= `ad50320`), pinned by `2691a42` (= `4ebb922`); plan text in `82f9c7d`.
 
