@@ -872,3 +872,19 @@ Cost if wrong: one ~15-min attended soak.
 Undo: none needed.
 
 Pointer: ledger.md:642 (A-V2link), :647 (decision), :710 (A-V2refault), :712 (A-V2refault-V).
+
+## A-M6-D1 (2026-10-22): the live m6 diagnostic runs in the next live session, after A-V2refault and before V3
+
+Question: A-M6 found that in 47/50 m6 bursts the PC never got one board reply (all 16 key changes delivered), and that the firmware discarded reply-send results (`Helix_BLE.ino:129-131` at the time). When should the live diagnostic run? It needs Hong at the PC (human-only).
+
+Ruling: A, "live m6 diagnostic (log reply-send results on board, serial capture, link DEBUG) in the next live session after A-V2refault, before V3" (Hong's decision).
+
+Reason: V2/V3 traffic cannot trigger the burst (A-M6), so V2 could go first; the diagnostic had to come before V3. A-M6diag built it (`NOTIFY_DIAG` firmware flag + `probe --link-debug`, merged `a93886b`); A-M6live ran it and found the cause (the board's BLE stack refuses the DONE notify after the 16-report burst, `done_rc=6`).
+
+Affects: the live-run order; `NOTIFY_DIAG` (off by default) in `firmware/Helix_BLE`; `probe.py --link-debug`.
+
+Cost if wrong: one attended live session.
+
+Undo: none needed; the flag stays off in the shipped build.
+
+Pointer: ledger.md:671 (A-M6), :675 (decision), :713 (A-M6diag-R), :717 (A-M6live).
