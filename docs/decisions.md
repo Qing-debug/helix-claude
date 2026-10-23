@@ -824,3 +824,19 @@ Cost if wrong: one small revert.
 Undo: remove the truncate in `RunWriter.open` (`soak.py:216`) and its test.
 
 Pointer: ledger.md:576.
+
+## A-V2stamp-C1 (2026-10-22): the `reset_board` stamp stays at esptool's reset line; analyze adds a reset worst-case gate measured from the last PONG before the first report
+
+Question: A-V2stamp found the spec silent on the fault moment (spec:57) and plan C5 stamping `reset_board` at esptool's reset line. On v2-faults-3, PONGs stopped 476–582 ms after esptool started, `LINK_LOST` came 967–980 ms later, and the stamp ~1.0 s after that, so the time from the fault to the stamp was not observed (true fault-to-report ~0.70–0.98 s). Move the stamp, or keep it and check the unobserved time another way?
+
+Ruling [spec-text + local] (orchestrator ruling under H10, not Hong's): "reset stamp stays at esptool's reset line (plan C5 :386-387 word for word); add the C1 worst-case check to analyze.py as an extra stricter gate (report it alongside, PASS needs both ≤1 s)". Its definition, a second Ruling [local]: "keep A-LF's worst-case definition (first report − last PONG before that report, report searched after launch)".
+
+Reason: the check "closes the unobserved-time gap without a spec deviation and without a live re-run"; the definition, "because the last PONG is the last evidence the board was alive, so it is the conservative bound" (the brief's "last PONG before esptool start" gave 1490–1740 ms, because the board still answers after esptool starts). A-LFK-R kept the definition (Q2 KEEP), with the caveat that the figure reads low by ~RTT/2 (A-LFK-R m1). The V2 step 4 re-run (A-V2link-D1) measured a worst case of 706–730 ms.
+
+Affects: `src/input/harness/analyze.py` reset worst-case gate (`0c1089a`; an uncomputable worst case is a FAIL). The C5 stamp and the `faults.jsonl` format are unchanged.
+
+Cost if wrong: one analyze.py check to drop; for the definition, "one `< first` → `< launch` edit + soak re-run".
+
+Undo: revert `0c1089a`.
+
+Pointer: ledger.md:636 (ruling), :646 (definition), :650 (A-LFK-R), :710 (v2-faults-4).
