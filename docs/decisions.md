@@ -984,3 +984,19 @@ Cost if wrong: one revert.
 Undo: revert `16a8d78`.
 
 Pointer: ledger.md:755.
+
+## A-FC-D3 (2026-10-23): analyze keeps Faults n/a on an empty `faults.jsonl`; the V2 run sheet checks the fault count instead
+
+Question: analyze reports Faults n/a, not FAIL, when `faults.jsonl` is empty or does not match the `--faults` spec (A-V2refault-V [review]). Should it FAIL?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "no analyze change; V2 step 5 run-sheet check line 'Faults 10/10 pass, 5 reset_board + 5 bluetooth_off_on' → run-sheet piece".
+
+Reason: "because an empty faults.jsonl is how a no-fault run is defined (FAIL would break V3), plan Faults sets no expected-count input, and the reviewer recommended the run-sheet line".
+
+Affects: plan A V2 step 5 check line (`3a7c31c`); `analyze.py` unchanged.
+
+Cost if wrong: an empty fault soak still reads n/a (caught by the run-sheet check).
+
+Undo: revert `3a7c31c`.
+
+Pointer: ledger.md:763.
