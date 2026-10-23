@@ -1275,7 +1275,8 @@ def main(argv: list[str] | None = None) -> int
   This check sends real keys, so it refuses to run while MapleStory runs (PB-B19), the way Feature A's `probe`,
   `soak` and `session_starts` do. They all call `soak.maple_check()` (`src/input/harness/soak.py:518`; it returns
   `(ok, text)` and is not ok if any process image name contains "maple", any case, or the `tasklist` list cannot be
-  read), at `probe.py:1002`, `soak.py:553` and `session_starts.py:154`. Reuse it; do not write another check.
+  read), at `probe.py:1003` (and `:1065`), `soak.py:554` and `session_starts.py:155`. Reuse it; do not write another
+  check.
   Each attempt uses a fresh folder `A = data/route/linkcheck/<UTC stamp>` (the listener appends to `keys.jsonl`,
   so a retry in the same folder would mix runs).
   0. Before the listener starts (it blocks the bot keys system-wide, so nothing may be running yet), run the guard
@@ -1291,14 +1292,20 @@ def main(argv: list[str] | None = None) -> int
      `... check A`, it calls `guard()` as its first statement, before it patches
      anything or touches the board, and starts a daemon thread that re-checks every `soak.PROCESS_CHECK_PERIOD_NS`
      (60 s) while `main` runs; if that re-check is not ok, the thread prints the text and calls
-     `trigger("maple_check")` on the `StopControl` that the patched `_make_stop_control` made, which stops the walker
-     and releases every key, and the script then exits 8 after `main` returns (whatever `main` returned).
+     `trigger("maple_check")` on the real `StopControl` (kept by the `_make_stop_control` wrapper below), which stops
+     the walker and releases every key, and the script then exits 8 after `main` returns (whatever `main` returned).
+     If a re-check fails before the `StopControl` exists, the thread sets an abort flag and the wrapper triggers
+     `"maple_check"` as soon as it builds the `StopControl`.
      It patches `walk.py`'s seams as in the end-to-end test except: `_make_link` the real `BleLink`,
-     `_make_stop_control` the real `StopControl`, `_make_clock` `RealClock()`, `_countdown_s` left at 5.0, and
+     `_make_stop_control` a wrapper that builds the real `StopControl` and keeps it for the re-check thread,
+     `_make_clock` `RealClock()`, `_countdown_s` left at 5.0, and
      `input_layer._clock` / `input_layer._sleep` left at their defaults; then calls `main(["--map",
      "tests/fixtures/fossil_foundry_2.csv", "--supervised", "--laps", "1", "--minutes", "2", "--out", A + "/run"])`.
+     Because the script is never committed, the implementer copies its full text into its notes file, so B19's per-unit
+     review can check the guard.
   3. During the 5 s countdown click the sink window; about 30 s later press F12 once.
-  Guard test (no game or board needed; run once before the first attempt; nothing is sent). Each line runs
+  Guard test (no game or board needed; run once before the first attempt; nothing is sent). Each line runs as
+  `python -c "<line>"` from the repo root with the venv active, where the line is
   `from returns.result import Success, Failure; from src.input.harness import soak; soak._process_names = <X>;
   from data.route.linkcheck import check; check.guard()` with `<X>` as below:
   `lambda: Success(['MapleStory.exe'])` must exit 8 and print `MapleStory running: ['MapleStory.exe']`;
@@ -1316,7 +1323,7 @@ def main(argv: list[str] | None = None) -> int
 ### Task B20: Movement measurement tool
 
 **Files:** create `src/route/harness/measure_moves.py`; tests `tests/route/test_measure_moves.py`.
-**Class:** S — drives the board in game and measures settle times (timing). **Cloud:** no — runs against the game through B19's
+**Class:** S — drives the board in game and measures settle times (timing) (a tool that drives the board in game; first run in B21 step 3). **Cloud:** no — runs against the game through B19's
 wiring.
 **Interface created:**
 

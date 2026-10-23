@@ -1057,7 +1057,7 @@ Pointer: ledger.md:783 (raised), :785 (A-FCdbg-adj), :786 (ruling); notes/A-FCdb
 
 Question: the PB plan-review ladder left two B19 gaps: `main` in `src/route/walk.py` has no stated reason or exit code when `run()` returns a `Failure` or raises, and the live link check sends real keys with no MapleStory-process check. Fix them in the approved plan before the build (B), or leave them as notes for the B19 builder (A)?
 
-Ruling [process] (orch 29; orchestrator ruling under H10, not Hong's): "B19 concerns → option B (amend plan B19 before the build: failure reason + exit code when run() returns Failure or raises; MapleStory-process check in the B19 link-check script, not in B20/B21 in-game runs)".
+Ruling [local] (orch 29; orchestrator ruling under H10, not Hong's): "B19 concerns → option B (amend plan B19 before the build: failure reason + exit code when run() returns Failure or raises; MapleStory-process check in the B19 link-check script, not in B20/B21 in-game runs)".
 
 Reason: 3 of the 4 ladder reviewers raised each gap on their own (PB-ladder-report §4), and the second is key safety: the link check types into the sink window, and with the game open the same keys would land in the game. The check reuses `soak.maple_check()` (`src/input/harness/soak.py:518`), which `probe`, `soak` and `session_starts` already call. B20 and B21 send keys into the game on purpose, so they get no check.
 
@@ -1067,4 +1067,4 @@ Cost if wrong: two more exit codes and a few test cases for the B19 builder; a g
 
 Undo: revert the `docs(plan): amend B19 ...` commit on `p1b-route-walking`.
 
-Pointer: ledger.md (orch 29); notes/PB-amend.md; PB-ladder-report.md §4.
+Pointer: ledger.md:854 (ruling); notes/PB-amend.md; PB-ladder-report.md §4.
