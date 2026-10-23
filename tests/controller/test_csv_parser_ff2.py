@@ -18,22 +18,22 @@ CAN_FALL_FALSE = {(113, 60), (82, 60), (48, 61), (65, 60), (99, 60), (129, 60), 
 
 
 def _parse():
-    rot, nm = [], {}
-    res = CSVParser(CSV=FIXTURE).parseCSV(rot, nm)
-    return res, rot, nm
+    rotation, node_map = [], {}
+    result = CSVParser(CSV=FIXTURE).parseCSV(rotation, node_map)
+    return result, rotation, node_map
 
 
 def test_parse_counts_and_rotation_order():
-    res, rot, nm = _parse()
-    assert res == Success(None)
-    assert len(nm) == 21
-    assert len(rot) == 7
-    assert [n.minimap_position for n in rot] == ROTATION_POSITIONS
+    result, rotation, node_map = _parse()
+    assert result == Success(None)
+    assert len(node_map) == 21
+    assert len(rotation) == 7
+    assert [n.minimap_position for n in rotation] == ROTATION_POSITIONS
 
 
 def test_can_fall_flags_and_other_flags_false():
-    _, _, nm = _parse()
-    nodes = list(nm.values())
+    _, _, node_map = _parse()
+    nodes = list(node_map.values())
     assert len(CAN_FALL_TRUE) == 13 and len(CAN_FALL_FALSE) == 8
     assert {n.minimap_position for n in nodes if n.can_fall} == CAN_FALL_TRUE
     assert {n.minimap_position for n in nodes if not n.can_fall} == CAN_FALL_FALSE
@@ -43,16 +43,16 @@ def test_can_fall_flags_and_other_flags_false():
         assert n.is_right_platform_edge is False
 
 
-def test_editor_reader():
-    res = read_editor_nodes(str(FIXTURE))
-    assert is_successful(res)
-    nodes, rotation_order, metadata = res.unwrap()
+def test_editor_reader_nodes_rotation_and_metadata():
+    result = read_editor_nodes(str(FIXTURE))
+    assert is_successful(result)
+    nodes, rotation_order, metadata = result.unwrap()
     assert len(nodes) == 21
     assert rotation_order == [1, 2, 3, 4, 5, 6, 7]
     assert metadata == {"minimap_size": (162, 82)}
 
 
-def test_agent_load_map_builds_graph():
+def test_agent_load_map_builds_graph_with_all_21_nodes():
     agent = MapleAgent(characterClass=Kanna())
     assert agent.loadMap(FIXTURE) == Success(BuildOutcome.BUILT)
     assert agent.pathGraph.graph.number_of_nodes() == 21
