@@ -1,0 +1,587 @@
+"""Tests for the H1 keystroke listener's pure parts (no hook, no Tk, no keystrokes)."""
+import ctypes
+import io
+import json
+import threading
+import time
+from ctypes import wintypes
+
+import pytest
+
+from src.input.harness import listener as listener_mod
+from src.input.harness.listener import (
+    BOT_VKS,
+    LLKHF_INJECTED,
+    LLKHF_UP,
+    Event,
+    KeyLogWriter,
+    Listener,
+    RawKeyEvent,
+    TransitionTracker,
+    VK_BY_KEY,
+    _STOP,
+    parse_args,
+    should_block,
+)
+from src.input.protocol import Key
+
+VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN = 0x25, 0x26, 0x27, 0x28
+VK_SPACE, VK_E, VK_LMENU = 0x20, 0x45, 0xA4
+VK_LCONTROL, VK_F10 = 0xA2, 0x79
+
+
+# ---- C2 VK table -----------------------------------------------------------
+
+def test_vk_table_matches_c2():
+    # Values from C2, confirmed against learn.microsoft.com virtual-key-codes (2026-10-22).
+    assert VK_BY_KEY == {
+        Key.LEFT: VK_LEFT,
+        Key.RIGHT: VK_RIGHT,
+        Key.UP: VK_UP,
+        Key.DOWN: VK_DOWN,
+        Key.E: VK_E,
+        Key.ALT: VK_LMENU,
+        Key.SPACE: VK_SPACE,
+    }
+    assert BOT_VKS == frozenset({VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_E, VK_LMENU, VK_SPACE})
+
+
+# ---- TransitionTracker ---------------------------------------------------------
+
+def test_down_then_up():
+    t = TransitionTracker()
+    assert t.feed(VK_LEFT, True) is Event.DOWN
+    assert t.feed(VK_LEFT, False) is Event.UP
+
+
+def test_auto_repeat_is_repeat_not_transition():
+    t = TransitionTracker()
+    assert t.feed(VK_LEFT, True) is Event.DOWN
+    assert t.feed(VK_LEFT, True) is Event.REPEAT
+    assert t.feed(VK_LEFT, True) is Event.REPEAT
+    assert t.feed(VK_LEFT, False) is Event.UP
+    # After the up, a new down is a transition again.
+    assert t.feed(VK_LEFT, True) is Event.DOWN
+
+
+def test_up_without_down_is_orphan():
+    t = TransitionTracker()
+    assert t.feed(VK_E, False) is Event.ORPHAN_UP
+    # A second up after a real down/up pair is also an orphan.
+    assert t.feed(VK_E, True) is Event.DOWN
+    assert t.feed(VK_E, False) is Event.UP
+    assert t.feed(VK_E, False) is Event.ORPHAN_UP
+
+
+def test_multiple_keys_interleaved():
+    t = TransitionTracker()
+    seq = [
+        ((VK_LEFT, True), Event.DOWN),
+        ((VK_E, True), Event.DOWN),
+        ((VK_LEFT, True), Event.REPEAT),  # LEFT still held, auto-repeat
+        ((VK_E, False), Event.UP),
+        ((VK_LEFT, True), Event.REPEAT),
+        ((VK_E, True), Event.DOWN),       # E pressed again: a transition, LEFT unaffected
+        ((VK_LMENU, False), Event.ORPHAN_UP),
+        ((VK_LEFT, False), Event.UP),
+        ((VK_E, False), Event.UP),
+        ((VK_LEFT, False), Event.ORPHAN_UP),
+    ]
+    for (vk, is_down), expected in seq:
+        assert t.feed(vk, is_down) is expected, (vk, is_down)
+
+
+# ---- JSONL writer schema (C5 keys.jsonl) ---------------------------------------
+
+def _lines(buf):
+    return [json.loads(line) for line in buf.getvalue().splitlines()]
+
+
+def test_writer_schema_and_values():
+    buf = io.StringIO()
+    w = KeyLogWriter(buf)
+    w.write(RawKeyEvent(qpc_ns=1_000, vk=VK_LEFT, flags=0x01, tick_ms=500))           # down, extended
+    w.write(RawKeyEvent(qpc_ns=2_000, vk=VK_LEFT, flags=0x01, tick_ms=516))           # repeat
+    w.write(RawKeyEvent(qpc_ns=3_000, vk=VK_LEFT, flags=0x01 | LLKHF_UP, tick_ms=531))  # up
+    w.write(RawKeyEvent(qpc_ns=4_000, vk=VK_E, flags=LLKHF_INJECTED, tick_ms=547))    # injected down
+    w.write(RawKeyEvent(qpc_ns=5_000, vk=VK_SPACE, flags=LLKHF_UP, tick_ms=562))      # orphan up
+    rows = _lines(buf)
+    assert len(rows) == 5
+    for row in rows:
+        assert set(row) == {"qpc_ns", "vk", "down", "injected", "tick_ms", "repeat"}
+        assert isinstance(row["qpc_ns"], int) and isinstance(row["vk"], int)
+        assert isinstance(row["tick_ms"], int)
+        for k in ("down", "injected", "repeat"):
+            assert isinstance(row[k], bool)
+    assert rows[0] == {"qpc_ns": 1000, "vk": VK_LEFT, "down": True, "injected": False,
+                       "tick_ms": 500, "repeat": False}
+    assert rows[1]["down"] is True and rows[1]["repeat"] is True
+    assert rows[2]["down"] is False and rows[2]["repeat"] is False
+    assert rows[3]["injected"] is True and rows[3]["down"] is True
+    # An orphan up is logged as a plain up (C5 has no orphan field).
+    assert rows[4] == {"qpc_ns": 5000, "vk": VK_SPACE, "down": False, "injected": False,
+                       "tick_ms": 562, "repeat": False}
+
+
+def test_writer_one_object_per_line():
+    buf = io.StringIO()
+    w = KeyLogWriter(buf)
+    w.write(RawKeyEvent(qpc_ns=7, vk=VK_UP, flags=0, tick_ms=1))
+    w.write(RawKeyEvent(qpc_ns=8, vk=VK_UP, flags=LLKHF_UP, tick_ms=2))
+    text = buf.getvalue()
+    assert text.endswith("\n") and text.count("\n") == 2
+
+
+# ---- blocking default (PA-D7) ----------------------------------------------------
+
+def test_parser_blocks_by_default():
+    args = parse_args(["--out", "x"])
+    assert args.block is True
+
+
+def test_parser_no_block_flag():
+    args = parse_args(["--out", "x", "--no-block"])
+    assert args.block is False
+
+
+def test_parser_out_and_seconds():
+    args = parse_args(["--out", "data/listener-check", "--seconds", "20"])
+    assert args.out == "data/listener-check"
+    assert args.seconds == 20.0
+
+
+@pytest.mark.parametrize("vk", [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_E, VK_LMENU, VK_SPACE])
+def test_should_block_bot_vks(vk):
+    assert should_block(vk, True) is True
+    assert should_block(vk, False) is False
+
+
+@pytest.mark.parametrize("vk", [VK_LCONTROL, VK_F10, 0x12, 0xA5, 0x41])
+def test_should_not_block_other_vks(vk):
+    # 0x12 VK_MENU and 0xA5 VK_RMENU are not the bot's Alt (C2 uses left Alt, VK_LMENU).
+    assert should_block(vk, True) is False
+    assert should_block(vk, False) is False
+
+
+# ---- foreground functions with faked Win32 calls (A-PF I5) ----------------------
+
+class FakeForeground:
+    def __init__(self, foreground, set_result, moves_on_set=False):
+        self.foreground = foreground
+        self.set_result = set_result
+        self.moves_on_set = moves_on_set
+        self.set_calls = []
+
+    def get_foreground_window(self):
+        return self.foreground
+
+    def set_foreground_window(self, hwnd):
+        self.set_calls.append(hwnd)
+        if self.moves_on_set:
+            self.foreground = hwnd
+        return self.set_result
+
+
+SINK = 0x1234
+OTHER = 0x9999
+
+
+def _listener(fake):
+    lst = Listener(out_dir="unused", block=True, foreground=fake)
+    lst.sink_hwnd = SINK
+    return lst
+
+
+def test_sink_is_foreground_true_only_for_sink_hwnd():
+    assert _listener(FakeForeground(SINK, True)).sink_is_foreground() is True
+    assert _listener(FakeForeground(OTHER, True)).sink_is_foreground() is False
+    assert _listener(FakeForeground(0, True)).sink_is_foreground() is False
+
+
+def test_sink_is_foreground_false_before_sink_exists():
+    lst = Listener(out_dir="unused", block=True, foreground=FakeForeground(0, True))
+    assert lst.sink_hwnd is None
+    assert lst.sink_is_foreground() is False
+    assert lst.bring_sink_to_foreground() is False
+
+
+@pytest.mark.parametrize("set_result", [True, False])
+def test_bring_returns_recheck_when_focus_moves(set_result):
+    fake = FakeForeground(OTHER, set_result, moves_on_set=True)
+    assert _listener(fake).bring_sink_to_foreground() is True
+    assert fake.set_calls == [SINK]
+
+
+@pytest.mark.parametrize("set_result", [True, False])
+def test_bring_returns_recheck_when_focus_stays(set_result):
+    # SetForegroundWindow's return value is not trusted: GetForegroundWindow decides.
+    fake = FakeForeground(OTHER, set_result, moves_on_set=False)
+    assert _listener(fake).bring_sink_to_foreground() is False
+    assert fake.set_calls == [SINK]
+
+
+# ---- writer thread (A-H1-R m8, m5): no hook, no Tk --------------------------------
+
+def _run_writer(lst):
+    th = threading.Thread(target=lst._writer_thread, daemon=True)
+    th.start()
+    return th
+
+
+def test_writer_thread_appends_drains_before_stop_and_uses_lf(tmp_path):
+    keys = tmp_path / "keys.jsonl"
+    keys.write_bytes(b'{"old": 1}\n')  # append mode: an existing file is kept
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    events = [RawKeyEvent(10 * (i + 1), VK_LEFT, 0 if i % 2 == 0 else LLKHF_UP, i) for i in range(6)]
+    for ev in events:
+        lst._queue.put(ev)
+    lst._queue.put(_STOP)
+    th = _run_writer(lst)  # queue is already full: every event is ahead of _STOP
+    th.join(5)
+    assert not th.is_alive()
+    raw = keys.read_bytes()
+    assert b"\r" not in raw  # newline="\n": LF on Windows too
+    lines = raw.split(b"\n")
+    assert lines[0] == b'{"old": 1}' and lines[-1] == b""
+    rows = [json.loads(line) for line in lines[1:-1]]
+    assert [r["qpc_ns"] for r in rows] == [ev.qpc_ns for ev in events]
+
+
+def test_writer_thread_flushes_when_queue_goes_idle(tmp_path):
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    th = _run_writer(lst)
+    keys = tmp_path / "keys.jsonl"
+    try:
+        lst._queue.put(RawKeyEvent(1, VK_E, 0, 1))
+        deadline = time.monotonic() + 5
+        data = b""
+        while time.monotonic() < deadline and not data.endswith(b"\n"):
+            time.sleep(0.01)
+            data = keys.read_bytes() if keys.exists() else b""
+        assert data.endswith(b"\n")  # visible on disk before the writer is told to stop
+    finally:
+        lst._queue.put(_STOP)
+        th.join(5)
+    assert not th.is_alive()
+
+
+# ---- start-up failures reach start() (A-H1-R m3, m4): fake hook thread, no Win32, no Tk window ---------
+
+def _fast_startup(monkeypatch):
+    monkeypatch.setattr(listener_mod, "_STARTUP_TIMEOUT_S", 1.0)  # a red run must not sit for 5 s per wait
+
+
+def _fake_hook_ok(lst):
+    def hook():
+        lst._hook_ready.set()
+    lst._hook_thread = hook  # shadows the bound method: no SetWindowsHookExW
+
+
+def _fake_sink_ok(lst):
+    def sink():
+        lst.sink_hwnd = SINK
+        lst._sink_ready.set()
+    lst._sink_thread = sink  # shadows the bound method: no Tk
+
+
+def test_start_raises_oserror_when_the_keys_file_cannot_be_opened(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    (tmp_path / "keys.jsonl").mkdir()  # open(..., "a") on a directory fails
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    _fake_sink_ok(lst)
+    with pytest.raises(OSError, match="keys.jsonl"):
+        lst._start()
+    assert len(lst._threads) == 1  # only the writer: the hook and sink threads were never started (N1)
+
+
+def test_start_does_not_start_the_hook_or_sink_before_the_writer_is_ready(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    release_writer = threading.Event()
+    started = []
+
+    def slow_writer():
+        release_writer.wait(5)
+        lst._writer_ready.set()
+
+    def hook():
+        started.append("hook")
+        lst._hook_ready.set()
+
+    def sink():
+        started.append("sink")
+        lst.sink_hwnd = SINK
+        lst._sink_ready.set()
+
+    lst._writer_thread, lst._hook_thread, lst._sink_thread = slow_writer, hook, sink
+    starter = threading.Thread(target=lst._start, daemon=True)
+    starter.start()
+    time.sleep(0.2)  # the writer is still "opening the file"
+    try:
+        assert started == []
+    finally:
+        release_writer.set()
+        starter.join(5)
+    assert not starter.is_alive()
+    assert sorted(started) == ["hook", "sink"]
+
+
+def test_start_stops_the_writer_when_it_does_not_come_up_in_time(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+    monkeypatch.setattr(listener_mod, "_STARTUP_TIMEOUT_S", 0.1)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    never = threading.Event()
+    lst._writer_thread = lambda: never.wait(5)  # alive but never ready
+    _fake_hook_ok(lst)
+    _fake_sink_ok(lst)
+    try:
+        with pytest.raises(OSError, match="writer thread did not start"):
+            lst._start()
+        assert lst._queue.get_nowait() is _STOP  # a late writer still gets told to stop
+        assert len(lst._threads) == 1
+    finally:
+        never.set()
+
+
+def test_start_raises_oserror_carrying_the_sink_threads_error(tmp_path, monkeypatch):
+    _fast_startup(monkeypatch)
+
+    def no_display(*args, **kwargs):
+        raise RuntimeError("no display for the sink")
+
+    monkeypatch.setattr("tkinter.Tk", no_display)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    with pytest.raises(OSError, match="no display for the sink"):
+        lst._start()
+
+
+# ---- stop() (A-H1-R m1, m2): fake threads and a fake user32, no hook ---------------------------------
+
+class FakeThread:
+    def __init__(self, alive=False):
+        self.alive = alive
+        self.joined = []
+
+    def join(self, timeout=None):
+        self.joined.append(timeout)
+
+    def is_alive(self):
+        return self.alive
+
+
+class FakeUser32:
+    def __init__(self, post_ok):
+        self.post_ok = post_ok
+        self.posts = []
+
+    def PostThreadMessageW(self, tid, msg, w, l):
+        self.posts.append((tid, msg, w, l))
+        return 1 if self.post_ok else 0
+
+
+def _stoppable(monkeypatch, hook_alive, post_ok):
+    fake_user32 = FakeUser32(post_ok)
+    monkeypatch.setattr(listener_mod, "_user32", fake_user32)
+    lst = Listener(out_dir="unused", block=True, foreground=FakeForeground(0, True))
+    lst._threads = [FakeThread(), FakeThread(alive=hook_alive), FakeThread()]
+    lst._hook_tid = 4242
+    return lst, fake_user32
+
+
+def test_stop_on_a_listener_that_never_started_is_a_noop():
+    lst = Listener(out_dir="unused", block=True, foreground=FakeForeground(0, True))
+    lst.stop()
+    lst.stop()
+
+
+def test_stop_posts_quit_and_stays_quiet_when_the_hook_thread_exits(monkeypatch, capsys):
+    lst, u32 = _stoppable(monkeypatch, hook_alive=False, post_ok=True)
+    lst.stop()
+    assert u32.posts == [(4242, listener_mod.WM_QUIT, 0, 0)]
+    assert capsys.readouterr().err == ""
+    assert lst._sink_stop.is_set()
+
+
+def test_stop_says_so_when_the_quit_post_fails_and_the_hook_thread_stays_alive(monkeypatch, capsys):
+    lst, u32 = _stoppable(monkeypatch, hook_alive=True, post_ok=False)
+    lst.stop()  # must not raise, and must still stop the writer and the sink
+    err = capsys.readouterr().err
+    assert "WM_QUIT" in err
+    assert "hook thread did not exit" in err
+    assert "blocked" in err
+    assert lst._sink_stop.is_set()
+    assert not lst._queue.empty()  # the writer's _STOP was queued
+
+
+def test_a_failed_hook_install_raises_without_a_spurious_wm_quit_message(tmp_path, monkeypatch, capsys):
+    # A-H1-fix2-R: the hook thread returns at once when SetWindowsHookExW fails, so its thread id is no longer valid
+    # and PostThreadMessageW fails (ERROR_INVALID_THREAD_ID); stop() must not post or print about it.
+    _fast_startup(monkeypatch)
+    fake_user32 = FakeUser32(post_ok=False)
+    monkeypatch.setattr(listener_mod, "_user32", fake_user32)
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+
+    def hook_fails():
+        lst._hook_tid = 4242
+        lst._hook_error = "SetWindowsHookExW failed, GetLastError=5"
+        lst._hook_ready.set()
+    lst._hook_thread = hook_fails  # shadows the bound method: no SetWindowsHookExW
+    _fake_sink_ok(lst)
+    with pytest.raises(OSError, match="SetWindowsHookExW failed"):
+        lst._start()
+    assert fake_user32.posts == []
+    assert "WM_QUIT" not in capsys.readouterr().err
+    assert lst._sink_stop.is_set()
+
+
+# ---- CLI cue when the sink is not in front (A-H1-R m6) -------------------------------------------
+
+class FakeCliListener:
+    sink_hwnd = SINK
+
+    def __init__(self, out_path, fg):
+        self.out_path = out_path
+        self._fg = fg
+        self.stopped = False
+
+    def bring_sink_to_foreground(self):
+        return self._fg
+
+    def sink_is_foreground(self):
+        return self._fg
+
+    def stop(self):
+        self.stopped = True
+
+
+def _run_main(monkeypatch, tmp_path, fg):
+    keys = tmp_path / "keys.jsonl"
+    keys.write_text("", encoding="utf-8")
+    fake = FakeCliListener(keys, fg)
+    monkeypatch.setattr(listener_mod, "start", lambda out, block=True: fake)
+    rc = listener_mod.main(["--out", str(tmp_path), "--seconds", "0"])
+    return rc, fake
+
+
+def test_main_tells_the_operator_to_click_the_sink_when_it_is_not_foreground(monkeypatch, tmp_path, capsys):
+    rc, fake = _run_main(monkeypatch, tmp_path, fg=False)
+    out, err = capsys.readouterr()
+    assert rc == 0 and fake.stopped
+    assert "foreground=False" in out  # the stdout line A-H1b's script parses is unchanged
+    assert "click the window titled 'Helix input test sink'" in err
+
+
+def test_main_is_quiet_on_stderr_when_the_sink_is_foreground(monkeypatch, tmp_path, capsys):
+    rc, _ = _run_main(monkeypatch, tmp_path, fg=True)
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert "foreground=True" in out
+    assert err == ""
+
+
+# ---- the real Tk sink window (A-LF): a real window on the sink thread, no hook, no keystrokes ----------------
+
+WM_CLOSE = 0x0010
+_u32 = ctypes.WinDLL("user32", use_last_error=True)
+_u32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_u32.PostMessageW.restype = wintypes.BOOL
+_u32.IsWindow.argtypes = [wintypes.HWND]
+_u32.IsWindow.restype = wintypes.BOOL
+
+
+def _real_sink(tmp_path, monkeypatch):
+    """A Listener whose sink thread is the real Tk window (hook faked; the writer writes to tmp_path)."""
+    thread_errors = []
+    monkeypatch.setattr(threading, "excepthook", thread_errors.append)  # what an uncaught thread error reaches
+    lst = Listener(out_dir=tmp_path, block=True, foreground=FakeForeground(0, True))
+    _fake_hook_ok(lst)
+    lst._start()
+    return lst, thread_errors
+
+
+def test_closing_the_sink_window_ends_its_thread_without_a_traceback(tmp_path, monkeypatch):
+    # Tk's default WM_DELETE_WINDOW handler destroys the window, so the later root.destroy() raised TclError
+    # (v2-faults-1 console). The close must instead end the sink thread cleanly, and the window must be gone, so the
+    # focus check (GetForegroundWindow == sink_hwnd) goes False and the soak's FOCUS_LOST / abort path is unchanged.
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        hwnd, sink_th = lst.sink_hwnd, lst._threads[2]
+        assert _u32.IsWindow(hwnd)
+        assert _u32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        sink_th.join(3)
+        assert not sink_th.is_alive()
+        assert thread_errors == []
+        assert not _u32.IsWindow(hwnd)
+        assert lst.sink_is_foreground() is False
+    finally:
+        lst.stop()
+    assert thread_errors == []
+
+
+GWL_EXSTYLE, WS_EX_TOPMOST = -20, 0x00000008
+_u32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+_u32.GetWindowRect.restype = wintypes.BOOL
+_u32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+_u32.GetWindowLongW.restype = ctypes.c_long
+_u32.GetSystemMetrics.argtypes = [ctypes.c_int]
+_u32.GetSystemMetrics.restype = ctypes.c_int
+
+
+def test_sink_rect_is_large_and_centred_on_the_screen():
+    assert listener_mod.sink_rect(1920, 1080) == (600, 300, 660, 390)      # (w, h, x, y); 600x300 is the floor
+    assert listener_mod.sink_rect(3840, 2160) == (960, 480, 1440, 840)     # a quarter of the screen width at 4K
+    assert listener_mod.sink_rect(400, 200) == (600, 300, 0, 0)            # a tiny screen never gives a negative offset
+
+
+def test_sink_colours_and_words_are_easy_to_see():
+    r, g, b = (int(listener_mod.SINK_BG[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    assert 0.2126 * r + 0.7152 * g + 0.0722 * b >= 0.7            # a bright background
+    label = listener_mod.SINK_LABEL.lower()
+    assert "click here once" in label and "don't type" in label   # plain words: what to do, and what not to do
+    assert listener_mod.SINK_TITLE == "Helix input test sink"     # the title the operator is told to click is unchanged
+
+
+def test_the_real_sink_window_is_big_centred_and_topmost(tmp_path, monkeypatch):
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        hwnd = lst.sink_hwnd
+        rect = wintypes.RECT()
+        assert _u32.GetWindowRect(hwnd, ctypes.byref(rect))
+        screen_w, screen_h = _u32.GetSystemMetrics(0), _u32.GetSystemMetrics(1)    # SM_CXSCREEN / SM_CYSCREEN: primary
+        assert rect.right - rect.left >= 600 and rect.bottom - rect.top >= 300
+        assert abs((rect.left + rect.right) / 2 - screen_w / 2) <= 40
+        assert abs((rect.top + rect.bottom) / 2 - screen_h / 2) <= 60              # the title bar shifts the middle
+        assert _u32.GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST
+    finally:
+        lst.stop()
+    assert thread_errors == []
+
+
+def test_the_sink_flashes_its_own_taskbar_button_once_it_has_a_handle(tmp_path, monkeypatch):
+    flashed = []
+    monkeypatch.setattr(listener_mod, "flash_window", flashed.append)
+    lst, thread_errors = _real_sink(tmp_path, monkeypatch)
+    try:
+        assert flashed == [lst.sink_hwnd] and lst.sink_hwnd is not None
+    finally:
+        lst.stop()
+    assert thread_errors == []
+
+
+def test_flash_window_asks_for_caption_and_taskbar_until_the_window_is_foreground(monkeypatch):
+    # FLASHWINFO {UINT cbSize; HWND hwnd; DWORD dwFlags; UINT uCount; DWORD dwTimeout}; FLASHW_ALL 0x3 | FLASHW_TIMERNOFG 0xC;
+    # dwTimeout 0 = the default caret blink rate (learn.microsoft.com ns-winuser-flashwinfo).
+    seen = []
+
+    class FakeUser32:
+        def FlashWindowEx(self, pfwi):
+            i = pfwi._obj
+            seen.append((i.cbSize, i.hwnd, i.dwFlags, i.uCount, i.dwTimeout))
+            return 0
+
+    monkeypatch.setattr(listener_mod, "_user32", FakeUser32())
+    listener_mod.flash_window(0xABC)
+    assert seen == [(ctypes.sizeof(listener_mod.FLASHWINFO), 0xABC, 0x3 | 0xC, 0, 0)]
+    assert listener_mod.FLASHW_ALL == 0x3 and listener_mod.FLASHW_TIMERNOFG == 0xC

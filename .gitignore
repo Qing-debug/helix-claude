@@ -35,3 +35,7 @@ runs/
 /reorg-kickoff.md
 /REORG-HANDOFF.md
 
+# Firmware build output (arduino-cli --output-dir)
+firmware/build/
+# The esp32 core 3.3.10 postsavehex hooks (platform.txt) copy the binaries into the sketch folder when arduino-cli compiles with --output-dir
+firmware/Helix_BLE/build/
