@@ -21,7 +21,7 @@ import pytest
 from returns.result import Failure, Success
 
 from src.input import input_layer
-from src.input.harness import analyze, probe, soak
+from src.input.harness import analyze, listener, probe, soak
 from src.input.harness.listener import VK_BY_KEY
 from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done, Key, Pong, Step, transitions
@@ -782,7 +782,7 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     i_off, i_run, i_head = (out.index("probe-nojitter"), out.index("--probes m2_nojitter"),
                             out.index("--output-dir $REPO/firmware/build $REPO"))
     assert i_off < i_run < i_head
-    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process") == 2
+    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process | Where-Object") == 2
 
 
 def test_run_sheet_states_its_preconditions(capsys):
@@ -797,6 +797,27 @@ def test_run_sheet_states_its_preconditions(capsys):
     # step 2 only after step 1 exited 0; otherwise stop and report
     assert "Only after step 1 exited 0; on exit 1, 3 or 4 stop and report" in out
     assert out.index("before step 1") < out.index("1. Probes on HEAD's firmware") < out.index("2. M2 with START_JITTER")
+
+
+def test_run_sheet_describes_the_sink_and_how_to_raise_it(capsys):
+    # A-LFK-R m5, A-M6live, A-V3: the sink may cover the console; click it at once, or the agent raises it by
+    # Get-Process MainWindowHandle (not FindWindow by title)
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert f"titled '{listener.SINK_TITLE}', topmost and centred" in out
+    assert "reading 'Helix test window / click here once, then don't type'" in out
+    assert "may cover part of this console, so click it once as soon as it appears" in out
+    assert "Get-Process python, take the MainWindowHandle" in out and "SetForegroundWindow" in out
+
+
+def test_run_sheet_tees_each_flash_into_data(capsys):
+    # A-V3-V: the flash output and its exit code are kept on disk next to the run
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    for name in ("flash-nojitter", "flash-head"):
+        f = f"$REPO/data/probe/$RUN.{name}.txt"
+        assert f'2>&1 | tee {f}; echo "exit ${{PIPESTATUS[0]}}" | tee -a {f}' in out
+    assert out.count("mkdir -p $REPO/data/probe; ") == 2
 
 
 # ---- piece 3: raw plans through the InputLayer -------------------------------------------------------------
