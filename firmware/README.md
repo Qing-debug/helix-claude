@@ -67,15 +67,15 @@ enters the ROM bootloader), reads the MAC, then resets into the normal boot. Per
 USB-Serial/JTAG, the peripheral interprets the RTS serial control signal as a core reset", and that reset "does not
 re-sample the boot strapping pins". The reset does not re-enumerate USB, so COM4 stays.
 
-Serial lines the current sketch prints (names and lines from `Helix_BLE.ino` at 16ee18c; the order inside one boot is
+Serial lines the current sketch prints (names and lines from `Helix_BLE.ino` at 812411e; the order inside one boot is
 the code order, not a capture):
 
 | Line | Printed by |
 |---|---|
-| `Starting NimBLE work!` | `setup()`, right after the 3 s host wait (`:406`) |
-| `HID input report found` or `ERROR HID input report not found` | `onStarted`, during `begin()` (`:356`, `:354`) |
-| `BONDS=<n>` | `setup()`, after `begin()` (`:412`) |
-| `OnConnect method executed, advertising again.`, `CONN ev=connect ...`, `PEERS count=<n>` (`WARN PEERS` when more than one) | `onConnect` (`:362-366`) |
+| `Starting NimBLE work!` | `setup()`, right after the 3 s host wait (`:416`) |
+| `HID input report found` or `ERROR HID input report not found` | `onStarted`, during `begin()` (`:366`, `:364`) |
+| `BONDS=<n>` | `setup()`, after `begin()` (`:422`) |
+| `OnConnect method executed, advertising again.`, `CONN ev=connect ...`, `PEERS count=<n>` (`WARN PEERS` when more than one) | `onConnect` (`:372-376`) |
 | `CONN ev=auth ...`, `CONN ev=params ...`, `MTU handle=<h> mtu=<n>`, `SUB handle=<h> notify=<0\|1>`, `CIREQ handle=<h>`, `DISC handle=<h> reason=<r>` | the matching callbacks (`CIREQ`: the connection-interval request, sent from `loop()` 1.5 s after connect) |
 | `ACCEPTED`, `DONE`, `DROP`, `REJECTED` | per command, from the executor and `onWrite` |
 | `NOTIFY ...` | only in a `-DNOTIFY_DIAG=1` build (see "Compile-time flags") |
