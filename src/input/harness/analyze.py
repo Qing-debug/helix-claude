@@ -365,7 +365,10 @@ def reset_worst_case(f: Row, run: RunLog) -> tuple[int | None, str]:
     """(ns, "") or (None, why it cannot be computed): first report after esptool started minus the last PONG before
     that report. The first report is the earliest ``link_faults.jsonl`` entry or fault-row report (``fault_seen_ns`` /
     ``failure_ns``) after ``launch_ns``; unlike ``reported_ns`` it is not limited to the time after the stamp. The last
-    PONG may come after ``launch_ns``: the board keeps answering for a few hundred ms while esptool starts."""
+    PONG may come after ``launch_ns``: the board keeps answering for a few hundred ms while esptool starts.
+    The figure is low by that PONG's board->host one-way delay (~RTT/2, tens of ms): ``qpc_ns`` is its receipt, later
+    than the board's last moment alive (A-LFK-R m1). Any ``link_faults.jsonl`` entry after ``launch_ns`` counts as the
+    first report, ``ACK_TIMEOUT`` included; fine for V2, whose driver is blocked in the injector then (A-LFK-R m4)."""
     launch = f.get("launch_ns")
     if launch is None:
         return None, "no launch_ns"
