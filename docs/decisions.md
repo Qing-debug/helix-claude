@@ -920,3 +920,19 @@ Cost if wrong: one ~10-min attended re-run.
 Undo: re-run the m6 diagnostic with Hong clicking the sink.
 
 Pointer: ledger.md:717 (A-M6live), :718 (ruling), :729 (A-M6fix-R).
+
+## A-M6-fix (2026-10-23): the firmware retries a refused reply notify for a bounded time
+
+Question: the board's BLE stack refuses the DONE notify after m6's 16-report burst (`done_rc=6`, mbuf or ENOMEM), so the PC sees `ACK_TIMEOUT`. How is it fixed (A-M6 Q4)?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "fix A-M6 by firmware bounded retry of refused reply notifies (A-M6 Q4 option 3), no wire-format change". As built (A-M6fix): a refused ACCEPTED / DONE / loop-task REJECTED notify is retried with `vTaskDelay(1)` for up to 30 ms, stopping on success or when the peer leaves; a final failure is dropped and counted as before; PONG and the `onWrite` QUEUE_FULL REJECTED stay one attempt (A-F5-D3). A-M6fix-R upheld it (Q1–Q3 KEEP).
+
+Reason: "because the data points to it directly and it stays inside the spec (delivery + visible failure unchanged)". Live (A-M6fixlive, unattended): m6 DONE OK 50/50, 0 `ACK_TIMEOUT`, 0 `NOTIFY_FAILED`.
+
+Affects: `firmware/Helix_BLE/Helix_BLE.ino`, `firmware/Helix_BLE/notify_retry.h` and `firmware/test/test_notify_retry.cpp` (`d4a3fec`, merged `16ee18c`). Extended by an A-M6fix-R [review] (the all-up HID report after a refused key report, and the one in `runReleaseAll`, were sent once), batched into Final cleanup (A) and implemented by A-FC piece 1 (`08646be`, `notify_retry::send_all_up` on the loop task), approved by A-FC1-R; the RELEASE_ALL-abort all-up stays one attempt (`812411e` comment).
+
+Cost if wrong: revert one firmware commit (and reflash).
+
+Undo: revert `08646be`, then `d4a3fec`, and reflash.
+
+Pointer: ledger.md:719 (ruling), :724 (A-M6fix), :729 (A-M6fix-R), :731 (A-M6fixlive), :743 (A-FC piece 1), :765 (A-FC1-R).
