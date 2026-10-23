@@ -399,7 +399,7 @@ class Listener:
 def start(out_dir: str | Path, block: bool = True) -> Listener:
     """Start the hook, writer and sink threads; return once the hook is installed and the sink exists.
     Raises OSError if the writer, the hook or the sink does not come up, each within 5 s."""
-    sys.setswitchinterval(0.001)  # cut GIL delay to the hook thread (inferred benefit; M8 measures it)
+    sys.setswitchinterval(0.001)  # cut GIL delay to the hook thread (inferred benefit; small per V1 m8 data, A-M8)
     lst = Listener(out_dir, block=block)
     lst._start()
     return lst
