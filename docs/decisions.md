@@ -1000,3 +1000,19 @@ Cost if wrong: an empty fault soak still reads n/a (caught by the run-sheet chec
 Undo: revert `3a7c31c`.
 
 Pointer: ledger.md:763.
+
+## A-FC-D4 (2026-10-23): the m6 report says how many reports other failed commands delivered
+
+Question: the m6 report counts failed commands other than `NOTIFY_FAILED` without saying their keys were delivered (A-M6 [fyi]). Add a line?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "m6 report adds 'reports seen on other failed commands', informational, no gate change".
+
+Reason: "because the fact is derivable from run files and removes a hand check; plan M6 text doesn't forbid extra report lines".
+
+Affects: what the m6 report shows (`m6_report` in `src/input/harness/probe.py`, `0a78e4e`); no verdict changes.
+
+Cost if wrong: one revert.
+
+Undo: revert `0a78e4e`.
+
+Pointer: ledger.md:764.
