@@ -1043,7 +1043,7 @@ Reason: E covers both failure modes (ATT error response, and a completed write w
 
 Affects: `src/input/link.py` (`_keepalive_ping`, `_ping_cmd` returns whether the board answered, `KEEPALIVE_SOFT_MISS_LIMIT = 3`, `_Session.soft_misses` reset by any PONG in `_on_notify`), tests T1–T6 in `tests/input/test_link.py` (`9683e23`); plan A P4 Keepalive, `ping()`, Session state, fault list, C5 and the P4 test list (`f40a08e`). A soft miss logs one WARNING on `src.input.link` and adds no `faults()` / `link_faults.jsonl` entry.
 
-Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; a board that answers writes but never sends PONG ends ~1.0 s after its first unanswered PING instead of 0.5 s.
+Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; a board that answers writes but never sends PONG ends ~1.0 s after its first unanswered PING instead of 0.5 s. Analyze's reset worst case (last PONG → first report, gated at 1 s) grows by ~250 ms per soft miss just before a loss, because the last PONG is then an earlier PING's: one soft miss → ~0.95–0.98 s, two → ~1.2 s and a Faults FAIL, although detection from the loss itself is unchanged (A-KA-R m1, A-final-R M-1.1); a Faults FAIL with soft-miss WARNINGs just before the reset is this proxy cost, not slower detection.
 
 Undo: revert `9683e23` and `f40a08e`.
 
