@@ -34,7 +34,7 @@ locator) · pytest. **No new dependency.**
 **Binding inputs:** spec B `docs/superpowers/specs/2026-10-21-p1b-route-walking-design.md` (cited `specB:L<n>`);
 `docs/vision.md`; `CLAUDE.md`; spec A "Timing model (as built)"; spec D goals 3-4 and its "Trail" row (the session log
 B's leg records feed); `docs/decisions.md` H3 (reach unmeasured on FF2), H4 (merge only after in-game sign-off),
-H9 (autonomy); Feature A code as on `master` 2413c64.
+H8 (git actions, pushes), H9 (autonomy), H10 (Hong is asked only about spec deviations and human-only tasks); Feature A code as on `master` 2413c64.
 
 ---
 
@@ -362,8 +362,8 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node,
   - else `TELEPORT` if T + |d − reach_h|/V < d/V (strict), else `WALK` with `walk_ms = min(1000·d/V, max_walk_ms)`.
     With defaults: d = 13 → TELEPORT, d = 11 → WALK, d = 4 → WALK, d = 30 → TELEPORT. Known behaviour: the teleport
     rule ignores platform ends, so a teleport toward an end node can overshoot it by up to `reach_h − d` px (≤ 7 with
-    defaults) and fall off; the walker then re-plans from where the character lands (goal 4). B14 measures how often
-    this costs a leg; it is not special-cased.
+    defaults) and fall off; the walker then re-plans from where the character lands (goal 4). B14's `laps`, `stalls` and
+    `recovery` checks cover it; it is not special-cased or counted separately.
 - **P5 at g** (and g ≠ target, else P1 applied). The next path edge (g, h): `SLOPE` → `WALK` toward h, `walk_ms = min(1000·|hx − px|/V, max_walk_ms)`;
   `UP` → `TELEPORT` `Key.UP`; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, rg.reach_v, rg.params)`: one option → that
   one; two → let c_lo ≤ c_hi; if c_hi ≤ c_lo·(1 + `ability_mix_band`), `DROP` iff `rng.random() < 0.5`, else
@@ -388,7 +388,7 @@ class LegOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class MoveEntry:
-    t_ns: int; pos: tuple[int, int]; kind: str; direction: str | None; walk_ms: float | None
+    t_ns: int; pos: tuple[int, int]; kind: str; direction: str | None; walk_ms: float | None   # direction = Key.name, e.g. "RIGHT"
     cost_to_go_s: float; input: str            # "ok" or the InputError name
     settled: tuple[int, int] | None
 
@@ -515,7 +515,7 @@ everything in game (B17-B21).
 | B13 | Walker: rotation, laps, stop | S | yes | B12 |
 | B14 | Simulator evaluation and the 1000-lap run | S | yes | B13 |
 | B15 | Character locator | O | yes | B2 |
-| B16 | Minimap position source | O | yes | B12, B15 |
+| B16 | Minimap position source | S | yes | B12, B15 |
 | B17 | Minimap recorder | S | no | B16 |
 | B18 | Detection check on real frames (labels drafted by Claude, checked by Hong) | O | no | B15, B17 |
 | B19 | Runtime wiring and the walk CLI | S | no | B13, B16, B17 |
@@ -523,12 +523,13 @@ everything in game (B17-B21).
 | B21 | Supervised in-game session: reach measurement, sim realism, sign-off (human-only) | S | no | B14, B18, B19, B20 |
 | B22 | Docs: CLAUDE.md, spec B "as built" | M | no | B21 |
 
-**Counts:** M 5 (B1, B2, B3, B8, B22) · O 7 (B4, B5, B6, B7, B15, B16, B18) · S 10 (B9-B14, B17, B19, B20,
+**Counts:** M 5 (B1, B2, B3, B8, B22) · O 6 (B4, B5, B6, B7, B15, B18) · S 11 (B9-B14, B16, B17, B19, B20,
 B21). Cloud yes 16, Cloud no 6. **Shortfall: M has 5 tasks, one short of 6;** the work does not split into another
 natural mechanical unit, so none was padded in. In plan order the ladder's stage 1 takes M: B1, B2; O: B4, B5; S: B9,
 B10 (all Cloud yes; every dependency of a stage-1 unit is itself a stage-1 unit or B1). Stage 2 takes M: B3, B8, B22
-(**only 3 left**; B22 is Cloud no); O: B6, B7, B15, B16; S: B11, B12, B13, B14. B5 lists no dependency on B3: B3 only
-adds tests that pin `PathGraph`, which B5 reads but does not change; plan order still puts B3 first.
+(**only 3 left**; B22 is Cloud no); O: B6, B7, B15, B18 (B18 is Cloud no); S: B11, B12, B13, B14. B5 lists no
+dependency on B3: B3 only adds tests that pin `PathGraph`, which B5 reads but does not change; plan order still puts
+B3 first.
 
 ---
 
@@ -677,7 +678,8 @@ edge cases. **Cloud:** yes — stdlib, networkx, returns, `src.controller`, `src
 numpy and `src.input.protocol.Key`.
 **Interface created:** C7, exactly.
 
-- [ ] **Tests** (FF2 `RouteGraph`; `rng = np.random.default_rng(0)` unless stated):
+- [ ] **Tests** (FF2 `RouteGraph`: `agent = MapleAgent(characterClass=Kanna()); agent.loadMap(fixture)`;
+  `rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()`; `rng = np.random.default_rng(0)` unless stated):
   1. Arrived: pos `(104,43)`, target `(105,42)` → `Decision(None, 0.0, None)`.
   2. Known case 2: pos `(101,24)`, target `(105,42)`, `ability_mix_band=0` → `Move(TELEPORT, Key.DOWN, None)`,
      `toward` the `(105,42)` node, `cost_to_go_s == approx(1.05)`. Then pos `(101,42)` (landed) → `WALK`, `Key.RIGHT`,
@@ -777,7 +779,7 @@ class SimWorld:
   ```json
   {"minimap_size": [162, 82], "platforms": [
     {"name": "floor", "droppable": false, "points": [[30, 60], [37, 60], [48, 61], [65, 60], [135, 60]]},
-    {"name": "mid-left", "droppable": true, "points": [[44, 45], [48, 45], [58, 46], [74, 45], [78, 45]]},
+    {"name": "mid-left", "droppable": true, "points": [[44, 45], [48, 45], [58, 46], [74, 45], [80, 45]]},
     {"name": "top", "droppable": true, "points": [[38, 28], [49, 28], [66, 28], [79, 24], [101, 24], [109, 23], [113, 23]]},
     {"name": "mid-right", "droppable": true, "points": [[94, 43], [97, 43], [105, 42], [118, 43], [122, 43]]}]}
   ```
@@ -902,10 +904,12 @@ B9/B10.
      give up after `settle_timeout_s` (settled = last successful read, or None). The stop flag is checked before
      every poll; set → record the `MoveEntry` and end `STOPPED`. Record `MoveEntry` and loop.
   Every outcome returns a `LegRecord` with `end_ns = clock.now_ns()` and `src`/`dst` positions (`src` None for None).
-- [ ] **Tests** (FF2 `RouteGraph`, `SimWorld` + `SimLink` + `SimPositionSource`, `SimClock`, `use_stimulus=False`,
+- [ ] **Tests** (FF2 `RouteGraph`: `agent = MapleAgent(characterClass=Kanna()); agent.loadMap(fixture)`;
+  `rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()`; `SimWorld` over `load_terrain(ff2_terrain.json)` with reach
+  from `Kanna` + `SimLink` + `SimPositionSource`, `SimClock`, `use_stimulus=False`,
   `rng=default_rng(0)`):
   1. Noise off, start `(49,28)`, leg to `(101,24)` → `REACHED` in ≤ 8 moves; the moves include a WALK whose start
-     `pos` is on the slope (x in 66..79).
+     `pos` is on the slope (x in 66..79) and whose `direction == "RIGHT"` (`Key.name`, never `str(Key)`).
   2. Noise off, start `(101,24)`, leg to `(105,42)` → `REACHED` in ≤ 3 moves; final settled position within 2 px.
   3. Noise off, every rotation leg from its source node → `REACHED`, 0 stalls, 0 off_graph.
   4. A link that never moves (`replace(NoiseConfig.off(), no_op_p=1)`): leg `(82,60)`→`(48,61)` with `leg_timeout_s=25` → `TIMED_OUT`, `stalls
@@ -940,7 +944,7 @@ B9/B10.
   before `execute`, so a stop seen before the call sends nothing; a stop that lands inside `InputLayer`'s reaction
   wait (G5) is cut by the guard within 50 ms of the `play` starting.
 - [ ] **Tests:**
-  1. Sim, noise off, `max_laps=3`, `MemorySink` → `Success(RunSummary(3, 22, "max_laps"))`; 22 leg records (1 + 3·7);
+  1. Sim as in B12 (FF2, noise off, world start `(113,60)`), `max_laps=3`, `MemorySink` → `Success(RunSummary(3, 22, "max_laps"))`; 22 leg records (1 + 3·7);
      3 lap records with `legs == 7`, `all_reached` True, `end_ns > start_ns`; leg (lap 2, leg 4) has `src (49,28)`
      and `dst (101,24)`.
   2. Stop from another thread: a fake link whose `play` blocks on an `Event` until `release_all` is called and then
@@ -1017,8 +1021,8 @@ def main(argv: list[str] | None = None) -> int
   the surface while `SimWorld` uses the unchanged terrain (review round 1, I8). Offsets can change which links are
   inferred (with ±2 the FF2 slope link survives in about 2 of 3 draws, measured by review round 2), so test (3b)
   checks only that legs complete, not which route they take. Node offsets never move the world's start (above), and
-  `known_cases` entries are matched against each leg's **unshifted** CSV positions (run_sim keeps the map from
-  shifted node to original position), so a known case is found whatever the offset.
+  `known_cases` entries are matched against each leg's **unshifted** CSV positions (run_sim matches by rotation index: leg i of a lap
+  is rotation[i] → rotation[(i+1) mod n], and rotation[i] has the unshifted position of the i-th blue CSV row), so a known case is found whatever the offset.
 - [ ] **Tests** (all pass `known_cases=[((49, 28), (101, 24)), ((101, 24), (105, 42))]`): (1) 30 laps, seed 1,
   defaults except `no_op_p=0.08`: every `judge(report, min_single_error_legs=10)` check passes; both known cases
   (30, 30). (2) Same seed twice → equal reports. (3) 20 laps with `SimParams(walk_px_per_s=6.5)` and with
@@ -1038,7 +1042,8 @@ def main(argv: list[str] | None = None) -> int
 
 **Files:** create `src/route/character.py`; tests `tests/route/test_character.py`.
 **Class:** O — method and threshold choices for detection. **Cloud:** yes — cv2 and numpy only, synthetic frames;
-it touches no file under `src/vision/` (the Appendix B rule is read by directory and imports).
+it touches no file under `src/vision/`. This reads Appendix B's "never vision" by directory and imports, not by
+function (an orchestrator reading, recorded here; the cloud-built branch still runs the full Windows suite).
 **Interface created:**
 
 ```python
@@ -1073,8 +1078,8 @@ class CharacterLocator:
 ### Task B16: Minimap position source
 
 **Files:** create `src/route/position.py`; tests `tests/route/test_position.py`.
-**Class:** O — a thin adapter, but it reads a frame shared with the capture thread under its lock and detects
-stale frames (borderline, so up from M). **Cloud:** yes — imports `src.route.character`, numpy; does **not**
+**Class:** S — a thin adapter, but it reads a frame shared with the capture thread under its lock and detects
+stale frames (concurrency). **Cloud:** yes — imports `src.route.character`, numpy; does **not**
 import `src.main` or `src.vision` (the shared object is duck-typed).
 **Interface created:**
 
@@ -1087,8 +1092,9 @@ class MinimapPositionSource:                     # implements walker.PositionSou
 - [ ] **Behaviour:** under `shared.minimap_frame_lock`: frame None → `Failure("no frame")`; the same object as the
   previous read (`is`) → `Failure("stale")` (`walker.STALE`); else keep a reference and take `frame.copy()`. Outside
   the lock: `locator.locate(copy)`, returned unchanged.
-- [ ] **Tests** (a fake shared object with a `threading.Lock` subclass that counts acquires and records whether
-  `locate` ran while held): None → `"no frame"`; same array twice → second is `"stale"`; a new array with the icon
+- [ ] **Tests** (a fake shared object whose `minimap_frame_lock` is a wrapper around a `threading.Lock` implementing
+  `acquire`/`release`/`__enter__`/`__exit__`, counting acquires and exposing whether it is held — `threading.Lock`
+  cannot be subclassed on 3.14 — and a fake locator recording whether the lock was held when `locate` ran): None → `"no frame"`; same array twice → second is `"stale"`; a new array with the icon
   pasted → its position; `locate` never runs while the lock is held; one lock acquire per `read`.
 - **Run:** `python -m pytest -q tests/route/test_position.py`
 - **Commit:** `feat(route): position source over the shared minimap frame`
@@ -1172,7 +1178,9 @@ def main(argv: list[str] | None = None) -> int
 # src/route/runtime.py
 class StopControl:
     def __init__(self, on_stop: Callable[[], None], hotkey_vk: int = 0x7B) -> None   # 0x7B = F12 (PB-D2)
-    def start(self) -> Result[None, str]       # installs the WH_KEYBOARD_LL hook thread (G33) and a SIGINT handler
+    def start(self) -> Result[None, str]       # calls self._install_hook() (the WH_KEYBOARD_LL hook thread, G33;
+                                               # a seam tests replace), installs a SIGINT handler, then starts the
+                                               # worker thread that waits for trigger() and calls on_stop once
     def trigger(self) -> None                  # what the hook and SIGINT call; idempotent; returns at once
     def close(self) -> None
 def start_capture(shared) -> threading.Thread
@@ -1257,8 +1265,10 @@ frames.
 
 - [ ] **Step 1: preconditions.** B14's 1000-lap run passed; B18 passed; Hong is at the PC; Kanna on FF2 on monitor 2;
   "Guiness" paired; the Windows full suite passes.
-- [ ] **Step 2: record.** `record_minimap --seconds 120` while Hong moves Kanna by hand around all four platforms.
-- [ ] **Step 3: FF2 reach measurement** (specB:L13, H3). `measure_moves --reps 10`. Report the summary.
+- [ ] **Step 2: record.** `python -m src.route.harness.record_minimap --out data/recordings/ff2_<date>_moving
+  --seconds 120` while Hong moves Kanna by hand around all four platforms.
+- [ ] **Step 3: FF2 reach measurement** (specB:L13, H3). `python -m src.route.harness.measure_moves --supervised --out
+  data/route/measure/<UTC stamp> --reps 10`. Report the summary.
 - [ ] **Step 4: reach decision.** If `reach_h_mean` differs from 19 by more than 1 px, or `reach_v_peak_mean` (when
   measurable) from 23 by more than 1 px: change `Kanna`'s value(s) in `classes.py` (the one place), re-run the full suite and update the reach- and
   default-dependent FF2 numbers in the tests of B2-B7 and B12-B14 in the same commit (the measurement in the body),
@@ -1269,7 +1279,8 @@ frames.
   by > 3 px: update the default or fixture, re-run the full suite (updating default-dependent numbers in B2-B7 and
   B12-B14 tests), re-run B14 (1000 laps) and paste the result.
 - [ ] **Step 6: detection on moving frames.** B18 `draft` + Hong's check + `check` on step 2's frames → PASS.
-- [ ] **Step 7: short runs.** `walk --supervised --laps 1` twice, then `--laps 10 --record`. Hong watches; F12 aborts
+- [ ] **Step 7: short runs.** `python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised --laps 1`
+  twice, then the same with `--laps 10 --record`. Hong watches; F12 aborts
   at any sign of trouble.
 - [ ] **Step 8: sign-off** (specB:L68): 10 consecutive laps with no manual intervention, read from `laps.jsonl`
   (`all_reached` true for 10 consecutive laps) and Hong's word. Only then may Hong merge (H4).
@@ -1335,7 +1346,9 @@ orange_node,"(105, 60)",FALSE,FALSE,FALSE,FALSE
 2. **Teleport semantics.** That a horizontal teleport always travels the full reach, that teleport UP lands on the
    first platform at or below the end point, and that teleport DOWN passes through the current platform (including
    a non-droppable one) are assumptions built into `SimWorld`. B21 step 2/7 shows the truth.
-3. **FF2 platform extents** in `ff2_terrain.json` (DC8) and that the floor is solid across 30-135.
+3. **FF2 platform extents** in `ff2_terrain.json` (DC8) and that the floor is solid across 30-135. Mid-left is
+   drawn to x 80 so that the inferred DOWN link `(79,24)→(74,45)` lands on it in the simulator; whether it reaches
+   that far in the game is unknown.
 4. **Vertical reach on FF2** may not be measurable by landing, because every platform above another is less than
    23 px away; B20 measures the peak during the teleport, which may also fail. Then 23 stays and B21 says so.
 5. **Detection method.** Whether masked `TM_CCORR_NORMED` (today's method) separates the 10×10 icon from minimap
@@ -1423,3 +1436,4 @@ made provisionally · undo: B13 (remove the guard thread and its test)
 | 1 | PB-rev1, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 8 / 12 | I1: B2↔B3 swapped so params are stage 1; deps fixed. I2: hard rule 9 + function-level Windows imports. I3: stop re-check + guard thread, new decision PB-D4, race test. I4: `StopControl.trigger()` non-blocking + test. I5: B18 reads B17 folders, BGR→RGB. I6: recovery also judges multi-error legs (extra ≤ 3·k). I7: B16→O, B17→S, B20→S; M shortfall (5) stated. I8: "at a node" rule, P6 removed, `node_offset_px` sim option + tests. Minors 9-20 fixed (spec cites re-mapped, counts, SD 210, G14/G21 cites, A3 height check, approx, noise test bands, tolerances, LF transcription wording, deps, merge wording). |
 | 2 | PB-rev2, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 5 / 12 | I1: `--min-single-error-legs` CLI arg; test (5) checks 6 PASS/FAIL lines. I2: `known_cases` and `--known-case` parameters, no FF2 positions in `run.py`. I3: `run` joins the stop guard before returning; stop checked during settle. I4: B19 seams named, end-to-end test fully specified. I5: B18 `load_frames`. Minors: test (1) `no_op_p=0.08`; (3b) caveat and cite; B21 re-run scope; `down_options` args; slope edges listed in B5; drop's current platform; replay graph and leg split; `NoiseConfig.off()` base in B12.4; `Accepted(seq, 0)`; `--class` arg; B15 Cloud rationale; Feature D accessor noted. |
 | 3 | PB-rev3, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 1 / 10 | I1: world starts at the unshifted first node; known cases matched on unshifted positions. Minors: B19 usage line, `--class`, exit codes 0-5, locator `Result` unwrapped, `release_all` only after connect, layer clock seams in the end-to-end test; 0/0 recovery rule; Euclidean > 3 px in `score` and B15.5; stop-guard lock; teleport overshoot at platform ends stated as known behaviour; walk cannot cross a gap in the sim; B6 recipe inlined; `accepted=None` for RELEASE_ALL; who pushes the branch. |
+| 4 | PB-rev4, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 2 / 9 | I1: B16 → S (counts O 6, S 11). I2: B16 test uses a lock wrapper (`threading.Lock` cannot be subclassed on 3.14). Minors: `direction = Key.name` + test; overshoot covered by existing checks; B7/B12/B13 build recipes and start; B21 commands in full; `StopControl._install_hook` seam and worker start; known cases by rotation index; B15 Cloud reading recorded; H8/H10 cited; mid-left drawn to x 80. |
