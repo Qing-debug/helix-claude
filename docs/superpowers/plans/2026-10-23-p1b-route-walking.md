@@ -1,6 +1,6 @@
 # Plan: Phase 1 · Feature B — Walking the route
 
-**Status: draft** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
+**Status: draft (not approved after 5 review rounds; see Review record)** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -365,11 +365,14 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node,
     defaults) and fall off; the walker then re-plans from where the character lands (goal 4). B14's `laps`, `stalls` and
     `recovery` checks cover it; it is not special-cased or counted separately.
 - **P5 at g** (and g ≠ target, else P1 applied). The next path edge (g, h): `SLOPE` → `WALK` toward h, `walk_ms = min(1000·|hx − px|/V, max_walk_ms)`;
+  `WALK` (reached only when P4 kept g at the start of a slope segment and the character counts as at g) → let g′ = h,
+  then g′ advances along the path while the next edge is `WALK`; move toward g′ by P4's off-slope rule (`TELEPORT` if
+  T + |d − reach_h|/V < d/V, else `WALK` with `walk_ms = min(1000·d/V, max_walk_ms)`, d = |g′x − px|);
   `UP` → `TELEPORT` `Key.UP`; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, rg.reach_v, rg.params)`: one option → that
   one; two → let c_lo ≤ c_hi; if c_hi ≤ c_lo·(1 + `ability_mix_band`), `DROP` iff `rng.random() < 0.5`, else
   `TELEPORT` `Key.DOWN`; otherwise the cheaper (ties `TELEPORT`). `TELEPORT DOWN` is `Move(TELEPORT, Key.DOWN, None)`;
   `DROP` is `Move(DROP, None, None)`. `rng` is used only in this two-option, in-band case.
-- `toward` = g for a P4 move, h for a P5 move.
+- `toward` = g for a P4 move, h for a P5 move, g′ for a P5 `WALK` move.
 
 ### C8. Executing a move (`src/route/moves.py`)
 
@@ -640,8 +643,8 @@ edge cases. **Cloud:** yes — stdlib, networkx, returns, `src.controller`, `src
      the 9 vertical links of B4.2 that PathGraph lacks: `(113,60)→(118,43)`, `(101,24)→(105,42)`,
      `(105,42)→(101,24)`, `(74,45)→(79,24)`, `(42,28)→(37,60)`, `(79,24)→(74,45)`, `(109,23)→(105,42)`,
      `(118,43)→(113,60)`, `(97,43)→(101,24)`.
-  3. **Known cases now have a path:** `rg.path((49,28), (101,24))` is `Success` and its edges include the SLOPE edge
-     `(66,28)→(79,24)`; `rg.path((101,24), (105,42))` is `Success((101,24), (105,42))` and that edge is `DOWN` with
+  3. **Known cases now have a path:** `rg.path(<(49,28) node>, <(101,24) node>)` is `Success` and its edges include the SLOPE edge
+     `(66,28)→(79,24)`; `rg.path(<(101,24) node>, <(105,42) node>)` is `Success` of the 2-tuple `((101,24) node, (105,42) node)` and that edge is `DOWN` with
      `cost_s == pytest.approx(1.05)` (teleport 0.55 + 4/8).
   4. Every one of the 7 rotation legs has a path.
   5. `horizontal_cost_s` matches C5's seven listed values (`pytest.approx`, abs 1e-9); `down_options(18, True, 23, p)`
@@ -700,6 +703,10 @@ numpy and `src.input.protocol.Key`.
      arrived; pos `(105,46)` → not arrived (A2 fails, |dy| 4). In P4, pos `(48,64)` with target `(58,46)` counts as
      at `(48,61)` (|dy| 3, floor platform by A2) and gives `TELEPORT` `Key.UP`.
   9. `rng` is untouched (same next draw as a fresh `default_rng(0)`) in every case except 6.
+  10. P5 WALK edge at a slope-segment start (review round 5, I1): the FF2 rows with the `(79, 24)` node moved to
+     `(79, 22)`, written to a temporary CSV and loaded the same way; pos `(77,25)` (on the slope segment, at the
+     `(79,22)` node by the platform test), target `(101,24)` → `TELEPORT` `Key.RIGHT` `toward` the `(101,24)` node
+     (g′ advanced over the WALK edges via `(90,24)`, d = 24), never `Failure` or `None`.
 - **Run:** `python -m pytest -q tests/route/test_planner.py`
 - **Commit:** `feat(route): plan the next move and choose walk, teleport or drop`
 
@@ -710,7 +717,8 @@ numpy and `src.input.protocol.Key`.
 **Interface created:** C8, exactly.
 
 - [ ] **Tests** (a recording fake layer with `walk`, `teleport`, `drop` methods returning a sentinel `Success`, and one
-  real `InputLayer(FakeLink(), StubModel())` as in G16):
+  real `InputLayer(FakeLink(), StubModel())` built from copies of those two helpers placed in `test_moves.py` (G16;
+  copy, do not import from `tests/input/test_input_layer.py`):
   1. WALK → exactly one call `walk(Key.LEFT, 750.0, 123)`; TELEPORT UP → `teleport(Key.UP, 123)`; DROP → `drop(123)`;
      `stimulus_ns=None` is passed through as None.
   2. The returned `Result` is the layer's object (identity).
@@ -947,7 +955,8 @@ B9/B10.
   1. Sim as in B12 (FF2, noise off, world start `(113,60)`), `max_laps=3`, `MemorySink` → `Success(RunSummary(3, 22, "max_laps"))`; 22 leg records (1 + 3·7);
      3 lap records with `legs == 7`, `all_reached` True, `end_ns > start_ns`; leg (lap 2, leg 4) has `src (49,28)`
      and `dst (101,24)`.
-  2. Stop from another thread: a fake link whose `play` blocks on an `Event` until `release_all` is called and then
+  2. Stop from another thread (positions from B10's `SimPositionSource` over a `SimWorld` as in test 1, start
+     `(113,60)`; tests 3 the same): a fake link whose `play` blocks on an `Event` until `release_all` is called and then
      returns `Failure(InputError.ABORTED)`; `RealClock`; a timer thread calls `stop_now()` after 0.2 s → `run`
      returns within 1.0 s wall with reason `"stopped"`, the last leg record is `STOPPED`, and `release_all` was called
      ≥ 2 times.
@@ -956,7 +965,9 @@ B9/B10.
      `stop_now()` is called 0.1 s into the first reaction wait → `run` returns within 1.0 s with reason `"stopped"`,
      and if a `play` started after `stop_now()`, a `release_all` follows it within 0.1 s wall time. After `run`
      returns, no further `release_all` calls happen (the guard has stopped).
-  4. `LINK_LOST` on the 5th `play` → reason `"link_down"`, the last leg record `LINK_DOWN`, no lap record for the
+  4. Sim as in test 1 (world start `(113,60)`), with the `SimLink` wrapped by a link whose `play` pushes `InputError.LINK_LOST` onto
+     `sim_link.fail_next` when `sim_link.plays == 4` and then delegates (B10's `fail_next` fails only the next
+     play), so play 5 fails → reason `"link_down"`, the last leg record `LINK_DOWN`, no lap record for the
      unfinished lap.
   5. `rotation=[]` → `Failure`.
   6. A sink whose `write_leg` returns `Failure` → the run still completes `max_laps=1`.
@@ -1017,7 +1028,8 @@ def main(argv: list[str] | None = None) -> int
   `{"kanna": Kanna}`, default `kanna`) prints the report and exactly one line per check starting `PASS ` or `FAIL `;
   exit 0 iff all pass.
 - [ ] **Node offsets.** With `noise.node_offset_px = k > 0`, `run_sim` adds `rng_world.integers(-k, k + 1)` to each
-  node's y in the loaded map (a copy of the CSV rows, before `loadMap`), so the planner sees hand-placed nodes off
+  node's y in the loaded map (a copy of the CSV rows, written to a temporary CSV that `loadMap` then reads, since
+  `loadMap` takes a path), so the planner sees hand-placed nodes off
   the surface while `SimWorld` uses the unchanged terrain (review round 1, I8). Offsets can change which links are
   inferred (with ±2 the FF2 slope link survives in about 2 of 3 draws, measured by review round 2), so test (3b)
   checks only that legs complete, not which route they take. Node offsets never move the world's start (above), and
@@ -1147,18 +1159,20 @@ def main(argv: list[str] | None = None) -> int
 
 - [ ] **Who labels:** Claude drafts, Hong checks. `draft` finds the character by a method independent of the locator
   (colour-blob centroid of the character dot in the minimap crop, with the colour range read from
-  `assets/chr/chr.png`'s non-mask pixels), writes `labels_draft.json` (`{file: [x, y] | null}`) and a contact sheet
+  `assets/chr/chr.png`'s non-mask pixels), writes `labels_draft.json` (`{file: [x, y] | "absent" | null}`) and a contact sheet
   per 50 frames (crops at 8× with a 1-px cross at the label). **Human-only step:** Hong opens the sheets, corrects any
   wrong label or marks a frame unusable, and saves `labels.json`. Claude never edits `labels.json` after Hong.
 - [ ] **Frame folders.** A folder with an `index.jsonl` is a B17 recording: its PNGs are already minimap crops,
   read with `cv2.imread` (BGR) and converted `COLOR_BGR2RGB`, no crop. Any other folder holds full-screen frames
   (as `data/recordings/ff2_2026-10-21/`): `cv2.imread`, `crop_minimap`, then `COLOR_BGR2RGB`. Both `draft` and
   `check` read frames only through `load_frames`; the locator always receives RGB.
-- [ ] **`score`:** per frame with a label: found within ±1 px in both axes → hit; found > 3 px away in Euclidean distance →
+- [ ] **`score`:** a label may also be the string `"absent"` (Hong marks a frame with no character on the
+  minimap); any position found on such a frame counts as wrong, `None` there counts as a hit. `null` (unusable)
+  frames are skipped. Per other frame with a label: found within ±1 px in both axes → hit; found > 3 px away in Euclidean distance →
   wrong (spec "never reported > 3 px away", read as straight-line distance); `None` → miss. Returns `{"frames", "hits", "misses", "wrong", "hit_rate", "max_err_px"}`. `check` exits 0
   iff `hit_rate ≥ 0.995` and `wrong == 0` (specB:L67).
 - [ ] **Tests** (synthetic, no real frames): `score` on hand-made dicts: 199 hits + 1 miss → hit_rate 0.995, PASS
-  path; 1 found at 4 px → wrong 1; a 2 px error is neither hit nor wrong (counts against hit_rate only). A
+  path; 1 found at 4 px → wrong 1; a 2 px error is neither hit nor wrong (counts against hit_rate only); an `"absent"` frame with a position found → wrong 1. A
   temporary folder with `index.jsonl` and one pure-red PNG written by B17's `record` is loaded by `load_frames` as an RGB array whose
   pixels are (255, 0, 0) and is not passed to `crop_minimap` (monkeypatch it to fail).
 - [ ] **Real run:** `check` on `data/recordings/ff2_2026-10-21/` with Hong's labels. If it fails, tune
@@ -1221,8 +1235,13 @@ def main(argv: list[str] | None = None) -> int
   `now_ns` / `sleep` (the layer's reaction wait otherwise uses `perf_counter_ns`, G5); `main(["--map", fixture, "--supervised",
   "--laps", "1", "--out", tmp])` → exit 0, `legs.jsonl` has 8 lines, `laps.jsonl` 1, `session.json` exists, and
   the wrapper's `release_all` and `close` were each called at least once on exit.
-- [ ] **Live smoke (MapleStory closed, Feature A sink focused):** `--laps 1` against the real board sends keys only
-  into the sink, writes `legs.jsonl`, and F12 stops it within 1 s.
+- [ ] **Live link check (MapleStory closed, Feature A sink focused):** with the game closed there is no minimap, so
+  the default `_wait_first_frame` fails (exit 3) before `connect`. Run `main` from a short script with the seams
+  patched as in the end-to-end test except `_make_link` (the real `BleLink`) and `_make_stop_control` (the real
+  `StopControl`), `_make_clock` `RealClock()` and `--laps 1 --minutes 1`: keys land only in the sink (the listener's
+  `keys.jsonl` shows only bot keys), `legs.jsonl` is written, and F12 ends the run within 1 s with reason
+  `"stopped"`. The simulated world does not follow the real keys, so legs may stall; only delivery and the stop are
+  checked here. F12 in game is checked again in B21 step 7.
 - **Run:** `python -m pytest -q tests/route/test_walk_cli.py`
 - **Commit:** `feat(route): runtime wiring and supervised walk CLI with F12 stop`
 
@@ -1281,7 +1300,8 @@ frames.
 - [ ] **Step 6: detection on moving frames.** B18 `draft` + Hong's check + `check` on step 2's frames → PASS.
 - [ ] **Step 7: short runs.** `python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised --laps 1`
   twice, then the same with `--laps 10 --record`. Hong watches; F12 aborts
-  at any sign of trouble.
+  at any sign of trouble. In the first run Hong presses F12 once mid-leg on purpose: the run ends within 1 s with
+  reason `"stopped"` and no key stays held (then restart it).
 - [ ] **Step 8: sign-off** (specB:L68): 10 consecutive laps with no manual intervention, read from `laps.jsonl`
   (`all_reached` true for 10 consecutive laps) and Hong's word. Only then may Hong merge (H4).
 - **Commit (only if step 4 or 5 changed files):** `fix(route): use movement values measured on FF2` (body: the
@@ -1437,3 +1457,4 @@ made provisionally · undo: B13 (remove the guard thread and its test)
 | 2 | PB-rev2, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 5 / 12 | I1: `--min-single-error-legs` CLI arg; test (5) checks 6 PASS/FAIL lines. I2: `known_cases` and `--known-case` parameters, no FF2 positions in `run.py`. I3: `run` joins the stop guard before returning; stop checked during settle. I4: B19 seams named, end-to-end test fully specified. I5: B18 `load_frames`. Minors: test (1) `no_op_p=0.08`; (3b) caveat and cite; B21 re-run scope; `down_options` args; slope edges listed in B5; drop's current platform; replay graph and leg split; `NoiseConfig.off()` base in B12.4; `Accepted(seq, 0)`; `--class` arg; B15 Cloud rationale; Feature D accessor noted. |
 | 3 | PB-rev3, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 1 / 10 | I1: world starts at the unshifted first node; known cases matched on unshifted positions. Minors: B19 usage line, `--class`, exit codes 0-5, locator `Result` unwrapped, `release_all` only after connect, layer clock seams in the end-to-end test; 0/0 recovery rule; Euclidean > 3 px in `score` and B15.5; stop-guard lock; teleport overshoot at platform ends stated as known behaviour; walk cannot cross a gap in the sim; B6 recipe inlined; `accepted=None` for RELEASE_ALL; who pushes the branch. |
 | 4 | PB-rev4, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 2 / 9 | I1: B16 → S (counts O 6, S 11). I2: B16 test uses a lock wrapper (`threading.Lock` cannot be subclassed on 3.14). Minors: `direction = Key.name` + test; overshoot covered by existing checks; B7/B12/B13 build recipes and start; B21 commands in full; `StopControl._install_hook` seam and worker start; known cases by rotation index; B15 Cloud reading recorded; H8/H10 cited; mid-left drawn to x 80. |
+| 5 | PB-rev5b, Opus 5.5 (`claude-opus-5-5`), effort high requested (reported: not shown) | 0 / 2 / 5 | I1: C7 P5 gains a `WALK` case (g′ advanced along WALK edges, P4 off-slope rule) for a character at a slope-segment start; B7 test 10. I2: B19 live smoke could never pass (no minimap with the game closed → exit 3); now a link check through the seams with the real `BleLink` and `StopControl`, and an F12 check added to B21 step 7. Minors: B13 tests name the position source and world start, test 4 arms `fail_next` from `plays`; B8 copies `FakeLink`/`StubModel`; B14 writes shifted rows to a temporary CSV; B18 `"absent"` label counts found positions as wrong; B5 `rg.path` takes nodes. **Not approved after 5 rounds**; the round-5 fixes are unreviewed. |
