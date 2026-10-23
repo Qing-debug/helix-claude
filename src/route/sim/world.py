@@ -4,6 +4,9 @@ A terrain of platforms (polylines sorted by x), movement physics for teleport, w
 (no-op, overshoot, landing offset) drawn from one seeded `numpy` `Generator`. Positions are minimap pixels with a
 top-left origin (y grows downward). Each move updates `pos` at once and appends a `MoveEffect`; `position_at`
 replays the last effect over time (start until the schedule ends, then a linear settle to the end).
+
+Where the plan is silent: a move with no landing surface stays put (a teleport or a drop keeps its kind and its
+settle time), and an invalid direction is `nothing` with no draw.
 """
 
 import bisect
@@ -251,18 +254,18 @@ class SimWorld:
             return self.nothing(now_ns)
         if self._no_op():
             return self._no_op_effect(now_ns)
+        current = self._platform_at(self.pos)
+        if current is None:  # off every surface: cannot happen through the public moves; same as drop's "none"
+            return self._record("none", self.pos, now_ns, 0.0, ())
         x, y = self.pos
         draw = self._draw(overshoot=True, landing=False)
         injected = tuple(draw.injected)
-        current = self._platform_at(self.pos)
-        if current is None:
-            return self._record("walk", self.pos, now_ns, 0.0, injected)
         platform = self.terrain.platforms[current]
         sign = 1 if direction == Key.RIGHT else -1
         x_new = x + sign * (held_ms / 1000 * self.params.walk_px_per_s + draw.overshoot_px)
         x_first, x_last = platform.points[0][0], platform.points[-1][0]
-        if x_new > x_last or x_new < x_first:
-            x_end = x_last if x_new > x_last else x_first
+        x_end = x_last if sign > 0 else x_first
+        if (x_new - x_end) * sign > 0:
             below = self.terrain.surface_below(x_end + sign * _WALK_OFF_PX, y + 1)
             # No surface past the end (the map's edge): stop at the end of the current platform.
             end = (x_end, platform.surface_y(x_end)) if below is None else (x_end, below[1])
@@ -282,7 +285,7 @@ class SimWorld:
         injected = tuple(draw.injected)
         x_new = x + draw.landing_px
         landing = self.terrain.surface_below(x_new, y + 1)
-        if landing is None:
+        if landing is None:  # no surface below (cannot happen on FF2): stay, like a teleport with no landing
             return self._record("drop", self.pos, now_ns, self.params.drop_settle_s, injected)
         y_land = landing[1]
         settle_s = self.params.drop_settle_s + (y_land - y) / self.params.fall_px_per_s
