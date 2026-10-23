@@ -888,3 +888,19 @@ Cost if wrong: one attended live session.
 Undo: none needed; the flag stays off in the shipped build.
 
 Pointer: ledger.md:671 (A-M6), :675 (decision), :713 (A-M6diag-R), :717 (A-M6live).
+
+## A-M8-fix (2026-10-22): the m8 tick-granularity estimator becomes a grid fit, with no live re-run
+
+Question: m8 failed live (NOT CONFIRMED). A-M8 found an estimator bug, not a regression: every recording has `tick_ms` on a 15.625 ms grid, but the estimator (p99 − p1 of tick − qpc) assumes the lag is under one tick, while BLE keys lag over ~2 ticks. Fix the estimator, and re-run m8 live?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "m8 → fix A (grid-fit estimator + red test + offline re-run on v1-20261022c), no live re-run", with A-V1live-D1 B (probe.py utf-8 stdout) folded into the same unit.
+
+Reason: "because it is a code bug against the plan's own gate (plan:1708), no spec deviation". A-M8fix's offline re-run gave CONFIRMED ~15.625 ms on v1-20261022c (old 27.355 ms) and on all 15 recorded runs; A-M8fix-R upheld the ruling (Q1–Q4 KEEP).
+
+Affects: `src/input/harness/probe.py` m8 (`bbdc10c`; utf-8 stdout `6f56244`; merged `0615c19`); later `1499505` and `16a8d78` (A-FC-D2).
+
+Cost if wrong: revert one probe.py commit.
+
+Undo: revert `bbdc10c`.
+
+Pointer: ledger.md:668 (A-M8), :669 (ruling), :677 (A-M8fix), :703 (A-M8fix-R).
