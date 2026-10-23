@@ -968,3 +968,19 @@ Cost if wrong: one small format unit later (Hong-gated).
 Undo: none needed.
 
 Pointer: ledger.md:744 (ruling), :765 (A-FC1-R); notes/A-M6.md:169-171.
+
+## A-FC-D2 (2026-10-23): m8 granularity is n/a below 10 distinct tick offsets
+
+Question: with 2–9 distinct tick offsets, m8 printed CONFIRMED or NOT CONFIRMED from too little data (A-M8fix-R m1 measured 10–40% false CONFIRMED at n 3–5). Should m8 report n/a there?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "m8 n/a below 10 distinct offsets + test".
+
+Reason: "because plan M8/spec set no minimum, so this adds an honest 'not enough data' verdict without contradicting spec text (not a spec deviation; m8 sends 100 taps, <10 offsets = mostly-dead listener)".
+
+Affects: what the m8 report says (`src/input/harness/probe.py`, `16a8d78`).
+
+Cost if wrong: one revert.
+
+Undo: revert `16a8d78`.
+
+Pointer: ledger.md:755.
