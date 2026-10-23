@@ -478,7 +478,9 @@ static void runPlay(uint16_t handle, const proto::Command& cmd) {
                   cmd.seq, sent);
     return;
   }
-  if (down != 0) sendKeyReport(handle, 0);   // aborted by RELEASE_ALL: all-up if a key is down
+  // Aborted by RELEASE_ALL: all-up if a key is down. One attempt on purpose, not sendAllUp: the queued RELEASE_ALL's
+  // runReleaseAll follows at once and retries its own all-up (A-FC1-R m1).
+  if (down != 0) sendKeyReport(handle, 0);
   sendDone(handle, cmd.seq, proto::ABORTED, 0xFF, 0, t0us, sent, late);
   Serial.printf("ACCEPTED seq=%u t0_us=%lu\nDONE seq=%u status=3 n=%u\n", cmd.seq, (unsigned long)t0us, cmd.seq,
                 sent);
