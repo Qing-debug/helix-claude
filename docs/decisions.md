@@ -1016,3 +1016,19 @@ Cost if wrong: one revert.
 Undo: revert `0a78e4e`.
 
 Pointer: ledger.md:764.
+
+## A-FC1-R-Q4 (2026-10-23): after p1a-cleanup merges, the live check is A-FC1-R Q4, with no soak
+
+Question: A-FC piece 1 changed the firmware (`08646be`) after V3 ran. What live check does the merged HEAD need before S1?
+
+Ruling [process] (orch 25; orchestrator ruling under H10, not Hong's): "live check after p1a-cleanup merges = A-FC1-R Q4 (flash merged HEAD flag-off, verify-flash, tee output into data/, m6 alone expecting DONE OK 50/50 + release_ordering probe), no soak".
+
+Reason: "because the change only touches the all-up after a refusal, which no live run has produced, so the check verifies the image".
+
+Affects: the live step after the p1a-cleanup merge, before S1.
+
+Cost if wrong: "a regression in a path V3 exercised, found later".
+
+Undo: run a V3 soak at the merged HEAD.
+
+Pointer: ledger.md:765 (A-FC1-R), :766 (ruling).
