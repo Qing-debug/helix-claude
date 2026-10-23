@@ -16,12 +16,14 @@ The working venv is Python 3.14.0 (`networkx==3.6.1` declares `!=3.14.1`). From 
 
 ```
 py -3.14 -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The suite was 699 passed, 10 skipped when this was written. The skips are the golden-vector rejects only the board can run (`tests/input/test_protocol.py`).
+(`.venv\Scripts\activate` in cmd, `source .venv/Scripts/activate` in Git Bash.)
+
+Every test should pass except the skipped golden-vector rejects in `tests/input/test_protocol.py`, which only the board can run.
 
 Run the app from the repo root as a module, since all imports are rooted at `src.`:
 

@@ -554,6 +554,8 @@ def m6_report(run_dir: Path) -> ProbeReport:
                  "command's window)")
     lines.append("reports seen on NOTIFY_FAILED commands: "
                  + summary([len(m.observed) for m in dm.commands if m.row["error"] == nf], unit=""))
+    lines.append("reports seen on other failed commands: "
+                 + summary([len(m.observed) for m in dm.commands if m.row["error"] not in (None, nf)], unit=""))
     drops = [m for m in ok if m.alignment.dropped]
     lines.append(f"silent drops (DONE OK, a report missing): {len(drops)}"
                  + (f" (seq {_seq_list([m.seq for m in drops])})" if drops else ""))
@@ -580,12 +582,14 @@ M8_GRANULARITY_MS = (10.0, 16.0)
 M8_TICK_TOLERANCE_MS = 1.0  # tick_ms is a whole ms count (a 15.625 ms grid reads as 15/16 ms steps): the grid fit's
 #                             tolerance, and the slack above the band's top
 M8_FIT_RANGE_MS = (1.0, 40.0)  # periods tried, 1 us apart, largest first
+M8_MIN_OFFSETS = 10  # fewer distinct tick offsets fit too many periods: n/a, not a verdict (A-M8fix-R m1, A-FC-D2)
 
 
 def _tick_grid_ms(diffs: Sequence[int]) -> float:
     """The largest period g in M8_FIT_RANGE_MS such that every tick difference is within M8_TICK_TOLERANCE_MS of a
-    multiple of g. A submultiple of the true period fits too, which taking the largest g rules out. Integer-ms ticks
-    always fit the 1 ms floor of the range."""
+    multiple of g. A submultiple of the true period fits too, which taking the largest g rules out. With the 1 ms
+    tolerance any g <= 3 ms fits integer-ms differences, so a 1 ms tick reads ~3 ms, and the final return (the range's
+    floor) is never reached for integer input."""
     lo_us, hi_us = (round(v * 1000) for v in M8_FIT_RANGE_MS)
     for us in range(hi_us, lo_us, -1):
         g = us / 1000
@@ -616,10 +620,11 @@ def m8_report(run_dir: Path) -> ProbeReport:
              "nonzero tick steps between events (smallest 8, ms x count): "
              + ", ".join(f"{d} x{n}" for d, n in nonzero[:8]) + f"; zero steps {steps.get(0, 0)}"]
     distinct = set(diffs) - {0}
-    if len(distinct) < 2:  # one offset fits every g that divides it: nothing to fit
-        lines.append("M8 tick_ms granularity: n/a (tick_ms showed fewer than 2 distinct offsets from the first event)")
-        return ProbeReport(lines, ["tick_ms granularity: n/a, tick_ms showed fewer than 2 distinct offsets from the "
-                                   "first event"])
+    if len(distinct) < M8_MIN_OFFSETS:  # a few offsets fit many periods (2x, false CONFIRMED): too few to fit
+        lines.append(f"M8 tick_ms granularity: n/a (tick_ms showed fewer than {M8_MIN_OFFSETS} distinct offsets from "
+                     "the first event)")
+        return ProbeReport(lines, [f"tick_ms granularity: n/a, tick_ms showed fewer than {M8_MIN_OFFSETS} distinct "
+                                   "offsets from the first event"])
     est = _tick_grid_ms(sorted(distinct))
     lo, hi = M8_GRANULARITY_MS
     ok = lo <= est <= hi + M8_TICK_TOLERANCE_MS
@@ -900,6 +905,12 @@ FLASH_NOJITTER = ('"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/fi
 FLASH_HEAD = '"$CLI" compile -b "$FQBN" -u -p "$PORT" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE'
 
 
+def _tee(cmd: str, name: str) -> str:
+    """A flash command whose console output, and exit code, also go to data/probe/$RUN.<name>.txt (A-V3-V)."""
+    out = f"$REPO/data/probe/$RUN.{name}.txt"
+    return (f'mkdir -p $REPO/data/probe; {cmd} 2>&1 | tee {out}; echo "exit ${{PIPESTATUS[0]}}" | tee -a {out}')
+
+
 def _probe_call(names: Sequence[str]) -> str:
     return f'"$PY" -m src.input.harness.probe --probes {",".join(names)} --run "$RUN" --seed "$SEED"'
 
@@ -919,8 +930,14 @@ def run_sheet() -> list[str]:
         "1. Probes on HEAD's firmware (probe.py runs the MapleStory check and the board-port lookup itself; exit 3 = "
         "BLOCKED, stop):",
         f"   {_probe_call(first)}",
-        "   Per probe a sink window opens; if the console prints '>>> CLICK the window ...', click it once and touch "
-        "no key until the probe's report prints. Expected durations (inferred, not measured; each plus ~10-30 s "
+        f"   Per probe a sink window opens: a large bright-yellow window titled '{listener.SINK_TITLE}', topmost and "
+        f"centred, reading '{listener.SINK_LABEL.replace(chr(10), ' / ')}'. It may cover part of this console, so click "
+        "it once as soon as it appears (do not wait for the '>>> CLICK the window ...' prompt) and touch no key until "
+        "the probe's report prints. If the operator cannot see the screen, the agent raises it at once instead: "
+        "PowerShell Get-Process python, take the MainWindowHandle of the process whose MainWindowTitle is the sink's, "
+        "then Win32 ShowWindow(SW_MINIMIZE), ShowWindow(SW_RESTORE), SetForegroundWindow (A-V3, A-M6live); "
+        "FindWindow by title from a child shell missed it for 90 s (A-V3). Expected durations (inferred, not "
+        "measured; each plus ~10-30 s "
         "connect and start wait): " + ", ".join(f"{n} {PROBES[n].duration or 'n/a'}" for n in first) + ".",
         "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
         "stop (m6: a silent drop; release_ordering: the writes can reorder; the probes after it are not run). "
@@ -929,13 +946,15 @@ def run_sheet() -> list[str]:
         "board is still on HEAD's firmware):",
         f"   a. {MAPLE_CHECK}",
         f"   b. {PORT_LOOKUP}",
-        f"   c. {FLASH_NOJITTER}   # probe-only image; expected exit 0 (~1-2 min)",
+        f"   c. {_tee(FLASH_NOJITTER, 'flash-nojitter')}   # probe-only image; expected exit 0 (~1-2 min)",
         f"   d. {_probe_call(RUN_ALONE)}   # {PROBES['m2_nojitter'].duration}; click the sink as in step 1",
         f"   e. {MAPLE_CHECK}",
         f"   f. {PORT_LOOKUP}",
-        f"   g. {FLASH_HEAD}   # reflash HEAD (V3 step 3's command) before any other probe; expected exit 0",
+        f"   g. {_tee(FLASH_HEAD, 'flash-head')}   # reflash HEAD (V3 step 3's command) before any other probe; "
+        "expected exit 0",
         "   Whatever d exits with, do e-g before anything else: the board must not keep the probe-only image. "
-        "Nothing is committed (firmware/build is gitignored).",
+        "Nothing is committed (firmware/build is gitignored). Each flash's console output is kept in "
+        "data/probe/$RUN.<name>.txt (gitignored), the record of what was flashed (A-V3-V).",
     ]
     return lines
 

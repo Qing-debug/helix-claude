@@ -824,3 +824,211 @@ Cost if wrong: one small revert.
 Undo: remove the truncate in `RunWriter.open` (`soak.py:216`) and its test.
 
 Pointer: ledger.md:576.
+
+## A-V2stamp-C1 (2026-10-22): the `reset_board` stamp stays at esptool's reset line; analyze adds a reset worst-case gate measured from the last PONG before the first report
+
+Question: A-V2stamp found the spec silent on the fault moment (spec:57) and plan C5 stamping `reset_board` at esptool's reset line. On v2-faults-3, PONGs stopped 476–582 ms after esptool started, `LINK_LOST` came 967–980 ms later, and the stamp ~1.0 s after that, so the time from the fault to the stamp was not observed (true fault-to-report ~0.70–0.98 s). Move the stamp, or keep it and check the unobserved time another way?
+
+Ruling [spec-text + local] (orchestrator ruling under H10, not Hong's): "reset stamp stays at esptool's reset line (plan C5 :386-387 word for word); add the C1 worst-case check to analyze.py as an extra stricter gate (report it alongside, PASS needs both ≤1 s)". Its definition, a second Ruling [local]: "keep A-LF's worst-case definition (first report − last PONG before that report, report searched after launch)".
+
+Reason: the check "closes the unobserved-time gap without a spec deviation and without a live re-run"; the definition, "because the last PONG is the last evidence the board was alive, so it is the conservative bound" (the brief's "last PONG before esptool start" gave 1490–1740 ms, because the board still answers after esptool starts). A-LFK-R kept the definition (Q2 KEEP), with the caveat that the figure reads low by ~RTT/2 (A-LFK-R m1). The V2 step 4 re-run (A-V2link-D1) measured a worst case of 706–730 ms.
+
+Affects: `src/input/harness/analyze.py` reset worst-case gate (`0c1089a`; an uncomputable worst case is a FAIL). The C5 stamp and the `faults.jsonl` format are unchanged.
+
+Cost if wrong: one analyze.py check to drop; for the definition, "one `< first` → `< launch` edit + soak re-run".
+
+Undo: revert `0c1089a`.
+
+Pointer: ledger.md:636 (ruling), :646 (definition), :650 (A-LFK-R), :710 (v2-faults-4).
+
+## A-V2stamp-Q4 (2026-10-22): closing the sink window ends it cleanly, and the window is large, centred, topmost, bright yellow and flashes the taskbar
+
+Question: Hong missed the sink window twice, and closing it raised a TclError in the listener (v2-faults-1). Should the sink window change (A-V2stamp Q4: (a) a close handler, (b) a window that is easy to find)?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "sink-window fixes Q4(a)+(b) go in now (no-op close handler; centred, larger, topmost, bright, taskbar flash)". As built by A-LF: the close button sets the same stop flag as `stop()` (`FOCUS_LOST` unchanged), and the window is ¼ of the screen width (at least 600×300), centred, topmost, yellow with a plain label, and calls `FlashWindowEx`.
+
+Reason: "because Hong missed the window twice and V1/V3 live runs need it; implementation detail, focus check unaffected per A-V2stamp's test" (topmost leaves `GetForegroundWindow` unchanged; `FlashWindowEx` does not change the active window). A-LFK-R approved the commits.
+
+Affects: what the user sees during a soak or probe run: the sink window in `src/input/harness/listener.py` (`c7bc1e9` close handler, `10ffa2a` look). The run sheets and plan V2/V3 steps describe the window (`7e7012c`, `533cbbd`).
+
+Cost if wrong: revert one listener commit.
+
+Undo: revert `10ffa2a` (look) and/or `c7bc1e9` (close handler).
+
+Pointer: ledger.md:635 (A-V2stamp), :637 (ruling), :645 (A-LF), :650 (A-LFK-R).
+
+## A-V2link-D1 (2026-10-22): after F1 lands, the V2 step 4 fault soak is re-run live
+
+Question: A-V2link traced the ~0.97 s link-loss detection to a cancelled PING write that WinRT still awaits (fix F1, 706–731 ms offline). V3 cannot re-measure faults (plan:1779, :1793, :1795), and the live re-measure needs Hong, the board and an elevated launch (human-only). Re-run V2 step 4 after F1?
+
+Ruling: A, "after F1 lands, re-run the V2 step 4 fault soak live (right after V1 live, same sitting)" (Hong's decision).
+
+Reason: only a live run shows the fix on the real link. The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
+
+Affects: the order of the live runs (V1, then the V2 step 4 re-run); data in `data/soak/v2-faults-4`. No code or plan change comes from the decision itself.
+
+Cost if wrong: one ~15-min attended soak.
+
+Undo: none needed.
+
+Pointer: ledger.md:642 (A-V2link), :647 (decision), :710 (A-V2refault), :712 (A-V2refault-V).
+
+## A-M6-D1 (2026-10-22): the live m6 diagnostic runs in the next live session, after A-V2refault and before V3
+
+Question: A-M6 found that in 47/50 m6 bursts the PC never got one board reply (all 16 key changes delivered), and that the firmware discarded reply-send results (`Helix_BLE.ino:129-131` at the time). When should the live diagnostic run? It needs Hong at the PC (human-only).
+
+Ruling: A, "live m6 diagnostic (log reply-send results on board, serial capture, link DEBUG) in the next live session after A-V2refault, before V3" (Hong's decision).
+
+Reason: V2/V3 traffic cannot trigger the burst (A-M6), so V2 could go first; the diagnostic had to come before V3. A-M6diag built it (`NOTIFY_DIAG` firmware flag + `probe --link-debug`, merged `a93886b`); A-M6live ran it and found the cause (the board's BLE stack refuses the DONE notify after the 16-report burst, `done_rc=6`).
+
+Affects: the live-run order; `NOTIFY_DIAG` (off by default) in `firmware/Helix_BLE`; `probe.py --link-debug`.
+
+Cost if wrong: one attended live session.
+
+Undo: none needed; the flag stays off in the shipped build.
+
+Pointer: ledger.md:671 (A-M6), :675 (decision), :713 (A-M6diag-R), :717 (A-M6live).
+
+## A-M8-fix (2026-10-22): the m8 tick-granularity estimator becomes a grid fit, with no live re-run
+
+Question: m8 failed live (NOT CONFIRMED). A-M8 found an estimator bug, not a regression: every recording has `tick_ms` on a 15.625 ms grid, but the estimator (p99 − p1 of tick − qpc) assumes the lag is under one tick, while BLE keys lag over ~2 ticks. Fix the estimator, and re-run m8 live?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "m8 → fix A (grid-fit estimator + red test + offline re-run on v1-20261022c), no live re-run", with A-V1live-D1 B (probe.py utf-8 stdout) folded into the same unit.
+
+Reason: "because it is a code bug against the plan's own gate (plan:1708), no spec deviation". A-M8fix's offline re-run gave CONFIRMED ~15.625 ms on v1-20261022c (old 27.355 ms) and on all 15 recorded runs; A-M8fix-R upheld the ruling (Q1–Q4 KEEP).
+
+Affects: `src/input/harness/probe.py` m8 (`bbdc10c`; utf-8 stdout `6f56244`; merged `0615c19`); later `1499505` and `16a8d78` (A-FC-D2).
+
+Cost if wrong: revert one probe.py commit.
+
+Undo: revert `bbdc10c`.
+
+Pointer: ledger.md:668 (A-M8), :669 (ruling), :677 (A-M8fix), :703 (A-M8fix-R).
+
+## A-M6live-D1 (2026-10-23): the m6diag-2 data stands although the agent raised the sink window by a Win32 call
+
+Question: in A-M6live's run m6diag-2 the agent, not Hong, brought the sink window to the front by a Win32 call (no key typed, `focus_pauses` empty). Does the run count?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A, "m6diag-2 stands although the agent raised the sink window by Win32 call, no keys typed, focus_pauses []". A-M6fix-R upheld it (Q4 UPHOLD).
+
+Reason: "because done_rc is measured on the board and doesn't depend on who raised the window; not a spec deviation".
+
+Affects: the m6 diagnosis (`data/probe/m6diag-2`) behind A-M6-fix. The live run sheets now let the agent raise the sink itself when the operator cannot (`7e7012c`, `533cbbd`).
+
+Cost if wrong: one ~10-min attended re-run.
+
+Undo: re-run the m6 diagnostic with Hong clicking the sink.
+
+Pointer: ledger.md:717 (A-M6live), :718 (ruling), :729 (A-M6fix-R).
+
+## A-M6-fix (2026-10-23): the firmware retries a refused reply notify for a bounded time
+
+Question: the board's BLE stack refuses the DONE notify after m6's 16-report burst (`done_rc=6`, mbuf or ENOMEM), so the PC sees `ACK_TIMEOUT`. How is it fixed (A-M6 Q4)?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): "fix A-M6 by firmware bounded retry of refused reply notifies (A-M6 Q4 option 3), no wire-format change". As built (A-M6fix): a refused ACCEPTED / DONE / loop-task REJECTED notify is retried with `vTaskDelay(1)` for up to 30 ms, stopping on success or when the peer leaves; a final failure is dropped and counted as before; PONG and the `onWrite` QUEUE_FULL REJECTED stay one attempt (A-F5-D3). A-M6fix-R upheld it (Q1–Q3 KEEP).
+
+Reason: "because the data points to it directly and it stays inside the spec (delivery + visible failure unchanged)". Live (A-M6fixlive, unattended): m6 DONE OK 50/50, 0 `ACK_TIMEOUT`, 0 `NOTIFY_FAILED`.
+
+Affects: `firmware/Helix_BLE/Helix_BLE.ino`, `firmware/Helix_BLE/notify_retry.h` and `firmware/test/test_notify_retry.cpp` (`d4a3fec`, merged `16ee18c`). Extended by an A-M6fix-R [review] (the all-up HID report after a refused key report, and the one in `runReleaseAll`, were sent once), batched into Final cleanup (A) and implemented by A-FC piece 1 (`08646be`, `notify_retry::send_all_up` on the loop task), approved by A-FC1-R; the RELEASE_ALL-abort all-up stays one attempt (`812411e` comment).
+
+Cost if wrong: revert one firmware commit (and reflash).
+
+Undo: revert `08646be`, then `d4a3fec`, and reflash.
+
+Pointer: ledger.md:719 (ruling), :724 (A-M6fix), :729 (A-M6fix-R), :731 (A-M6fixlive), :743 (A-FC piece 1), :765 (A-FC1-R).
+
+## H13 (2026-10-23): live tests run unattended on the night of 2026-10-23
+
+Question: can the A-M6fix live re-run and the V3 2 h soak run while Hong is away? The conditions set out to him: PC on and unlocked with no sleep or lock, MapleStory closed, board plugged in; the risk that a pop-up stealing focus takes a few stray bot keys before the soak pauses; the sink can be raised by script, with no human click.
+
+Ruling: "run the live test unattended tonight" (Hong's decision, 2026-10-23 night). It applies to the A-M6fix live re-run (flash the fix, m6 alone, flash back) and the V3 2 h soak. Live briefs: the agent raises the sink by Win32 call, checks the session is unlocked before each run (MapleStory too, until Hong said it is closed), never types, and on any doubt stops and leaves the board on HEAD / verified firmware.
+
+Reason: Hong was away (decide-as-Hong mode from that night). Both runs passed: A-M6fixlive (m6 DONE OK 50/50) and A-V3 (all 6 V3 rows PASS, verified by A-V3-V).
+
+Affects: how A-M6fixlive and A-V3 were run; the run sheets' sink-raise text (`7e7012c`, `533cbbd`).
+
+Cost if wrong: a live run repeated with Hong present.
+
+Undo: none needed.
+
+Pointer: ledger.md:721 (decision), :722 (away mode), :723 (MapleStory), :731, :734, :736.
+
+## A-FC-D1 (2026-10-23): failed `commands.jsonl` rows keep null stage times
+
+Question: a Failure row in `commands.jsonl` (e.g. `ACK_TIMEOUT`) has null `sent` / `written` / `accepted` / `done` times, which hides which stage timed out (A-M6 [review]). Keep the C5 format, or record the times on Failure rows?
+
+Ruling [local] (orchestrator ruling under H10, not Hong's): A, "no change: commands.jsonl Failure rows keep null times, record it". A-FC1-R kept it (Q5 KEEP, plan C5 :359).
+
+Reason: "because A keeps the C5 format as specced (no deviation) and NOTIFY_DIAG + retry cover the diagnosis".
+
+Affects: nothing changes; the C5 `commands.jsonl` format stays as specced.
+
+Cost if wrong: one small format unit later (Hong-gated).
+
+Undo: none needed.
+
+Pointer: ledger.md:744 (ruling), :765 (A-FC1-R); notes/A-M6.md:169-171.
+
+## A-FC-D2 (2026-10-23): m8 granularity is n/a below 10 distinct tick offsets
+
+Question: with 2–9 distinct tick offsets, m8 printed CONFIRMED or NOT CONFIRMED from too little data (A-M8fix-R m1 measured 10–40% false CONFIRMED at n 3–5). Should m8 report n/a there?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "m8 n/a below 10 distinct offsets + test".
+
+Reason: "because plan M8/spec set no minimum, so this adds an honest 'not enough data' verdict without contradicting spec text (not a spec deviation; m8 sends 100 taps, <10 offsets = mostly-dead listener)".
+
+Affects: what the m8 report says (`src/input/harness/probe.py`, `16a8d78`).
+
+Cost if wrong: one revert.
+
+Undo: revert `16a8d78`.
+
+Pointer: ledger.md:755.
+
+## A-FC-D3 (2026-10-23): analyze keeps Faults n/a on an empty `faults.jsonl`; the V2 run sheet checks the fault count instead
+
+Question: analyze reports Faults n/a, not FAIL, when `faults.jsonl` is empty or does not match the `--faults` spec (A-V2refault-V [review]). Should it FAIL?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "no analyze change; V2 step 5 run-sheet check line 'Faults 10/10 pass, 5 reset_board + 5 bluetooth_off_on' → run-sheet piece".
+
+Reason: "because an empty faults.jsonl is how a no-fault run is defined (FAIL would break V3), plan Faults sets no expected-count input, and the reviewer recommended the run-sheet line".
+
+Affects: plan A V2 step 5 check line (`3a7c31c`); `analyze.py` unchanged.
+
+Cost if wrong: an empty fault soak still reads n/a (caught by the run-sheet check).
+
+Undo: revert `3a7c31c`.
+
+Pointer: ledger.md:763.
+
+## A-FC-D4 (2026-10-23): the m6 report says how many reports other failed commands delivered
+
+Question: the m6 report counts failed commands other than `NOTIFY_FAILED` without saying their keys were delivered (A-M6 [fyi]). Add a line?
+
+Ruling [local] (orch 25; orchestrator ruling under H10, not Hong's): A, "m6 report adds 'reports seen on other failed commands', informational, no gate change".
+
+Reason: "because the fact is derivable from run files and removes a hand check; plan M6 text doesn't forbid extra report lines".
+
+Affects: what the m6 report shows (`m6_report` in `src/input/harness/probe.py`, `0a78e4e`); no verdict changes.
+
+Cost if wrong: one revert.
+
+Undo: revert `0a78e4e`.
+
+Pointer: ledger.md:764.
+
+## A-FC1-R-Q4 (2026-10-23): after p1a-cleanup merges, the live check is A-FC1-R Q4, with no soak
+
+Question: A-FC piece 1 changed the firmware (`08646be`) after V3 ran. What live check does the merged HEAD need before S1?
+
+Ruling [process] (orch 25; orchestrator ruling under H10, not Hong's): "live check after p1a-cleanup merges = A-FC1-R Q4 (flash merged HEAD flag-off, verify-flash, tee output into data/, m6 alone expecting DONE OK 50/50 + release_ordering probe), no soak".
+
+Reason: "because the change only touches the all-up after a refusal, which no live run has produced, so the check verifies the image".
+
+Affects: the live step after the p1a-cleanup merge, before S1.
+
+Cost if wrong: "a regression in a path V3 exercised, found later".
+
+Undo: run a V3 soak at the merged HEAD.
+
+Pointer: ledger.md:765 (A-FC1-R), :766 (ruling).

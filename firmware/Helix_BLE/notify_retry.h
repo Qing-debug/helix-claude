@@ -13,11 +13,12 @@ constexpr int64_t WINDOW_US = 30000;
 
 struct Result {
   int rc;          // the last attempt's rc: 0 = queued by NimBLE
-  uint32_t tries;  // attempts made, >= 1 (about 31 with WINDOW_US and vTaskDelay(1) at 1 kHz)
+  uint32_t tries;  // attempts made, >= 1 (31 or 32 with WINDOW_US and vTaskDelay(1) at 1 kHz; see pause() below)
 };
 
 // send() -> int rc (0 = success). alive() -> bool, false once the peer has left. now() -> int64_t microseconds.
-// pause() sleeps (the firmware: vTaskDelay(1), one 1 ms FreeRTOS tick). Order after a failed attempt: stop if the
+// pause() sleeps (the firmware: vTaskDelay(1), which blocks until the next 1 kHz FreeRTOS tick: 0..1 ms, so the first
+// pause can be short and the later ones about 1 ms). Order after a failed attempt: stop if the
 // window has passed (so window_us = 0 is exactly one attempt and never calls alive() or pause()), stop if the peer is
 // gone, else pause and try again. The last pause starts inside the window, so the time spent is at most
 // window_us + one pause + one attempt.
@@ -33,6 +34,15 @@ Result send_with_retry(Send send, Alive alive, Now now, Pause pause, int64_t win
     if (!alive()) return r;
     pause();
   }
+}
+
+// The loop task's all-up HID report (runPlay after a refused key report, runReleaseAll; A-M6fix-R [review], A-FC): a
+// refused all-up leaves a key down on the PC until the next report, so it is retried like a loop-task reply, with
+// WINDOW_US. Returns the last attempt's rc (0 = queued). Adds at most window + one pause + one attempt (~31 ms) before
+// the DONE that follows it.
+template <class Send, class Alive, class Now, class Pause>
+int send_all_up(Send send, Alive alive, Now now, Pause pause) {
+  return send_with_retry(send, alive, now, pause, WINDOW_US).rc;
 }
 
 }  // namespace notify_retry

@@ -382,7 +382,9 @@ class Listener:
         if len(self._threads) < 3:  # never started
             return
         hook_th, sink_th = self._threads[1], self._threads[2]
-        if self._hook_tid is not None and not _user32.PostThreadMessageW(self._hook_tid, WM_QUIT, 0, 0):
+        # A failed SetWindowsHookExW returns its thread at once: nothing to quit, and posting to the gone thread fails.
+        if (self._hook_tid is not None and self._hook_error is None
+                and not _user32.PostThreadMessageW(self._hook_tid, WM_QUIT, 0, 0)):
             print("could not post WM_QUIT to the hook thread", file=sys.stderr, flush=True)
         hook_th.join(_STARTUP_TIMEOUT_S)
         if hook_th.is_alive():
@@ -397,7 +399,7 @@ class Listener:
 def start(out_dir: str | Path, block: bool = True) -> Listener:
     """Start the hook, writer and sink threads; return once the hook is installed and the sink exists.
     Raises OSError if the writer, the hook or the sink does not come up, each within 5 s."""
-    sys.setswitchinterval(0.001)  # cut GIL delay to the hook thread (inferred benefit; M8 measures it)
+    sys.setswitchinterval(0.001)  # cut GIL delay to the hook thread (inferred benefit; small per V1 m8 data, A-M8)
     lst = Listener(out_dir, block=block)
     lst._start()
     return lst

@@ -209,7 +209,9 @@ static int notifyOnce(uint16_t handle, const uint8_t* buf, size_t len) {
 }
 #else
 // One attempt. notify() returns only a bool: -1 means refused, rc unknown. Each call builds a fresh mbuf, and NimBLE
-// frees it on every path (ble_gatts_notify_custom), so a refused call can simply be made again.
+// frees it on every path (ble_gatts_notify_custom), so a refused call can simply be made again. With the rc unknown,
+// notifyPeer retries every refusal, also a non-transient one other than peer-gone (e.g. BLE_HS_EINVAL), which costs
+// the loop task the whole window (~31 ms) for that reply. Harmless in practice (A-M6fix-R m2).
 static int notifyOnce(uint16_t handle, const uint8_t* buf, size_t len) {
   return pResponseChar->notify(buf, len, handle) ? 0 : -1;
 }
@@ -253,6 +255,14 @@ static int sendKeyReport(uint16_t handle, uint8_t mask) {
   os_mbuf* om = ble_hs_mbuf_from_flat(report, sizeof(report));
   if (om == nullptr) return BLE_HS_ENOMEM;
   return ble_gattc_notify_custom(handle, inputReport->getHandle(), om);
+}
+
+// All-up HID report, loop task only (runPlay after a refused key report, runReleaseAll): retried for up to
+// notify_retry::WINDOW_US like a loop-task reply (notify_retry::send_all_up), so NOTIFY_FAILED's DONE can come up to
+// ~31 ms later than before. Returns the last attempt's rc.
+static int sendAllUp(uint16_t handle) {
+  return notify_retry::send_all_up([&] { return sendKeyReport(handle, 0); }, [&] { return linkConnected(handle); },
+                                   [] { return (int64_t)esp_timer_get_time(); }, [] { vTaskDelay(1); });
 }
 
 static void sendPong(uint16_t handle, uint16_t seq) {
@@ -446,7 +456,7 @@ static void runPlay(uint16_t handle, const proto::Command& cmd) {
     late[i] = lateUs(esp_timer_get_time(), due);
     const int rc = sendKeyReport(handle, cmd.steps[i].mask);
     if (rc != 0) {
-      sendKeyReport(handle, 0);
+      sendAllUp(handle);
       sendDone(handle, cmd.seq, proto::NOTIFY_FAILED, i, (int16_t)rc, t0us, i + 1, late);
       Serial.printf("ACCEPTED seq=%u t0_us=%lu\nDONE seq=%u status=1 fail_step=%u rc=%d n=%u\n", cmd.seq,
                     (unsigned long)t0us, cmd.seq, i, rc, i + 1);
@@ -468,7 +478,9 @@ static void runPlay(uint16_t handle, const proto::Command& cmd) {
                   cmd.seq, sent);
     return;
   }
-  if (down != 0) sendKeyReport(handle, 0);   // aborted by RELEASE_ALL: all-up if a key is down
+  // Aborted by RELEASE_ALL: all-up if a key is down. One attempt on purpose, not sendAllUp: the queued RELEASE_ALL's
+  // runReleaseAll follows at once and retries its own all-up (A-FC1-R m1).
+  if (down != 0) sendKeyReport(handle, 0);
   sendDone(handle, cmd.seq, proto::ABORTED, 0xFF, 0, t0us, sent, late);
   Serial.printf("ACCEPTED seq=%u t0_us=%lu\nDONE seq=%u status=3 n=%u\n", cmd.seq, (unsigned long)t0us, cmd.seq,
                 sent);
@@ -477,7 +489,7 @@ static void runPlay(uint16_t handle, const proto::Command& cmd) {
 static void runReleaseAll(uint16_t handle, uint16_t seq) {
   const uint32_t t0us = (uint32_t)esp_timer_get_time();   // read when the all-up send starts
   const uint16_t late[1] = {0};
-  const int rc = sendKeyReport(handle, 0);
+  const int rc = sendAllUp(handle);
   if (rc != 0) sendDone(handle, seq, proto::NOTIFY_FAILED, 0, (int16_t)rc, t0us, 1, late);
   else sendDone(handle, seq, proto::OK, 0xFF, 0, t0us, 1, late);
   Serial.printf("DONE seq=%u release_all status=%u rc=%d\n", seq, rc != 0 ? 1u : 0u, rc);

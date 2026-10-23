@@ -15,12 +15,13 @@ import random
 import re
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 from returns.result import Failure, Success
 
 from src.input import input_layer
-from src.input.harness import analyze, probe, soak
+from src.input.harness import analyze, listener, probe, soak
 from src.input.harness.listener import VK_BY_KEY
 from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done, Key, Pong, Step, transitions
@@ -56,7 +57,8 @@ def _pong(itvl=12, board_us=123_456):
 class ProbeLink:
     """A BleLink stand-in. play() takes the schedule's duration + 20 ms of fake time and logs the listener
     transitions of its steps (1 ms after the send, at the scheduled offsets) into `keys`, unless the transition's
-    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`.
+    running index is in `drop_keys`. `fail_plays` (1-based) fail with `fail_error`, after logging their transitions
+    (1 ms after the send) if `fail_delivers`.
 
     Board clock (M2 phase): with `board_offset_ns` set, the board's u32 microsecond clock reads
     (qpc_ns - board_offset_ns) / 1000, every play logs a PONG stamped at its send, DONE carries
@@ -71,13 +73,14 @@ class ProbeLink:
 
     def __init__(self, clock, keys, fail_plays=(), fail_error=InputError.LINK_LOST, drop_keys=(),
                  board_offset_ns=None, t0_shift_us=lambda play: 0, grid_ns=None, itvl=12, tick=lambda qpc: 0,
-                 injected=False, repeat=None):
+                 injected=False, repeat=None, fail_delivers=False):
         self.clock = clock
         self.keys = keys
         self.events = []
         self.plays = 0
         self.fail_plays = set(fail_plays)
         self.fail_error = fail_error
+        self.fail_delivers = fail_delivers
         self.drop_keys = set(drop_keys)
         self.n_transitions = 0
         self.pongs = []
@@ -123,6 +126,9 @@ class ProbeLink:
         assert self.plays <= self.MAX_PLAYS, "runaway probe loop"
         self.events.append("play")
         if self.plays in self.fail_plays:
+            if self.fail_delivers:
+                sent = self.clock.clock()
+                self.keys.extend(self._key(sent + MS + t * 100_000, VK_BY_KEY[k], d) for t, k, d in transitions(steps))
             self.clock.now += 5 * MS
             return Failure(self.fail_error)
         sent = self.clock.clock()
@@ -673,6 +679,16 @@ def test_m2_phase_is_na_without_board_times(tmp_path, clock):
     assert code == probe.EXIT_OK and "phase: n/a" in _report(tmp_path, "m2")
 
 
+@pytest.mark.parametrize("pvalue, reviewed", [(0.0099, True), (0.01, False)])
+def test_m2_phase_ks_review_is_p_strictly_below_alpha_0_01(tmp_path, clock, monkeypatch, pvalue, reviewed):
+    # A-V1-Ra M9 / A-CP7: the plan's alpha 0.01, and p == alpha is not a review item
+    code, _ = _run(tmp_path, clock, probes=("m2",), rig=_board_rig(clock))
+    assert code == probe.EXIT_OK
+    monkeypatch.setattr(probe.stats, "kstest", lambda *a, **k: SimpleNamespace(statistic=0.5, pvalue=pvalue))
+    review = probe.m2_report(tmp_path / "run" / "m2", jitter=True).review
+    assert any("not U(0, CI)" in r for r in review) is reviewed
+
+
 # ---- piece 2: M4 (fixed chord offsets) ------------------------------------------------------------------
 
 def test_fixed_chord_model_calls_the_base_draw_first_then_cycles_the_offsets():
@@ -711,6 +727,16 @@ def test_m4_expected_collapse_weights_by_the_model_mass():
     only_small = {x: (1.0 if x <= 15 else 0.0) for x in probe.M4_OFFSETS_MS}
     assert probe.m4_expected_collapse(only_small) == pytest.approx(mass[10.0] + mass[15.0])
     assert probe.m4_expected_collapse({2.0: 1.0}) is None
+
+
+@pytest.mark.parametrize("share, reviewed", [(0.5, False), (0.5001, True)])
+def test_m4_review_is_a_collapse_share_strictly_above_half(tmp_path, clock, monkeypatch, share, reviewed):
+    # A-V1-Ra M19 / A-CP7: "most model offsets collapse" (plan V1 M4) is > 50%, and exactly 50% is not
+    code, _ = _run(tmp_path, clock, probes=("m4",))
+    assert code == probe.EXIT_OK
+    monkeypatch.setattr(probe, "m4_expected_collapse", lambda shares: share)
+    review = probe.m4_report(tmp_path / "run" / "m4").review
+    assert any("against spec:L15" in r for r in review) is reviewed
 
 
 # ---- piece 2: M7 -----------------------------------------------------------------------------------
@@ -756,7 +782,7 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     i_off, i_run, i_head = (out.index("probe-nojitter"), out.index("--probes m2_nojitter"),
                             out.index("--output-dir $REPO/firmware/build $REPO"))
     assert i_off < i_run < i_head
-    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process") == 2
+    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process | Where-Object") == 2
 
 
 def test_run_sheet_states_its_preconditions(capsys):
@@ -771,6 +797,27 @@ def test_run_sheet_states_its_preconditions(capsys):
     # step 2 only after step 1 exited 0; otherwise stop and report
     assert "Only after step 1 exited 0; on exit 1, 3 or 4 stop and report" in out
     assert out.index("before step 1") < out.index("1. Probes on HEAD's firmware") < out.index("2. M2 with START_JITTER")
+
+
+def test_run_sheet_describes_the_sink_and_how_to_raise_it(capsys):
+    # A-LFK-R m5, A-M6live, A-V3: the sink may cover the console; click it at once, or the agent raises it by
+    # Get-Process MainWindowHandle (not FindWindow by title)
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert f"titled '{listener.SINK_TITLE}', topmost and centred" in out
+    assert "reading 'Helix test window / click here once, then don't type'" in out
+    assert "may cover part of this console, so click it once as soon as it appears" in out
+    assert "Get-Process python, take the MainWindowHandle" in out and "SetForegroundWindow" in out
+
+
+def test_run_sheet_tees_each_flash_into_data(capsys):
+    # A-V3-V: the flash output and its exit code are kept on disk next to the run
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    for name in ("flash-nojitter", "flash-head"):
+        f = f"$REPO/data/probe/$RUN.{name}.txt"
+        assert f'2>&1 | tee {f}; echo "exit ${{PIPESTATUS[0]}}" | tee -a {f}' in out
+    assert out.count("mkdir -p $REPO/data/probe; ") == 2
 
 
 # ---- piece 3: raw plans through the InputLayer -------------------------------------------------------------
@@ -824,6 +871,7 @@ def test_m6_sends_fifty_16_step_zero_delta_e_bursts(tmp_path, clock):
     assert "DONE OK 50, NOTIFY_FAILED 0, other failures 0" in rep
     assert "reports seen on DONE OK commands: 800 of 800 expected" in rep
     assert "silent drops (DONE OK, a report missing): 0" in rep and "[review]" not in rep
+    assert "reports seen on other failed commands: n/a n 0" in rep
 
 
 def test_m6_counts_notify_failed_and_the_input_layer_releases_after_it(tmp_path, clock):
@@ -834,7 +882,18 @@ def test_m6_counts_notify_failed_and_the_input_layer_releases_after_it(tmp_path,
     rep = _report(tmp_path, "m6")
     assert "DONE OK 49, NOTIFY_FAILED 1, other failures 0" in rep
     assert "reports seen on NOTIFY_FAILED commands: n 1 min 0.000" in rep
+    assert "reports seen on other failed commands: n/a n 0" in rep    # NOTIFY_FAILED is not an "other" failure
     assert "silent drops (DONE OK, a report missing): 0" in rep
+
+
+def test_m6_says_how_many_reports_other_failed_commands_delivered(tmp_path, clock):
+    # an ACK_TIMEOUT whose 16 key reports all reached the listener (A-M6 fyi, A-FC-D4)
+    rig = Rig(clock, link_kw={"fail_plays": {3}, "fail_error": InputError.ACK_TIMEOUT, "fail_delivers": True})
+    _run(tmp_path, clock, probes=("m6",), rig=rig)
+    rep = _report(tmp_path, "m6")
+    assert "NOTIFY_FAILED 0, other failures 1" in rep
+    assert "reports seen on NOTIFY_FAILED commands: n/a n 0" in rep
+    assert "reports seen on other failed commands: n 1 min 16.000" in rep
 
 
 def test_m6_silent_drop_stops_probe_py(tmp_path, clock, monkeypatch, capsys):
@@ -872,7 +931,7 @@ def test_m8_confirms_a_tick_granularity_of_10_to_16_ms(tmp_path, clock):
 
 
 def test_m8_reviews_a_granularity_above_the_upper_bound(tmp_path, clock):
-    # A-V1-Rb m1: ~20 ms ticks are past 16 ms + the 1 ms stamp tolerance
+    # A-V1-Rb m1: ~20 ms ticks are past 16 ms + the 1 ms tolerance for whole-ms ticks
     code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _ticks(20)}))
     assert code == probe.EXIT_OK
     rep = _report(tmp_path, "m8")
@@ -909,6 +968,24 @@ def test_m8_a_tick_that_never_advances_is_n_a_and_reviewed(tmp_path, clock):
     rep = _report(tmp_path, "m8")
     assert "M8 tick_ms granularity: n/a" in rep and "[review] m8: tick_ms granularity: n/a" in rep
     assert "CONFIRMED" not in rep
+
+
+def _n_offset_ticks(n, step_ms=15.625):
+    """Event k's tick_ms is min(k, n) whole steps of 15.625 ms: exactly n distinct nonzero offsets from the first."""
+    calls = []
+
+    def tick(qpc):
+        calls.append(qpc)
+        return int(min(len(calls) - 1, n) * step_ms)
+    return tick
+
+
+@pytest.mark.parametrize("n, verdict", [(9, "n/a (tick_ms showed fewer than 10 distinct offsets"), (10, "CONFIRMED")])
+def test_m8_is_n_a_below_10_distinct_tick_offsets(tmp_path, clock, n, verdict):
+    # A-M8fix-R m1 / A-FC-D2: with 3-9 offsets the fit gave false CONFIRMED and 2x reads; 10 is enough
+    code, _ = _run(tmp_path, clock, probes=("m8",), rig=Rig(clock, link_kw={"tick": _n_offset_ticks(n)}))
+    assert code == probe.EXIT_OK
+    assert f"M8 tick_ms granularity: {verdict}" in _report(tmp_path, "m8")
 
 
 # ---- piece 4: release-all probes (a second thread) ---------------------------------------------------------
