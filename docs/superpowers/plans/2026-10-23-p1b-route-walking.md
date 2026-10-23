@@ -1249,7 +1249,9 @@ class StopControl:
     def start(self) -> Result[None, str]       # calls self._install_hook() (the WH_KEYBOARD_LL hook thread, G33;
                                                # a seam tests replace; it returns a remove() callable, see close()),
                                                # installs a SIGINT handler, then starts the worker thread that waits
-                                               # for trigger() and calls on_stop once
+                                               # for trigger() and calls on_stop once. Never raises: an OSError from
+                                               # _install_hook -> Failure("hook: <text>"); a ValueError from
+                                               # signal.signal (off the main thread) -> Failure("sigint: <text>")
     def trigger(self, source: str = "hotkey") -> None   # hook: "hotkey", SIGINT: "sigint", --minutes timer: "timer";
                                                # idempotent; returns at once; called from three threads, so the
                                                # first call, under a threading.Lock, sets trigger_ns and
@@ -1257,7 +1259,8 @@ class StopControl:
     trigger_ns: int | None                     # time.perf_counter_ns() at the first trigger(), else None
     trigger_source: str | None
     def close(self) -> None                    # undoes start() (PB-amend2-D1, see below)
-    def _install_hook(self) -> Callable[[], None]   # the seam; returns remove(): stops the hook thread and unhooks
+    def _install_hook(self) -> Callable[[], None]   # the seam; returns remove(): stops the hook thread and unhooks;
+                                               # raises OSError if the hook cannot be installed (after its own teardown)
 def start_capture(shared) -> threading.Thread
 def wait_first_frame(shared, timeout_s: float) -> Result[None, str]
 # src/route/walk.py
@@ -1267,6 +1270,8 @@ def main(argv: list[str] | None = None) -> int
 # exit codes: 0 done · 1 run ended link_down · 2 usage / no --supervised · 3 no first frame or no character found
 #             · 4 connect failed · 5 map, route graph or character icon failed to load
 #             · 6 run() returned a Failure · 7 run() raised an exception (PB-B19)
+#             · 9 the stop control failed to start: F12 hook or SIGINT handler (PB-amend2c-D2)
+#             (8 is not a `main` code: it is the live check's own exit code, below)
 ```
 
 - [ ] **Seams** (module-level names in `walk.py` that `main` calls and tests monkeypatch): `_start_capture(shared)`
@@ -1274,12 +1279,17 @@ def main(argv: list[str] | None = None) -> int
   `_make_positions(shared) -> PositionSource` (default: `CharacterLocator.from_files(assets/chr/chr.png,
   assets/chr/chr_mask.png)`, exit 5 on `Failure`, else `MinimapPositionSource(shared, locator)`), `_make_link()` (default `BleLink()`; the object needs `connect`, `play`,
   `release_all`, `close`), `_make_clock() -> Clock` (default `RealClock()`), `_make_stop_control(on_stop)` (default
-  `StopControl`; the object needs `start`, `close`, `trigger(source)`, `trigger_ns`, `trigger_source`), `_countdown_s = 5.0`.
+  `StopControl`; the object needs `start` (returning `Result[None, str]`; the fakes in the tests below return
+  `Success(None)` unless a test says otherwise), `close`, `trigger(source)`, `trigger_ns`, `trigger_source`), `_countdown_s = 5.0`.
 - [ ] **Behaviour of `main`:** refuses (exit 2) without `--supervised`. Loads the map with `MapleAgent` and the
   `--class` character (choices `{"kanna": Kanna}`, default `kanna`), builds the `RouteGraph`; `_start_capture`;
   `_wait_first_frame(30 s)`; one `positions.read()` must succeed (exit 3 otherwise); `link.connect()` (exit 4 on
   `Failure`); `InputLayer(link, TimingModel(rng))`; `RouteWalker` with
-  `_make_clock()`, `use_stimulus=True`, `JsonlLegLog(out)` and `max_laps=--laps`; writes `session.json` (seed, params,
+  `_make_clock()`, `use_stimulus=True`, `JsonlLegLog(out)` and `max_laps=--laps`; builds the StopControl
+  (`_make_stop_control(walker.stop_now)`) and calls its `start()` right after the `RouteWalker` is built, before
+  `session.json` and the countdown (PB-amend2c-D2), so "F12 stops." is true when it is printed. On a `Failure`, `main`
+  prints `stop control failed: <reason>` (the `Failure` value) to stderr and returns 9; no `PLAY` has been sent, and
+  there is no `session.json`, `stop.json`, timer or recorder. Then writes `session.json` (seed, params,
   map path and SHA-256, git HEAD, start time). Prints "Focus the game window. Starting in 5 s. F12 stops." and waits
   `_countdown_s` s. `trigger()` only sets an `Event` (first call) that a StopControl worker thread waits on; the worker then
   calls `on_stop` (`walker.stop_now()`), so the hook procedure returns immediately and never blocks on Bluetooth
@@ -1298,21 +1308,46 @@ def main(argv: list[str] | None = None) -> int
   `threading.Event` that `main` owns). A `Failure` from `record` prints `record failed: <reason>` to stderr and does not
   change the exit code (the walk decides it); a `record` that raises dies through `threading.excepthook` and also
   leaves the exit code alone. The recorder is started before the timer, both just before `run()`; an
-  exit before the walker (2, 3, 4, 5) never starts either, so no `out/frames/` exists then.
-  **Cleanup (PB-amend2-D1, B19-record-D1).** `main` does all cleanup in one `finally` that covers every exit path (including an
-  exception from `run()`; `KeyboardInterrupt` is not caught, see below). The steps run in this order, each only if the
-  thing exists or happened, and each step runs even if an earlier one raised:
-  1. cancel the `--minutes` timer and join it (`cancel()` only sets an Event, the thread is still alive right after;
+  exit before the walker (2, 3, 4, 5, 9) never starts either, so no `out/frames/` exists then.
+  **Cleanup (PB-amend2-D1, B19-record-D1, PB-amend2c-D1).** `main` computes its exit code first (in the `try` and its
+  `except` branches) and does all cleanup in one `finally` that covers every exit path (including an
+  exception from `run()`; `KeyboardInterrupt` is not caught, see below). That `finally` contains no `return` (a
+  `return` inside `finally` is a `SyntaxWarning` on Python 3.14, PEP 765); `main` returns the computed code after it.
+  The steps run in this order, each only if the thing exists or happened, and each step runs even if an earlier one
+  raised. The name in parentheses is the `<step>` in the `cleanup failed:` line below:
+  1. (`timer`) cancel the `--minutes` timer and join it (`cancel()` only sets an Event, the thread is still alive right after;
      done first so a timer firing during cleanup cannot stamp `"timer"` on a `max_laps` run before step 4 reads the
      StopControl);
-  2. `layer.release_all()` (after a successful `connect`);
-  3. `rec_stop.set()` and `join(2.0)` the `record` thread (with `--record`);
-  4. write `out/stop.json` and print `stopped: ...` (after the walker ran);
-  5. `link.close()` (if the link was made);
-  6. `StopControl.close()` (if it was started), last.
-  Through steps 1-5 a Ctrl+C or F12 still lands on StopControl (idempotent), so the cleanup cannot be cut short; after
-  step 6 Ctrl+C is the normal `KeyboardInterrupt`. On the exits before the walker (2, 3, 4, 5) only the steps whose
-  thing exists apply (steps 5 and 6, and step 2 once connect succeeded).
+  2. (`release_all`) `layer.release_all()` (after a successful `connect`);
+  3. (`record`) `rec_stop.set()` and `join(2.0)` the `record` thread (with `--record`);
+  4. (`stop.json`) write `out/stop.json` and print `stopped: ...` (after the walker ran);
+  5. (`leg_log`) `JsonlLegLog.close()` on the log built with the walker (if it was built);
+  6. (`link.close`) `link.close()` (if the link was made);
+  7. (`stop.close`) `StopControl.close()` (if `start()` was called, whatever it returned), last.
+  Each step runs inside its own `try/except Exception`. A step that raises prints `cleanup failed: <step>:
+  <ExceptionType>: <message>` to stderr (one line per raising step, in step order) and `main` still returns the exit
+  code the walk decided (a cleanup failure never changes it). A `BaseException` that is not an `Exception` (for
+  example `KeyboardInterrupt`) raised in a step is held (the first one), the later steps still run, and it is
+  re-raised after the last step, so `main` then raises instead of returning. Sketch:
+
+  ```python
+  held = None
+  for name, step in applicable_steps:              # the steps above, in order
+      try:
+          step()
+      except Exception as exc:
+          print(f"cleanup failed: {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+      except BaseException as exc:                 # KeyboardInterrupt, SystemExit: hold it, keep going
+          if held is None:
+              held = exc
+  if held is not None:
+      raise held
+  ```
+
+  Through steps 1-6 a Ctrl+C or F12 still lands on StopControl (idempotent), so the cleanup cannot be cut short; after
+  step 7 Ctrl+C is the normal `KeyboardInterrupt`. On the exits before the walker (2, 3, 4, 5, 9) only the steps whose
+  thing exists apply: exits 2, 3 and 5 have none (the link is made after them); exit 4 has `link.close`; exit 9 has
+  `release_all` (connect succeeded), `leg_log` (built with the walker), `link.close` and `stop.close`.
   **`StopControl.close()` (PB-amend2-D1).** `close()` undoes `start()` in this order (worker first, SIGINT last, so Ctrl+C during `close()` still lands on
   StopControl), never raises (it runs in cleanup), and is idempotent (a second call does nothing): (1) end the worker thread (no `on_stop` call unless
   `trigger()` already ran) and join it; (2) call the `remove()` that `_install_hook()` returned, once (the pattern of
@@ -1326,13 +1361,20 @@ def main(argv: list[str] | None = None) -> int
   rejects `None` with `TypeError`) is restored as `signal.default_int_handler`. "Not installed" (`close()` before
   `start()`, or a `start()` that failed before reaching a step) is kept apart from a `None` previous handler, and
   `close()` undoes only what `start()` had installed.
-  `StopControl.start()` called off the main thread (it raises `ValueError` from `signal.signal`) is unsettled: which
-  `Failure` it returns and which exit code `main` gives are not decided here.
+  **`StopControl.start()` failure (PB-amend2c-D2).** `start()` never raises; a failure is a `Failure` and `main` returns
+  9 (above). Two sources. (S1) The hook cannot be installed (`SetWindowsHookExW` returns NULL, or the hook thread is
+  not ready within its start-up timeout, as in Feature A's listener, `src/input/harness/listener.py:275-278` and
+  `:368-371`): `_install_hook` raises `OSError` after its own teardown and `start()` returns `Failure("hook: <text>")`;
+  nothing is installed (SIGINT untouched, no worker). (S2) `start()` called off the main thread: the hook is
+  installed, then `signal.signal` raises `ValueError` and `start()` returns `Failure("sigint: <text>")`, with the hook
+  still installed and no worker started; cleanup step 7 (`close()`, run because `start()` was called) then removes the
+  hook. The CLI and the live check call `main` on the main thread, so S2 arises only for a future caller that runs
+  `main` on a worker thread.
   **Failure exit (PB-B19).** `main` calls `walker.run()` inside a `try`. If `run()` returns a `Failure`, `main` prints
   `walk failed: <reason>` (the `Failure` value) to stderr and returns 6. If `run()` raises an `Exception`, `main`
   prints `walk crashed: <ExceptionType>: <message>` to stderr and returns 7; the exception does not escape `main`
   (`KeyboardInterrupt` is not caught: Ctrl+C is handled by `StopControl`'s SIGINT handler). On both paths the cleanup
-  above still runs, in its order (timer, `release_all` if connected, recorder, `stop.json`, `link.close()`,
+  above still runs, in its order (timer, `release_all` if connected, recorder, `stop.json`, leg log, `link.close()`,
   `StopControl.close()`). `stop.json` is
   `{"reason": "error", "error": <text>, "trigger_ns", "trigger_source"}`, where `<text>` is the printed text after
   the prefix (the `Failure` value, or `<ExceptionType>: <message>`) and the last two are as on the other paths. `main` then prints `stopped: error` (and ` (<source>)` when a source is set), as for
@@ -1344,7 +1386,7 @@ def main(argv: list[str] | None = None) -> int
   seams patched so `_make_link` returns a wrapper around B10's `SimLink` (adds `connect() -> Success`, `close()`),
   `_make_positions` returns B10's `SimPositionSource` over the same `SimWorld` (FF2 terrain, `NoiseConfig.off()`,
   start at `(113,60)`), `_make_clock` returns the same `SimClock`, `_start_capture` a no-op, `_wait_first_frame`
-  `Success(None)`, `_make_stop_control` a fake, `_countdown_s = 0`, and `input_layer._clock` / `input_layer._sleep` monkeypatched to the `SimClock`'s
+  `Success(None)`, `_make_stop_control` a fake whose `start()` returns `Success(None)`, `_countdown_s = 0`, and `input_layer._clock` / `input_layer._sleep` monkeypatched to the `SimClock`'s
   `now_ns` / `sleep` (the layer's reaction wait otherwise uses `perf_counter_ns`, G5); `main(["--map", fixture, "--supervised",
   "--laps", "1", "--out", tmp])` → exit 0, `legs.jsonl` has 8 lines, `laps.jsonl` 1, `session.json` exists, and
   the wrapper's `release_all` and `close` were each called at least once on exit, and `stop.json` is
@@ -1359,7 +1401,7 @@ def main(argv: list[str] | None = None) -> int
   kaboom"`, and `release_all` and `close` were each called at least once; (c) `run` returns
   `Success(RunSummary(0, 0, "link_down"))` → `main` returns 1 and stderr contains neither `walk failed` nor
   `walk crashed`.
-  Exits 3 and 5, the `--minutes` timer and `StopControl` (same seams as the end-to-end test unless stated; each test
+  Exits 3, 5 and 9, the `--minutes` timer, `StopControl` and cleanup failures (same seams as the end-to-end test unless stated; each test
   also asserts the exit code is an `int` returned, not raised):
   (d) exit 3: `_wait_first_frame` returns `Failure("timeout")` → 3; separately, `_make_positions` returns a source
   whose `read()` is `Failure("miss")` → 3. In both, `_make_link` was never called (a seam that records calls), and no
@@ -1393,7 +1435,12 @@ def main(argv: list[str] | None = None) -> int
   `real_getsignal(signal.SIGINT) is signal.default_int_handler`. (Keying on S, not on whatever handler pytest had,
   keeps the patched `getsignal` from reporting `None` again after a correct restore. A `close()` that restores `None`,
   which raises `TypeError`, or restores nothing, leaves StopControl's handler installed and fails the check.) The
-  `finally` restores S's predecessor with the real `signal.signal`.
+  `finally` restores S's predecessor with the real `signal.signal`. `start()` failures (PB-amend2c-D2): (1) with
+  `_install_hook` monkeypatched to raise `OSError("SetWindowsHookExW failed")`, `start()` returns a `Failure` whose
+  value contains that text (no raise), `signal.getsignal(signal.SIGINT)` is unchanged, no worker thread was started,
+  and a later `close()` does not raise and calls no `remove`; (2) `start()` called from a `threading.Thread` (with
+  `_install_hook` the recording fake) returns a `Failure` (no raise), SIGINT is unchanged, and `close()` from the main
+  thread then calls `remove` exactly once.
   (h) `--minutes` range: `--minutes 0`, `-1`, `nan`, `inf` and `1e6` each → `main` returns 2 and `_start_capture`
   was never called; `--minutes 0.5` is accepted (the test uses `--laps 1` so the run ends at once, and checks the exit
   is 0).
@@ -1411,6 +1458,21 @@ def main(argv: list[str] | None = None) -> int
   `record` is no longer alive and `out/stop.json` exists, and the list ends `["release_all", "link.close",
   "stop.close"]`. The same list (without the recorder check) when `run` is replaced by one that raises
   `RuntimeError("kaboom")`.
+  (k) cleanup raises (PB-amend2c-D1), end-to-end seams plus `--laps 1`, stderr read with `capsys`: the link wrapper's
+  `close()` raises `RuntimeError("x")` -> `main` returns 0 (an int), stderr contains `cleanup failed: link.close:
+  RuntimeError: x`, and the fake stop control's `close` was still called. The same with `RouteWalker.run` replaced by
+  `lambda self: Failure("boom")` -> 6, and with a `run` that raises `RuntimeError("kaboom")` -> 7 (each line plus its
+  own `walk failed:` / `walk crashed:` line). The wrapper's `release_all` and `close` both raising (`release_all`
+  only after `run` has returned, a flag the test sets by wrapping `RouteWalker.run`, since `run()` itself calls
+  `release_all` first) -> 0 and two `cleanup failed:` lines, `release_all` first, then `link.close`. A step raising
+  `KeyboardInterrupt` (the link wrapper's `close()`): `main` raises `KeyboardInterrupt` (`pytest.raises`) and the fake
+  stop control's `close` was still called.
+  (l) stop control fails to start (PB-amend2c-D2), end-to-end seams plus `--record --minutes 60` (no `--laps`):
+  `_make_stop_control` returns a fake whose `start()` is `Failure("hook")` -> `main` returns 9 (an int, not raised),
+  stderr contains `stop control failed: hook`, the link wrapper saw no `play`, its `release_all` and `close` were each
+  called, the fake's `close` was called, and there is no `stop.json`, no `session.json`, no `tmp/frames`, and no
+  thread named `walk-timer` or `record` was started (compare `threading.enumerate()` before and after; none is
+  alive at the end).
 - [ ] **Live link check (MapleStory closed; Windows, board paired).** With the game closed there is no minimap, so
   the default `_wait_first_frame` fails (exit 3) before `connect`; this check patches the seams instead.
   This check sends real keys, so it refuses to run while MapleStory runs (PB-B19), the way Feature A's `probe`,
