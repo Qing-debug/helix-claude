@@ -1,0 +1,209 @@
+"""Characterization tests for PathGraph: pins today's edges on the FF2 fixture, today's edge rules on
+small synthetic graphs, and the two known FF2 rotation legs that have no path. A failure here means the
+behaviour changed, not that the test is wrong."""
+from pathlib import Path
+
+import networkx as nx
+import pytest
+from returns.pipeline import is_successful
+from returns.result import Success
+
+from src.classes.classes import Kanna
+from src.controller.controller import BuildOutcome, MapleAgent
+from src.controller.node import Node
+from src.controller.path_graph import Path as GraphPath
+from src.controller.path_graph import PathGraph
+
+FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "fossil_foundry_2.csv"
+
+# The 40 edges the unchanged PathGraph builds for FF2 with Kanna (19 px horizontal reach, 23 px vertical
+# reach, allowances 2/2), as (source position, target position).
+EXPECTED_FF2_EDGES = [
+    ((101, 24), (109, 23)), ((101, 24), (90, 24)), ((105, 42), (105, 60)), ((105, 42), (118, 43)),
+    ((105, 42), (97, 43)), ((105, 60), (105, 42)), ((105, 60), (113, 60)), ((105, 60), (99, 60)),
+    ((109, 23), (101, 24)), ((113, 60), (105, 60)), ((113, 60), (129, 60)), ((118, 43), (105, 42)),
+    ((129, 60), (113, 60)), ((37, 60), (48, 61)), ((42, 28), (49, 28)), ((48, 45), (48, 61)),
+    ((48, 45), (49, 28)), ((48, 45), (58, 46)), ((48, 61), (37, 60)), ((48, 61), (48, 45)),
+    ((48, 61), (65, 60)), ((49, 28), (42, 28)), ((49, 28), (48, 45)), ((49, 28), (66, 28)),
+    ((58, 46), (48, 45)), ((58, 46), (74, 45)), ((65, 60), (48, 61)), ((65, 60), (82, 60)),
+    ((66, 28), (49, 28)), ((74, 45), (58, 46)), ((79, 24), (90, 24)), ((82, 60), (65, 60)),
+    ((82, 60), (99, 60)), ((90, 24), (101, 24)), ((90, 24), (79, 24)), ((97, 43), (105, 42)),
+    ((97, 43), (99, 60)), ((99, 60), (105, 60)), ((99, 60), (82, 60)), ((99, 60), (97, 43)),
+]
+
+# The FF2 rotation is a cycle of 7 legs (the last blue node leads back to the first). Today two of them have
+# no path in the graph; every other leg has one.
+NO_PATH_LEGS = {((49, 28), (101, 24)), ((101, 24), (105, 42))}
+
+
+@pytest.fixture(scope="module")
+def ff2():
+    agent = MapleAgent(characterClass=Kanna())
+    assert agent.loadMap(FIXTURE) == Success(BuildOutcome.BUILT)
+    by_pos = {n.minimap_position: n for n in agent.node_map.values()}
+    assert len(by_pos) == 21
+    return agent, by_pos
+
+
+def _position_edges(graph):
+    return [(u.minimap_position, v.minimap_position) for u, v in graph.edges()]
+
+
+def _rotation_legs(agent):
+    rotation = [n.minimap_position for n in agent.map_rotation_order]
+    return list(zip(rotation, rotation[1:] + rotation[:1]))
+
+
+def _node(x, y, left_edge=False, right_edge=False):
+    return Node(nodetype="blue_node", minimap_pos=(x, y), can_fall=False, fall_dist_exceeds_vertical_tp=False,
+                is_left_platform_edge=left_edge, is_right_platform_edge=right_edge)
+
+
+def _build(*nodes):
+    """Build a PathGraph (allowances 2/2, reach 19/23) over `nodes`, inserted into node_map in the order given."""
+    node_map = {n.uuid: n for n in nodes}
+    pg = PathGraph(node_map=node_map, edge_y_alignment_allowance=2, edge_x_alignment_allowance=2,
+                   max_horizontal_traversal_dist=19, max_vertical_traversal_dist=23)
+    assert is_successful(pg.buildGraph())
+    return pg
+
+
+# 1. The FF2 edge set -----------------------------------------------------------------------------------
+
+def test_ff2_has_exactly_the_40_expected_edges(ff2):
+    agent, _ = ff2
+    assert len(EXPECTED_FF2_EDGES) == 40 and len(set(EXPECTED_FF2_EDGES)) == 40
+    graph = agent.pathGraph.graph
+    assert graph.number_of_edges() == 40
+    assert sorted(_position_edges(graph)) == sorted(EXPECTED_FF2_EDGES)
+
+
+# 2. Edge weights ---------------------------------------------------------------------------------------
+
+def test_ff2_edge_weights_are_dx_for_horizontal_and_dy_for_vertical(ff2):
+    agent, by_pos = ff2
+    graph = agent.pathGraph.graph
+    assert graph[by_pos[(82, 60)]][by_pos[(99, 60)]][0]["weight"] == 17
+    assert graph[by_pos[(48, 61)]][by_pos[(48, 45)]][0]["weight"] == 16
+
+    allowance = 2
+    for u, v, data in graph.edges(data=True):
+        dx = abs(u.minimap_position[0] - v.minimap_position[0])
+        dy = abs(u.minimap_position[1] - v.minimap_position[1])
+        horizontal = dy <= allowance < dx
+        vertical = dx <= allowance < dy
+        assert horizontal != vertical, f"edge {u.minimap_position}->{v.minimap_position} is not clearly one axis"
+        assert data["weight"] == (dx if horizontal else dy)
+
+
+# 3. The two known FF2 cases: no path today -------------------------------------------------------------
+
+@pytest.mark.parametrize("leg", [
+    ((113, 60), (82, 60)), ((82, 60), (48, 61)), ((48, 61), (58, 46)), ((58, 46), (49, 28)),
+    ((49, 28), (101, 24)), ((101, 24), (105, 42)), ((105, 42), (113, 60)),
+])
+def test_ff2_rotation_leg_path(ff2, leg):
+    agent, by_pos = ff2
+    assert leg in _rotation_legs(agent)
+    src, dst = by_pos[leg[0]], by_pos[leg[1]]
+    assert nx.has_path(agent.pathGraph.graph, src, dst) is (leg not in NO_PATH_LEGS)
+
+
+def test_ff2_exactly_two_of_the_seven_rotation_legs_have_no_path(ff2):
+    agent, by_pos = ff2
+    legs = _rotation_legs(agent)
+    assert len(legs) == 7
+    no_path = {leg for leg in legs if not nx.has_path(agent.pathGraph.graph, by_pos[leg[0]], by_pos[leg[1]])}
+    assert no_path == NO_PATH_LEGS
+
+
+# 4. Synthetic graphs: reach, alignment, ties, platform edges -------------------------------------------
+
+def test_horizontal_reach_20_px_gets_no_edge_and_19_px_does():
+    far = _build(_node(100, 50), _node(120, 50))
+    assert far.graph.number_of_edges() == 0
+
+    near_left, near_right = _node(100, 50), _node(119, 50)
+    near = _build(near_left, near_right)
+    assert set(near.graph.edges()) == {(near_left, near_right), (near_right, near_left)}
+    assert near.graph.number_of_edges() == 2
+    assert near.graph[near_left][near_right][0]["weight"] == 19
+    assert near.graph[near_right][near_left][0]["weight"] == 19
+
+
+def test_vertical_reach_24_px_gets_no_edge_and_23_px_does():
+    far = _build(_node(50, 76), _node(50, 100))
+    assert far.graph.number_of_edges() == 0
+
+    top, bottom = _node(50, 77), _node(50, 100)
+    near = _build(top, bottom)
+    assert near.graph.number_of_edges() == 2
+    assert near.graph.has_edge(bottom, top) and near.graph.has_edge(top, bottom)
+    assert near.graph[bottom][top][0]["weight"] == 23
+    assert near.graph[top][bottom][0]["weight"] == 23
+
+
+def test_alignment_3_px_off_axis_gets_no_edge_and_2_px_does():
+    # horizontal candidate: y differs by 3 (no edge) or 2 (edge)
+    assert _build(_node(50, 50), _node(60, 53)).graph.number_of_edges() == 0
+    left, right = _node(50, 50), _node(60, 52)
+    aligned = _build(left, right)
+    assert aligned.graph.has_edge(left, right) and aligned.graph.has_edge(right, left)
+
+    # vertical candidate: x differs by 3 (no edge) or 2 (edge)
+    assert _build(_node(50, 50), _node(53, 30)).graph.number_of_edges() == 0
+    below, above = _node(50, 50), _node(52, 30)
+    aligned = _build(below, above)
+    assert aligned.graph.has_edge(below, above) and aligned.graph.has_edge(above, below)
+
+
+@pytest.mark.parametrize("first_inserted", ["a", "b"])
+@pytest.mark.parametrize("direction, source_pos, tie_a_pos, tie_b_pos", [
+    ("left", (100, 50), (90, 50), (90, 51)),
+    ("right", (100, 50), (110, 50), (110, 51)),
+    ("up", (50, 50), (50, 40), (51, 40)),
+    ("down", (50, 50), (50, 60), (51, 60)),
+])
+def test_tie_between_equidistant_candidates_goes_to_the_first_inserted(
+        direction, source_pos, tie_a_pos, tie_b_pos, first_inserted):
+    source, tie_a, tie_b = _node(*source_pos), _node(*tie_a_pos), _node(*tie_b_pos)
+    nodes = [source, tie_a, tie_b] if first_inserted == "a" else [source, tie_b, tie_a]
+    winner = tie_a if first_inserted == "a" else tie_b
+
+    pg = _build(*nodes)
+
+    # the source's only outgoing edge is in `direction`, to the candidate inserted first
+    assert [(u, v) for u, v in pg.graph.out_edges(source)] == [(source, winner)], direction
+
+
+def test_vertical_edge_to_a_left_platform_edge_only_from_a_source_with_x_at_or_right_of_it():
+    target = _node(50, 30, left_edge=True)
+    right_of = _node(51, 50)
+    left_of = _node(49, 50)
+
+    pg = _build(target, right_of, left_of)
+    assert pg.graph.has_edge(right_of, target)          # source x 51 >= target x 50
+    assert not pg.graph.has_edge(left_of, target)       # source x 49 < target x 50
+
+    equal = _node(50, 50)
+    pg_equal = _build(target, equal)
+    assert pg_equal.graph.has_edge(equal, target)       # source x 50 >= target x 50 (equality counts)
+
+
+# 5. getPathToGoalNode on an unreachable goal -----------------------------------------------------------
+
+def test_get_path_to_goal_node_is_empty_for_an_unreachable_goal(ff2):
+    agent, by_pos = ff2
+    path = agent.pathGraph.getPathToGoalNode(by_pos[(49, 28)], by_pos[(101, 24)])
+    assert isinstance(path, GraphPath)
+    assert path == GraphPath() and len(path) == 0
+
+    path = agent.pathGraph.getPathToGoalNode(by_pos[(101, 24)], by_pos[(105, 42)])
+    assert isinstance(path, GraphPath) and len(path) == 0
+
+
+def test_get_path_to_goal_node_ends_at_the_goal_for_a_reachable_leg(ff2):
+    agent, by_pos = ff2
+    goal = by_pos[(82, 60)]
+    path = agent.pathGraph.getPathToGoalNode(by_pos[(113, 60)], goal)
+    assert len(path) >= 1 and path[-1] is goal
