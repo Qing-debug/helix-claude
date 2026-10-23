@@ -942,7 +942,8 @@ B9/B10.
      `REACHED`. `fail_next=[InputError.LINK_LOST]` → `LINK_DOWN` after exactly 1 entry and no further `play`.
   6. A position source scripted as `[Failure("miss"), Failure(STALE), Success(target)]` → `REACHED`, `misses == 1`.
   7. `use_stimulus=True`, `leg_timeout_s=2.0`, start `(82,60)`, leg to `(48,61)`, `SimClock`, a fake layer whose `walk`,
-     `teleport` and `drop` record their `stimulus_ns` argument, return `Success(None)` and never move the world. The
+     `teleport` and `drop` record their `stimulus_ns` argument, return `Success(None)` and never move the world (`Success(None)` stands in for an `ActionRecord`; `walk_leg` uses only
+     `is_successful` and the error of `execute`'s result, never the record's fields). The
      position source is wrapped so each `read()` first advances the clock by 1 ms (`clock.advance(1_000_000)`) and
      records the `clock.now_ns()` it then returns as `read_ns`. The leg ends `TIMED_OUT` (virtual time, no real wait,
      so the test cannot hang); at least 2 calls were made; each call's `stimulus_ns` equals the `read_ns` of the read
@@ -1172,7 +1173,8 @@ def main(argv: list[str] | None = None) -> int
   `stop` that is already set when `record` starts still saves the first frame. One of `seconds` and `stop` must be
   given: `seconds is None and stop is None` → `Failure` and nothing is written. Each new frame object (not `is` the
   last saved) is written RGB→BGR with `cv2.imwrite` as `frame_%06d.png` and a line `{"i", "t_ns", "file", "w", "h"}`
-  is appended to `index.jsonl` (flushed per line); returns the number saved. `shared_frames(shared)` returns a
+  is appended to `index.jsonl` (flushed per line); returns the number saved. `record` creates `out_dir` (with parents) after validating its arguments, never earlier, and
+  never in `main`. `shared_frames(shared)` returns a
   callable that, under `shared.minimap_frame_lock`, returns `shared.minimap_frame` itself (the reference, never a
   copy: vision rebinds the attribute to a new array under the lock, G30, so the `is` de-dup above works and a copy
   would make every poll count as new); the lock rule lives here once, and `main` and B19 both use it. `--out` must
@@ -1184,7 +1186,7 @@ def main(argv: list[str] | None = None) -> int
   pure-red RGB frame reads back from the PNG as red in RGB); `main(["--out", "/tmp/x"])` → 2. Stop (B19-record-D1):
   a fake `frames` that returns a new array on every call and sets a `threading.Event` on its 3rd call, with
   `seconds=None, stop=<that event>` → `Success(3)`, 3 files and 3 index lines; `seconds=None, stop=None` →
-  `Failure`, and the folder holds no files. `shared_frames` is covered by B19's `--record` end-to-end test.
+  `Failure`, and `out_dir` is not created (or holds no files). `shared_frames` is covered by B19's `--record` end-to-end test.
 - **Run:** `python -m pytest -q tests/route/test_record_minimap.py`
 - **Commit:** `feat(route): minimap frame recorder for supervised sessions`
 
@@ -1254,7 +1256,7 @@ class StopControl:
                                                # trigger_source
     trigger_ns: int | None                     # time.perf_counter_ns() at the first trigger(), else None
     trigger_source: str | None
-    def close(self) -> None                    # undoes start() in reverse order (PB-amend2-D1, see below)
+    def close(self) -> None                    # undoes start() (PB-amend2-D1, see below)
     def _install_hook(self) -> Callable[[], None]   # the seam; returns remove(): stops the hook thread and unhooks
 def start_capture(shared) -> threading.Thread
 def wait_first_frame(shared, timeout_s: float) -> Result[None, str]
@@ -1294,7 +1296,8 @@ def main(argv: list[str] | None = None) -> int
   starts a daemon thread named `record` that runs `record(shared_frames(shared), out/"frames", None, 10.0,
   stop=rec_stop)` (B17; `shared_frames` passes the shared frame object, not a copy; `rec_stop` is a
   `threading.Event` that `main` owns). A `Failure` from `record` prints `record failed: <reason>` to stderr and does not
-  change the exit code (the walk decides it). The recorder is started before the timer, both just before `run()`; an
+  change the exit code (the walk decides it); a `record` that raises dies through `threading.excepthook` and also
+  leaves the exit code alone. The recorder is started before the timer, both just before `run()`; an
   exit before the walker (2, 3, 4, 5) never starts either, so no `out/frames/` exists then.
   **Cleanup (PB-amend2-D1, B19-record-D1).** `main` does all cleanup in one `finally` that covers every exit path (including an
   exception from `run()`; `KeyboardInterrupt` is not caught, see below). The steps run in this order, each only if the
@@ -1310,8 +1313,8 @@ def main(argv: list[str] | None = None) -> int
   Through steps 1-5 a Ctrl+C or F12 still lands on StopControl (idempotent), so the cleanup cannot be cut short; after
   step 6 Ctrl+C is the normal `KeyboardInterrupt`. On the exits before the walker (2, 3, 4, 5) only the steps whose
   thing exists apply (steps 5 and 6, and step 2 once connect succeeded).
-  **`StopControl.close()` (PB-amend2-D1).** `close()` undoes `start()` in reverse order, never raises (it runs in
-  cleanup), and is idempotent (a second call does nothing): (1) end the worker thread (no `on_stop` call unless
+  **`StopControl.close()` (PB-amend2-D1).** `close()` undoes `start()` in this order (worker first, SIGINT last, so Ctrl+C during `close()` still lands on
+  StopControl), never raises (it runs in cleanup), and is idempotent (a second call does nothing): (1) end the worker thread (no `on_stop` call unless
   `trigger()` already ran) and join it; (2) call the `remove()` that `_install_hook()` returned, once (the pattern of
   Feature A's listener: `PostThreadMessageW(hook_tid, WM_QUIT, 0, 0)` and the hook thread's `UnhookWindowsHookEx`,
   `src/input/harness/listener.py:377-388` and `:285`; without it F12 stays swallowed system-wide until the process
@@ -1372,8 +1375,9 @@ def main(argv: list[str] | None = None) -> int
   is still alive afterwards (compare `threading.enumerate()` before and after), so the timer was cancelled and joined.
   (g) `StopControl` with the real class and `_install_hook` monkeypatched to a recording fake that returns a `remove`
   callable counting its calls: `start()` returns `Success`; the SIGINT handler now installed
-  (`signal.getsignal(signal.SIGINT)`), called directly as `handler(signal.SIGINT, None)`, makes `on_stop` run once and
-  sets `trigger_source == "sigint"`; each test below saves the previous handler first and restores it in a `finally`
+  (`signal.getsignal(signal.SIGINT)`), called directly as `handler(signal.SIGINT, None)`, makes `on_stop` run once (within 1 s: `on_stop` runs on the worker
+  thread, so the fake `on_stop` sets an `Event` that the test waits on) and sets `trigger_source == "sigint"` (set
+  synchronously, no wait); each test below saves the previous handler first and restores it in a `finally`
   (a safety net on top of what `close()` does). `close()` after `start()` with no trigger: `on_stop` is never called,
   the worker thread has ended (it is not in `threading.enumerate()` after `close()` returns), `remove` was called
   exactly once, `signal.getsignal(signal.SIGINT)` is the handler saved before `start()`, and a second `close()` does
@@ -1382,9 +1386,14 @@ def main(argv: list[str] | None = None) -> int
   installed after the first `close()` is still installed after a second `close()`. `close()` called from a
   `threading.Thread` (after `start()` on the main thread) does not raise, leaves SIGINT as it was, ends the worker and
   calls `remove` once. A previous handler of `None` (not settable from Python, so the test
-  fakes it: `monkeypatch` wrappers make both `signal.getsignal` and the return value of `signal.signal` report `None`
-  for the handler that was there before `start()`, and otherwise delegate) is restored as
-  `signal.default_int_handler`: after `close()`, `signal.getsignal(signal.SIGINT) is signal.default_int_handler`.
+  fakes it): before `start()` the test installs its own sentinel Python handler S with the real `signal.signal`, saves
+  the real `signal.getsignal` and `signal.signal`, and then `monkeypatch`es wrappers that make `signal.getsignal` and
+  the return value of `signal.signal` report `None` whenever the real value is S, and otherwise delegate. After
+  `start()` and `close()`, the final check uses the saved real `getsignal` (not the patched one):
+  `real_getsignal(signal.SIGINT) is signal.default_int_handler`. (Keying on S, not on whatever handler pytest had,
+  keeps the patched `getsignal` from reporting `None` again after a correct restore. A `close()` that restores `None`,
+  which raises `TypeError`, or restores nothing, leaves StopControl's handler installed and fails the check.) The
+  `finally` restores S's predecessor with the real `signal.signal`.
   (h) `--minutes` range: `--minutes 0`, `-1`, `nan`, `inf` and `1e6` each → `main` returns 2 and `_start_capture`
   was never called; `--minutes 0.5` is accepted (the test uses `--laps 1` so the run ends at once, and checks the exit
   is 0).
@@ -1397,7 +1406,8 @@ def main(argv: list[str] | None = None) -> int
   does not exist.
   (j) cleanup order (PB-amend2-D1, B19-record-D1): the end-to-end seams plus `--laps 1 --minutes 60 --record`; the
   link wrapper and the fake stop control append `"release_all"`, `"link.close"` and `"stop.close"` to one list; at
-  the `release_all` call the thread named `walk-timer` is no longer alive, at the `link.close` call the thread named
+  the last `release_all` call (cleanup step 2; `run()` makes one of its own first, while the timer is still alive) the
+  thread named `walk-timer` is no longer alive, at the `link.close` call the thread named
   `record` is no longer alive and `out/stop.json` exists, and the list ends `["release_all", "link.close",
   "stop.close"]`. The same list (without the recorder check) when `run` is replaced by one that raises
   `RuntimeError("kaboom")`.
