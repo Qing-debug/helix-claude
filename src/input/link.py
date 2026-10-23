@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakGATTProtocolError
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
@@ -31,6 +32,7 @@ READY_PING_PERIOD_S = 0.1
 MIN_PONG_MTU = 56  # longest command 53 bytes + 3 (C1 size limits)
 KEEPALIVE_PERIOD_S = 0.25
 PING_TIMEOUT_S = 0.5  # write + PONG
+KEEPALIVE_SOFT_MISS_LIMIT = 3  # soft keepalive misses in a row that end the session (A-FCdbg-D1)
 WRITE_TIMEOUT_S = 0.5
 ACCEPT_TIMEOUT_S = 0.3  # after the write completes
 DONE_MARGIN_S = 0.3  # PLAY: schedule duration + this; RELEASE_ALL: this, after the write
@@ -101,6 +103,7 @@ class _Session:
     start: float  # loop.time() at connect()'s Success
     keepalive: asyncio.Task | None = None
     tasks: set = field(default_factory=set)
+    soft_misses: int = 0  # soft keepalive misses since the last PONG; loop thread only
 
 
 def _unmet(pong: Pong) -> list[str]:
@@ -210,6 +213,8 @@ class BleLink:
             return
         if isinstance(msg, Pong):
             self._log_pong(now, msg)
+            if self._session is not None:
+                self._session.soft_misses = 0
             self._resolve(entry, Success(msg))
         elif isinstance(msg, Accepted):
             entry.accepted, entry.accepted_ns = msg, now
@@ -369,7 +374,7 @@ class BleLink:
         last: Pong | None = None
         while (left := ready_deadline - loop.time()) > 0:
             tick_end = loop.time() + READY_PING_PERIOD_S
-            r = await self._ping_cmd(client, min(PING_TIMEOUT_S, left))
+            r, _ = await self._ping_cmd(client, min(PING_TIMEOUT_S, left))
             if is_successful(r):
                 last = r.unwrap()
                 if not _unmet(last):
@@ -391,8 +396,19 @@ class BleLink:
             task.add_done_callback(session.tasks.discard)
 
     async def _keepalive_ping(self, session: _Session) -> None:
-        r = await self._ping_cmd(session.client, PING_TIMEOUT_S)
-        if not is_successful(r) and self._session is session:
+        """A hard miss (the board gave no sign of life) ends the session at once. A soft miss (the board answered the
+        write: an ATT error response, or the write completed without a PONG) is a WARNING, not a fault, unless it is
+        the KEEPALIVE_SOFT_MISS_LIMIT-th in a row; a PONG resets the count (_on_notify) (A-FCdbg-D1)."""
+        r, answered = await self._ping_cmd(session.client, PING_TIMEOUT_S)
+        if is_successful(r) or self._session is not session:
+            return
+        if not answered:
+            self._end_session(InputError.LINK_LOST)
+            return
+        session.soft_misses += 1
+        log.warning("keepalive PING: board answered the write but no PONG (%s): soft miss %d of %d", r.failure(),
+                    session.soft_misses, KEEPALIVE_SOFT_MISS_LIMIT)
+        if session.soft_misses >= KEEPALIVE_SOFT_MISS_LIMIT:
             self._end_session(InputError.LINK_LOST)
 
     # ------------------------------------------------------------ commands
@@ -414,9 +430,11 @@ class BleLink:
         if not task.cancelled():
             task.exception()  # retrieved: a write that fails after its command gave up is not "never retrieved"
 
-    async def _ping_cmd(self, client, limit: float) -> Result[Pong, InputError]:
+    async def _ping_cmd(self, client, limit: float) -> tuple[Result[Pong, InputError], bool]:
         """Register, then one limit over write + PONG (PA-rev m11). A PONG may arrive before the write returns and ends
-        the wait; so does the session end. The limit never waits for the write itself (_start_write)."""
+        the wait; so does the session end. The limit never waits for the write itself (_start_write). Also returns
+        whether the board answered the write: it completed, or failed with an ATT error response
+        (BleakGATTProtocolError; bleak raises plain BleakError for UNREACHABLE / ACCESS_DENIED)."""
         loop = self._loop
         entry = self._register(_PING)
         entry.sent_ns = time.perf_counter_ns()
@@ -432,16 +450,18 @@ class BleLink:
                     self._resolve(entry, Failure(InputError.WRITE_FAILED))
         self._resolve(entry, Failure(InputError.ACK_TIMEOUT))  # no-op if a PONG, the session end or the write did
         result = entry.final.result()
+        answered = write.done() and not write.cancelled() and (
+            write.exception() is None or isinstance(write.exception(), BleakGATTProtocolError))
         if not is_successful(result) and not write.done():
             write.cancel()  # not awaited (_start_write)
-        return result
+        return result, answered
 
     async def _public_ping(self) -> Result[Pong, InputError]:
         """A failure is returned, never ends the session (A-P4-D2); a missed PONG is an ACK_TIMEOUT fault (A-P4-R I1)."""
         session = self._session
         if session is None:
             return Failure(InputError.NOT_CONNECTED)
-        r = await self._ping_cmd(session.client, PING_TIMEOUT_S)
+        r, _ = await self._ping_cmd(session.client, PING_TIMEOUT_S)
         if self._session is session and not is_successful(r) and r.failure() == InputError.ACK_TIMEOUT:
             self._fault(InputError.ACK_TIMEOUT)
         return r
