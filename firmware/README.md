@@ -58,6 +58,7 @@ echo "PORT=[$PORT]"   # expect exactly one port
 |---|---|---|
 | Compile | `"$CLI" compile -b "$FQBN" --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE` | `Sketch uses ... bytes`, exit 0 |
 | Compile + flash | `"$CLI" compile -b "$FQBN" -u -p $PORT --output-dir $REPO/firmware/build $REPO/firmware/Helix_BLE` | esptool output ending `Hard resetting via RTS pin...`, exit 0 |
+| Verify flash | `"$ESPTOOL" --port "$PORT" verify-flash 0x10000 $REPO/firmware/build/Helix_BLE.ino.bin` | `Verification successful (digest matched).`, exit 0 (the board runs the image just built) |
 | Monitor | `"$CLI" monitor -p $PORT -c baudrate=115200,dtr=off,rts=off --timestamp` | see "Observed behaviour" |
 | Reset | `"$ESPTOOL" --port "$PORT" --no-stub read-mac` | last line `Hard resetting via RTS pin...`, exit 0 |
 
