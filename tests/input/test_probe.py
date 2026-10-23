@@ -808,6 +808,8 @@ def test_run_sheet_describes_the_sink_and_how_to_raise_it(capsys):
     assert "reading 'Helix test window / click here once, then don't type'" in out
     assert "may cover part of this console, so click it once as soon as it appears" in out
     assert "Get-Process python, take the MainWindowHandle" in out and "SetForegroundWindow" in out
+    # A-FC-R m2, A-final-R M-2.1: the fallback is no licence for an unattended live step
+    assert "(unattended runs only with Hong's explicit go, as H13; no key is ever synthesised)" in out
 
 
 def test_run_sheet_tees_each_flash_into_data(capsys):

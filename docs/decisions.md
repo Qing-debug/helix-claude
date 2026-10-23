@@ -165,6 +165,8 @@ Ruling as Hong under H9; undo: drop the P5 lines and the test. Cost if wrong is 
 
 Keep the T-vK / Berg0162 ESP32 NimBLE Keyboard library for the HID setup, bypass its `sendReport` using the public NimBLE lookup copied from `NimBLEHIDDevice.cpp:157-167` (run in `onStarted`), and send with `notify(report, 8, connHandle)`.
 
+Amended by A-F5-D2 (below): F5 sends with `notify()`'s two NimBLE calls (`ble_hs_mbuf_from_flat` + `ble_gattc_notify_custom`) made directly, so DONE carries the NimBLE rc.
+
 Reason: all 15 claims checked out. `sendReport` coalesces key-down and key-up (`ble_gatts.c:2139-2146`, `:2370`) and returns void, and the alternatives end in the same notify call with more code to own.
 
 Affects: firmware send path and the dependency use; plan A task F5.
@@ -405,6 +407,8 @@ Cost if wrong: one F5 paragraph rewritten again before F5 is built.
 
 Ruling as Hong under H9 (away mode, opus-xhigh adjudicated in PA-rev6b); undo: `git revert 0418d94`.
 
+Amended by PA-rev6c-D1 (below): each queued RELEASE_ALL carries a `counted` flag that decrements the count exactly once at dequeue.
+
 ## A-F3-R-a (2026-10-22): F3's HID check matches the Keyboard class by board address
 
 B. Plan A task F3 step 6 checks that Windows installed the keyboard with `Get-PnpDevice -PresentOnly -Class Keyboard | Where-Object InstanceId -match '1020BA4E2771' | Select-Object Status, Class, FriendlyName` and expects one row `OK Keyboard HID Keyboard Device`. The other options were A (keep `Get-PnpDevice -PresentOnly | Where-Object FriendlyName -match 'Guiness'`, expecting a Bluetooth entry plus a HID entry) and C (walk `DEVPKEY_Device_Children` from the "Guiness" BTHLE device, as `data/F3-pnp.ps1` does).
@@ -451,7 +455,7 @@ Affects: the firmware concurrency model (F5's `onWrite`, queue item and executor
 
 Cost if wrong: one F5 paragraph rewritten before F5 runs.
 
-Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert 94c376c b3b476b` (reverse-applies clean as of `94c376c`; `b3b476b` alone now conflicts).
+Ruling as Hong under H9 (away mode, opus-xhigh reviewed in PA-rev6c); undo: `git revert 94c376c b3b476b` (reverse-applies clean as of `94c376c`; `b3b476b` alone now conflicts). At a later HEAD the revert conflicts (A-final-R M-3.2: the plan diff fails at plan :807); remove only this ruling's clauses from F5 by hand. The ruling also lives in the firmware (`Helix_BLE.ino:125` `bool counted`, `:130` "Never reset", `:285`): remove the counted-flag lines there too, then reflash.
 
 ## A-F4-R-D1 (2026-10-22): `vectors.json` is ratified as F4 committed it (one top-level array)
 
@@ -571,7 +575,7 @@ Question: when a public `ping()` fails while the session is live, does `BleLink`
 
 Ruling: A′ (ruled as Hong while away, adjudicated by A-P4-R); confirmed KEEP by A-P4-R2.
 
-Reason: the keepalive already detects a dead link within about 0.75 s, and ending the session from `ping()` would add a third session-ending path the plan lacks (only a keepalive miss and `disconnected_callback` end a session; P4 Session state). V2 step 3 is the only Phase 1 caller and writes no `link_faults.jsonl`, so the entry has no Phase 1 consumer and no gate effect. No session end does not mean no fault: a missed PONG is an `ACK_TIMEOUT` fault entry, while a write that raises is `WRITE_FAILED` with no entry. One asymmetry is by design (A-P4-R2 Q2): a `ping()` whose write blocks for the whole 0.5 s is `ACK_TIMEOUT` (a fault), because `_ping_cmd` has one limit over write + PONG, while a `play()` / `release_all()` whose write blocks is `WRITE_FAILED` (not a fault). A `ping()` blocked in its write is not cut short at session end; it returns `LINK_LOST` / `NOT_CONNECTED` within its own 0.5 s (A-P4-R2 Q4).
+Reason: the keepalive already detects a dead link within about 0.75 s (amended by A-FCdbg-D1, below: on the soft-miss path, a board that answers writes but sends no PONG, it is ~1.0 s after the first unanswered PING), and ending the session from `ping()` would add a third session-ending path the plan lacks (only a keepalive miss and `disconnected_callback` end a session; P4 Session state). V2 step 3 is the only Phase 1 caller and writes no `link_faults.jsonl`, so the entry has no Phase 1 consumer and no gate effect. No session end does not mean no fault: a missed PONG is an `ACK_TIMEOUT` fault entry, while a write that raises is `WRITE_FAILED` with no entry. One asymmetry is by design (A-P4-R2 Q2): a `ping()` whose write blocks for the whole 0.5 s is `ACK_TIMEOUT` (a fault), because `_ping_cmd` has one limit over write + PONG, while a `play()` / `release_all()` whose write blocks is `WRITE_FAILED` (not a fault). A `ping()` blocked in its write is not cut short at session end; it returns `LINK_LOST` / `NOT_CONNECTED` within its own 0.5 s (A-P4-R2 Q4).
 
 Affects: `BleLink.ping()` (C3); plan A task P4, `ping()` bullet and the Keepalive bullet's last sentence. Applied in `7c0de44` (`_public_ping`, cherry-pick of `1ce4acb`), the fault entry in `d15c32b` (= `ad50320`), pinned by `2691a42` (= `4ebb922`); plan text in `82f9c7d`.
 
@@ -863,7 +867,7 @@ Question: A-V2link traced the ~0.97 s link-loss detection to a cancelled PING wr
 
 Ruling: A, "after F1 lands, re-run the V2 step 4 fault soak live (right after V1 live, same sitting)" (Hong's decision).
 
-Reason: only a live run shows the fix on the real link. The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
+Reason: not recorded in the ledger (ledger.md:647 gives the ruling only). The re-run (A-V2refault, v2-faults-4 at `0615c19`) passed every gate: 10/10 faults, reset worst case 706–730 ms (v2-faults-3 re-analysed: 967–980 ms), so the A-LK fix was confirmed live with ~270 ms margin; A-V2refault-V verified it.
 
 Affects: the order of the live runs (V1, then the V2 step 4 re-run); data in `data/soak/v2-faults-4`. No code or plan change comes from the decision itself.
 
@@ -1043,7 +1047,7 @@ Reason: E covers both failure modes (ATT error response, and a completed write w
 
 Affects: `src/input/link.py` (`_keepalive_ping`, `_ping_cmd` returns whether the board answered, `KEEPALIVE_SOFT_MISS_LIMIT = 3`, `_Session.soft_misses` reset by any PONG in `_on_notify`), tests T1–T6 in `tests/input/test_link.py` (`9683e23`); plan A P4 Keepalive, `ping()`, Session state, fault list, C5 and the P4 test list (`f40a08e`). A soft miss logs one WARNING on `src.input.link` and adds no `faults()` / `link_faults.jsonl` entry.
 
-Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; a board that answers writes but never sends PONG ends ~1.0 s after its first unanswered PING instead of 0.5 s.
+Cost if wrong: a real loss that looks like soft misses is reported up to ~0.75 s later, or a flaky board hides behind WARNINGs; a board that answers writes but never sends PONG ends ~1.0 s after its first unanswered PING instead of 0.5 s. Analyze's reset worst case (last PONG → first report, gated at 1 s) grows by ~250 ms per soft miss just before a loss, because the last PONG is then an earlier PING's: one soft miss → ~0.95–0.98 s, two → ~1.2 s and a Faults FAIL, although detection from the loss itself is unchanged (A-KA-R m1, A-final-R M-1.1); a Faults FAIL with soft-miss WARNINGs just before the reset is this proxy cost, not slower detection.
 
 Undo: revert `9683e23` and `f40a08e`.
 
