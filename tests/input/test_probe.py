@@ -15,6 +15,7 @@ import random
 import re
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 from returns.result import Failure, Success
@@ -673,6 +674,16 @@ def test_m2_phase_is_na_without_board_times(tmp_path, clock):
     assert code == probe.EXIT_OK and "phase: n/a" in _report(tmp_path, "m2")
 
 
+@pytest.mark.parametrize("pvalue, reviewed", [(0.0099, True), (0.01, False)])
+def test_m2_phase_ks_review_is_p_strictly_below_alpha_0_01(tmp_path, clock, monkeypatch, pvalue, reviewed):
+    # A-V1-Ra M9 / A-CP7: the plan's alpha 0.01, and p == alpha is not a review item
+    code, _ = _run(tmp_path, clock, probes=("m2",), rig=_board_rig(clock))
+    assert code == probe.EXIT_OK
+    monkeypatch.setattr(probe.stats, "kstest", lambda *a, **k: SimpleNamespace(statistic=0.5, pvalue=pvalue))
+    review = probe.m2_report(tmp_path / "run" / "m2", jitter=True).review
+    assert any("not U(0, CI)" in r for r in review) is reviewed
+
+
 # ---- piece 2: M4 (fixed chord offsets) ------------------------------------------------------------------
 
 def test_fixed_chord_model_calls_the_base_draw_first_then_cycles_the_offsets():
@@ -711,6 +722,16 @@ def test_m4_expected_collapse_weights_by_the_model_mass():
     only_small = {x: (1.0 if x <= 15 else 0.0) for x in probe.M4_OFFSETS_MS}
     assert probe.m4_expected_collapse(only_small) == pytest.approx(mass[10.0] + mass[15.0])
     assert probe.m4_expected_collapse({2.0: 1.0}) is None
+
+
+@pytest.mark.parametrize("share, reviewed", [(0.5, False), (0.5001, True)])
+def test_m4_review_is_a_collapse_share_strictly_above_half(tmp_path, clock, monkeypatch, share, reviewed):
+    # A-V1-Ra M19 / A-CP7: "most model offsets collapse" (plan V1 M4) is > 50%, and exactly 50% is not
+    code, _ = _run(tmp_path, clock, probes=("m4",))
+    assert code == probe.EXIT_OK
+    monkeypatch.setattr(probe, "m4_expected_collapse", lambda shares: share)
+    review = probe.m4_report(tmp_path / "run" / "m4").review
+    assert any("against spec:L15" in r for r in review) is reviewed
 
 
 # ---- piece 2: M7 -----------------------------------------------------------------------------------
