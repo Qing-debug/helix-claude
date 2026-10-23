@@ -9,6 +9,7 @@ import math
 from enum import StrEnum
 
 import networkx as nx
+from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.controller.node import Node
@@ -82,14 +83,14 @@ class RouteGraph:
         if path_graph.graph.number_of_nodes() == 0:
             return Failure("path graph has no nodes; call buildGraph() first")
         nodes = list(path_graph.node_map.values())
-        if set(path_graph.graph.nodes()) != set(nodes) or len(nodes) != len(path_graph.node_map):
+        if set(path_graph.graph.nodes()) != set(nodes):
             return Failure("path graph nodes do not match its node_map")
 
         align_px = path_graph.edge_y_alignment_allowance
         reach_h = path_graph.max_horizontal_traversal_dist
         reach_v = path_graph.max_vertical_traversal_dist
         terrain_result = infer_terrain(nodes, align_px, reach_h, reach_v, params)
-        if isinstance(terrain_result, Failure):
+        if not is_successful(terrain_result):
             return Failure(f"terrain inference failed: {terrain_result.failure()}")
         terrain = terrain_result.unwrap()
 
