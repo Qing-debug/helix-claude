@@ -36,6 +36,10 @@ MID_RIGHT = (105, 42)
 FLOOR_MID = (82, 60)
 FLOOR_LEFT = (48, 61)
 
+# A virtual-time guard for the legs that should be reached: a regression that never arrives ends TIMED_OUT and fails
+# the REACHED assertion, rather than looping forever on the SimClock and hanging the suite.
+GUARDED = WalkerConfig(use_stimulus=False, leg_timeout_s=120.0)
+
 
 @dataclass
 class FF2:
@@ -141,7 +145,7 @@ def _leg(rig, ff2, src_xy, dst_xy, lap=1, leg=0):
 
 
 def test_1_slope_leg_walks_right_across_the_slope(ff2):
-    rig = _rig(ff2, TOP_LEFT)
+    rig = _rig(ff2, TOP_LEFT, config=GUARDED)
 
     rec = _leg(rig, ff2, TOP_LEFT, TOP_RIGHT)
 
@@ -151,7 +155,7 @@ def test_1_slope_leg_walks_right_across_the_slope(ff2):
 
 
 def test_2_teleport_down_then_walk_reaches_within_two_px(ff2):
-    rig = _rig(ff2, TOP_RIGHT)
+    rig = _rig(ff2, TOP_RIGHT, config=GUARDED)
 
     rec = _leg(rig, ff2, TOP_RIGHT, MID_RIGHT)
 
@@ -166,7 +170,7 @@ def test_2_teleport_down_then_walk_reaches_within_two_px(ff2):
 @pytest.mark.parametrize("i", range(7))
 def test_3_every_rotation_leg_is_reached_with_noise_off(ff2, i):
     src, dst = ff2.rotation[i], ff2.rotation[(i + 1) % len(ff2.rotation)]
-    rig = _rig(ff2, src.minimap_position)
+    rig = _rig(ff2, src.minimap_position, config=GUARDED)
 
     rec = rig.walker.walk_leg(1, i, src, dst)
 
