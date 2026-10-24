@@ -197,6 +197,44 @@ def test_opening_an_existing_directory_appends(tmp_path):
     assert len(laps_after) == 2 and laps_after[:1] == laps_before
 
 
+def test_opening_a_file_with_a_torn_last_line_starts_a_new_line(tmp_path):
+    # B11-D1: a crash can leave a line without its newline; the next session's first record must not be glued to it.
+    first = JsonlLegLog.open(tmp_path).unwrap()
+    first.write_leg(_leg(leg=0))
+    first.write_lap(_lap(lap=1))
+    first.close()
+    for name in ("legs.jsonl", "laps.jsonl"):
+        with (tmp_path / name).open("ab") as f:
+            f.write(b'{"type": "leg", "lap": 1, "le')  # torn mid-record, no newline
+
+    second = JsonlLegLog.open(tmp_path).unwrap()
+    assert is_successful(second.write_leg(_leg(leg=1)))
+    assert is_successful(second.write_lap(_lap(lap=2)))
+    second.close()
+
+    legs = _lines(tmp_path / "legs.jsonl")
+    assert len(legs) == 3 and legs[1].startswith('{"type": "leg", "lap": 1, "le')
+    assert [json.loads(legs[0])["leg"], json.loads(legs[2])["leg"]] == [0, 1]  # the torn line is its own line
+    laps = _lines(tmp_path / "laps.jsonl")
+    assert len(laps) == 3 and json.loads(laps[2])["lap"] == 2
+
+
+def test_opening_files_that_are_empty_missing_or_end_in_a_newline_adds_nothing(tmp_path):
+    (tmp_path / "laps.jsonl").write_bytes(b"")  # empty; legs.jsonl is missing
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    log.close()
+    assert (tmp_path / "legs.jsonl").read_bytes() == b""
+    assert (tmp_path / "laps.jsonl").read_bytes() == b""
+
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    log.write_leg(_leg(leg=0))
+    log.close()
+    before = (tmp_path / "legs.jsonl").read_bytes()
+    assert before.endswith(b"\n")
+    JsonlLegLog.open(tmp_path).unwrap().close()  # the last byte is a newline: no extra byte
+    assert (tmp_path / "legs.jsonl").read_bytes() == before
+
+
 # 4. Failures
 
 
@@ -237,6 +275,25 @@ def test_a_record_that_cannot_be_serialised_is_a_failure_and_writes_nothing(tmp_
         result = log.write_leg(bad)
         assert isinstance(result, Failure) and isinstance(result.failure(), str)
         assert (tmp_path / "legs.jsonl").read_bytes() == b""
+        assert is_successful(log.write_leg(_leg()))  # the log still works afterwards
+        assert len(_lines(tmp_path / "legs.jsonl")) == 1
+    finally:
+        log.close()
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nan_and_infinity_are_a_failure_and_write_nothing(tmp_path, bad):
+    # B11-D2: strict JSON; the bare words NaN / Infinity are not JSON.
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    try:
+        entry = dataclasses.replace(_walk_entry(), cost_to_go_s=bad)
+        result = log.write_leg(dataclasses.replace(_leg(), moves=(entry,)))
+        assert isinstance(result, Failure) and isinstance(result.failure(), str)
+        entry = dataclasses.replace(_walk_entry(), walk_ms=bad)
+        assert isinstance(log.write_leg(dataclasses.replace(_leg(), moves=(entry,))), Failure)
+        assert isinstance(log.write_lap(dataclasses.replace(_lap(), end_ns=bad)), Failure)
+        assert (tmp_path / "legs.jsonl").read_bytes() == b""
+        assert (tmp_path / "laps.jsonl").read_bytes() == b""
         assert is_successful(log.write_leg(_leg()))  # the log still works afterwards
         assert len(_lines(tmp_path / "legs.jsonl")) == 1
     finally:

@@ -2,14 +2,15 @@
 
 `JsonlLegLog` appends one JSON object per line to `legs.jsonl` and `laps.jsonl` in one directory. Each record is
 written with one `write` call, then `flush()`, then `os.fsync()` when `fsync` is true, so a crash loses at most the
-record being written. A write that cannot happen (the log is closed, the disk fails, a field is not JSON-serialisable)
-returns `Failure(str)` and never raises; a record that cannot be serialised writes nothing.
+record being written. A write that cannot happen (the log is closed, the disk fails, a field is not JSON-serialisable,
+a float is NaN or infinite) returns `Failure(str)` and never raises; a record that cannot be serialised writes nothing.
 
 Where the plan is silent: the directory (and its parents) is created if missing, `legs.jsonl` and `laps.jsonl` are
 opened for append in binary mode so `\\n` is never turned into `\\r\\n` on Windows, `JsonlLegLog(...)` itself raises
-`OSError` when it cannot open (use `open` for a `Result`), `close` is idempotent, floats are written as `json.dumps`
-writes them (a `nan` or `inf` would be written as the bare words `NaN` / `Infinity`; the planner's costs are finite),
-and a last line left torn by a crash is not repaired when the file is opened again.
+`OSError` when it cannot open (use `open` for a `Result`), `close` is idempotent, the JSON is strict (a `nan` or
+`inf` is refused with `Failure`, since the bare words `NaN` / `Infinity` are not JSON), and when an existing file's last
+byte is not a newline (a line torn by a crash) a newline is written first so the next record starts its own line; the
+torn line itself is left as it is.
 """
 
 import contextlib
@@ -133,6 +134,22 @@ def lap_to_json(rec: LapRecord) -> dict:
     }
 
 
+def _open_for_append(path: Path) -> BinaryIO:
+    """Open `path` for append (binary). If the file ends in a torn line, end that line first (B11-D1)."""
+    handle = path.open("ab")
+    try:
+        if handle.tell() > 0:  # append mode: tell() is the file size
+            with path.open("rb") as reader:
+                reader.seek(-1, os.SEEK_END)
+                if reader.read(1) != b"\n":
+                    handle.write(b"\n")
+                    handle.flush()
+    except OSError:
+        handle.close()
+        raise
+    return handle
+
+
 class JsonlLegLog:
     """Appends leg and lap records to `legs.jsonl` and `laps.jsonl` in `directory` (see the module docstring)."""
 
@@ -141,9 +158,9 @@ class JsonlLegLog:
         directory.mkdir(parents=True, exist_ok=True)
         self._fsync = fsync
         self._closed = False
-        self._legs: BinaryIO = (directory / LEGS_FILE).open("ab")
+        self._legs: BinaryIO = _open_for_append(directory / LEGS_FILE)
         try:
-            self._laps: BinaryIO = (directory / LAPS_FILE).open("ab")
+            self._laps: BinaryIO = _open_for_append(directory / LAPS_FILE)
         except OSError:
             self._legs.close()
             raise
@@ -172,7 +189,8 @@ class JsonlLegLog:
         if self._closed:
             return Failure("the leg log is closed")
         try:
-            line = (json.dumps(obj) + "\n").encode("utf-8")  # serialise first: a bad record writes nothing
+            # serialise first: a bad record writes nothing
+            line = (json.dumps(obj, allow_nan=False) + "\n").encode("utf-8")
             handle.write(line)
             handle.flush()
             if self._fsync:
