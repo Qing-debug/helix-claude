@@ -1081,7 +1081,7 @@ Affects: `src/route/leg_log.py` (`_open_for_append`, used by `JsonlLegLog`), tes
 
 Cost if wrong: one extra byte in a file after a crash; nothing else changes.
 
-Undo: revert the `fix(route): leg log ends a torn last line ...` commit on `p1b-route-walking`.
+Undo: revert the `fix(route): leg log ends a torn last line ...` commit on `p1b-route-walking` (it also carries B11-D2, so this undoes B11-D2 as well).
 
 Pointer: `W/ab/B11/judge.md` (X2 silent area "torn lines"); `W/notes/B11-fix.md`.
 
