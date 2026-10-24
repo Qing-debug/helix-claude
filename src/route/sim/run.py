@@ -139,20 +139,41 @@ def _load_agent(csv_path: Path, character: CharacterClass) -> Result[MapleAgent,
 
 
 def _write_offset_csv(src: Path, dst: Path, k: int, rng: np.random.Generator) -> None:
-    """Copy the CSV's data rows to `dst` with each node's y shifted by `rng.integers(-k, k + 1)`, in file order.
-    `src` has already passed `loadMap`, so every position parses."""
+    """Copy `src` to `dst` with each node's y shifted by `rng.integers(-k, k + 1)`, in file order. The `#` lines
+    (metadata such as `# minimap_size=...`) are copied unchanged, ahead of the header. `src` has already passed
+    `loadMap`, so every position parses."""
     pos_field = CSVParser().CSV_fields["pos_in_minimap"]
     with open(src, newline="") as f:
-        reader = csv.DictReader(line for line in f if not line.lstrip().startswith("#"))
-        fieldnames = reader.fieldnames
-        rows = list(reader)
+        lines = f.read().splitlines()
+    comments = [line for line in lines if line.lstrip().startswith("#")]
+    reader = csv.DictReader(line for line in lines if not line.lstrip().startswith("#"))
+    fieldnames = reader.fieldnames
+    rows = list(reader)
     with open(dst, "w", newline="") as f:
+        for line in comments:
+            f.write(line + "\n")
         writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             x, y = ast.literal_eval(row[pos_field])
             row[pos_field] = str((x, y + int(rng.integers(-k, k + 1))))
             writer.writerow(row)
+
+
+def _load_shifted_agent(map_csv: Path, character: CharacterClass, k: int,
+                        rng: np.random.Generator) -> Result[MapleAgent, str]:
+    """`_load_agent` on a temporary copy of the CSV with each node's y shifted by up to `k`. A temp-dir or file
+    I/O error is a `Failure`."""
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            shifted = Path(tmp) / map_csv.name
+            _write_offset_csv(map_csv, shifted, k, rng)
+            loaded = _load_agent(shifted, character)
+    except OSError as err:
+        return Failure(f"cannot write the node-offset copy of {map_csv}: {err}")
+    if not is_successful(loaded):
+        return Failure(f"with node offsets: {loaded.failure()}")
+    return loaded
 
 
 def _leg_nodes(rotation: Sequence[Node], rec: LegRecord) -> tuple[Node | None, Node]:
@@ -246,13 +267,10 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
     if not csv_rotation:
         return Failure(f"map {map_csv} has no blue node: the rotation is empty")
     if noise.node_offset_px > 0:
-        with tempfile.TemporaryDirectory() as tmp:
-            shifted = Path(tmp) / Path(map_csv).name
-            _write_offset_csv(Path(map_csv), shifted, noise.node_offset_px, rng_world)
-            loaded = _load_agent(shifted, character)
-        if not is_successful(loaded):
-            return Failure(f"with node offsets: {loaded.failure()}")
-        agent = loaded.unwrap()
+        shifted_loaded = _load_shifted_agent(Path(map_csv), character, noise.node_offset_px, rng_world)
+        if not is_successful(shifted_loaded):
+            return Failure(shifted_loaded.failure())
+        agent = shifted_loaded.unwrap()
 
     built = RouteGraph.build(agent.pathGraph, params)
     if not is_successful(built):
