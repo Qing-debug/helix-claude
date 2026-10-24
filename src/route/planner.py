@@ -42,7 +42,7 @@ def _edge_kind(rg: RouteGraph, u: Node, v: Node) -> EdgeKind:
     return rg.graph.edges[u, v]["kind"]
 
 
-def _is_at(rg: RouteGraph, pos: tuple[int, int], node: Node, anchor: Result[Anchor, str]) -> bool:
+def _is_at(rg: RouteGraph, pos: tuple[int, int], node: Node, anchor: Anchor | None) -> bool:
     """The character is at `node`: within `arrive_px` in x, and within `arrive_px` in y or on the node's platform
     (hand-placed nodes may sit a few px above or below the surface the character stands on)."""
     node_x, node_y = node.minimap_position
@@ -51,7 +51,7 @@ def _is_at(rg: RouteGraph, pos: tuple[int, int], node: Node, anchor: Result[Anch
         return False
     if abs(pos[1] - node_y) <= arrive:
         return True
-    return is_successful(anchor) and anchor.unwrap().platform == rg.terrain.platform_index(node)
+    return anchor is not None and anchor.platform == rg.terrain.platform_index(node)
 
 
 def _on_slope_segment(rg: RouteGraph, anchor: Anchor) -> bool:
@@ -78,10 +78,13 @@ def _starts(rg: RouteGraph, pos: tuple[int, int], anchor: Anchor, on_slope: bool
     return starts
 
 
+def _direction(px: int, goal_x: int) -> Key:
+    return Key.RIGHT if goal_x > px else Key.LEFT
+
+
 def _walk(rg: RouteGraph, px: int, goal_x: int) -> Move:
     d = abs(goal_x - px)
-    direction = Key.RIGHT if goal_x > px else Key.LEFT
-    return Move(MoveKind.WALK, direction, min(1000.0 * d / rg.params.walk_px_per_s, rg.params.max_walk_ms))
+    return Move(MoveKind.WALK, _direction(px, goal_x), min(1000.0 * d / rg.params.walk_px_per_s, rg.params.max_walk_ms))
 
 
 def _run(rg: RouteGraph, px: int, goal_x: int) -> Move:
@@ -89,7 +92,7 @@ def _run(rg: RouteGraph, px: int, goal_x: int) -> Move:
     d = abs(goal_x - px)
     p = rg.params
     if p.teleport_s + abs(d - rg.reach_h) / p.walk_px_per_s < d / p.walk_px_per_s:
-        return Move(MoveKind.TELEPORT, Key.RIGHT if goal_x > px else Key.LEFT, None)
+        return Move(MoveKind.TELEPORT, _direction(px, goal_x), None)
     return _walk(rg, px, goal_x)
 
 
@@ -126,14 +129,14 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
         return Failure(f"target {target.minimap_position!r} is not in the route graph")
     px, py = pos
     anchor_result = attach(rg, pos)
+    anchor = anchor_result.value_or(None)
 
     # P1
-    if _is_at(rg, pos, target, anchor_result):
+    if _is_at(rg, pos, target, anchor):
         return Success(Decision(None, 0.0, None))
     # P2
-    if not is_successful(anchor_result):
+    if anchor is None:
         return Failure(anchor_result.failure())
-    anchor = anchor_result.unwrap()
 
     # P3: the cheapest start, ties left before right
     on_slope = _on_slope_segment(rg, anchor)
@@ -146,12 +149,15 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
         tx, ty = target.minimap_position
         return Failure(f"no path from ({px}, {py}) to ({tx}, {ty})")
     total, start = min(candidates, key=lambda c: c[0])
-    path = rg.path(start, target).unwrap()  # cost_to succeeded, so a path exists
+    path_result = rg.path(start, target)
+    if not is_successful(path_result):  # cost_to succeeded on the same graph, so this does not happen
+        return Failure(path_result.failure())
+    path = path_result.unwrap()
 
     # P4: on a slope segment the goal is the start itself, otherwise the end of the WALK run from the start
     gi = 0 if on_slope else _walk_run_end(rg, path, 0)
     g = path[gi]
-    if not _is_at(rg, pos, g, anchor_result):
+    if not _is_at(rg, pos, g, anchor):
         move = _walk(rg, px, g.minimap_position[0]) if on_slope else _run(rg, px, g.minimap_position[0])
         return Success(Decision(move, total, g))
 
