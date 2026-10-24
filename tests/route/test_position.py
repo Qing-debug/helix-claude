@@ -4,7 +4,8 @@ reports a missing or stale frame, and runs the locator on a copy of each new fra
 The shared object is a fake: `threading.Lock` cannot be subclassed on Python 3.14, so `TrackingLock` wraps one,
 counts its acquires and says whether it is held. `SpyLocator` records whether that lock was held when `locate` ran.
 Test 3 runs the real `CharacterLocator` on a synthetic frame built as in test_character.py; it says nothing about
-accuracy on a real minimap. Tests 1-5 are the plan's five; 6 and 7 pin the copy and the unchanged result.
+accuracy on a real minimap. Tests 1-5 are the plan's five; 6 and 7 pin the copy and the unchanged result; 8 pins the choice the module
+docstring documents (a None read keeps the last frame). Tests 3 and 6 are parametrised.
 """
 
 import threading
@@ -134,14 +135,14 @@ def test_2_the_same_array_twice_is_stale_the_second_time():
     assert len(spy.frames) == 2
 
 
-def test_3_a_new_array_with_the_icon_pasted_gives_its_position(locator):
+@pytest.mark.parametrize("seed", range(10))
+def test_3_a_new_array_with_the_icon_pasted_gives_its_position(locator, seed):
     shared, spy, source = _source(real=locator)
-    rng = np.random.default_rng(3)
-    for seed in range(10):
-        x, y = int(rng.integers(0, FRAME_W - ICON_W + 1)), int(rng.integers(0, FRAME_H - ICON_H + 1))
-        shared.minimap_frame = _frame(seed, x, y)
-        assert source.read() == Success((x + CENTRE_DX, y + CENTRE_DY)), f"seed {seed} at {(x, y)}"
-    assert len(spy.frames) == 10
+    rng = np.random.default_rng([3, seed])
+    x, y = int(rng.integers(0, FRAME_W - ICON_W + 1)), int(rng.integers(0, FRAME_H - ICON_H + 1))
+    shared.minimap_frame = _frame(seed, x, y)
+    assert source.read() == Success((x + CENTRE_DX, y + CENTRE_DY)), f"icon at {(x, y)}"
+    assert len(spy.frames) == 1
 
 
 def test_4_locate_never_runs_while_the_lock_is_held(locator):
@@ -168,16 +169,16 @@ def test_5_one_lock_acquire_per_read():
         assert not lock.held()
 
 
-def test_6_locate_gets_a_copy_and_its_result_is_returned_unchanged():
-    for answer in (Success((7, 9)), Failure("miss"), Failure("ambiguous")):
-        shared, spy, source = _source(result=answer)
-        frame = _frame(6, 50, 40)
-        shared.minimap_frame = frame
-        assert source.read() is answer
-        (got,) = spy.frames
-        assert got is not frame
-        assert not np.shares_memory(got, frame)
-        assert np.array_equal(got, frame)
+@pytest.mark.parametrize("answer", [Success((7, 9)), Failure("miss"), Failure("ambiguous")], ids=str)
+def test_6_locate_gets_a_copy_and_its_result_is_returned_unchanged(answer):
+    shared, spy, source = _source(result=answer)
+    frame = _frame(6, 50, 40)
+    shared.minimap_frame = frame
+    assert source.read() is answer
+    (got,) = spy.frames
+    assert got is not frame
+    assert not np.shares_memory(got, frame)
+    assert np.array_equal(got, frame)
 
 
 def test_7_the_copy_is_taken_under_the_lock():
@@ -185,12 +186,27 @@ def test_7_the_copy_is_taken_under_the_lock():
     lock = shared.minimap_frame_lock
     held_at_copy = []
 
-    class CopyRecordingFrame:
-        def copy(self):
+    class CopyRecordingFrame(np.ndarray):  # a real array, so a type check in `read` would not break this test
+        def copy(self, *args, **kwargs):
             held_at_copy.append(lock.held())
-            return _frame(7)
+            return np.asarray(self).copy()
 
-    shared.minimap_frame = CopyRecordingFrame()
+    shared.minimap_frame = _frame(7).view(CopyRecordingFrame)
     source.read()
     assert held_at_copy == [True]
     assert spy.held == [False]
+
+
+def test_8_a_none_read_does_not_forget_the_last_frame():
+    shared, spy, source = _source()
+    frame = _frame(8)
+    shared.minimap_frame = frame
+    assert source.read() == Success((1, 2))
+    shared.minimap_frame = None
+    assert source.read() == Failure("no frame")
+    shared.minimap_frame = frame  # the same object coming back after a None is still stale
+    assert source.read() == Failure(STALE)
+    assert len(spy.frames) == 1
+    shared.minimap_frame = _frame(9)
+    assert source.read() == Success((1, 2))
+    assert len(spy.frames) == 2
