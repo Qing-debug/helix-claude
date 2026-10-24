@@ -3,7 +3,8 @@
 `RouteWalker.walk_leg` reads the character's position, asks the planner for the next move toward the leg's target,
 plays it through the input layer, waits for the character to settle, and repeats from the measured position until
 the target is reached, the leg times out, the stop flag is set, or the link is down. It also counts position misses,
-off-graph positions and stalls (no new best cost-to-go for `stall_s`). `run` and `stop_now` are B13.
+off-graph positions and stalls (no new best cost-to-go for `stall_s`). `run` cycles the rotation in laps and writes
+the leg and lap records; `stop_now` stops it from another thread (plan task B13, contract C10, decision PB-D4).
 
 Where the plan is silent:
 - `MoveEntry.t_ns` is the clock reading taken right after the position read that the move was planned from, the same
@@ -14,10 +15,19 @@ Where the plan is silent:
   consecutive successful reads" compares each successful read with the previous successful read of the same settle.
 - A leg's stop flag is checked before every settle poll, not during the `min_settle_s` sleep, so a stop is noticed
   within `min_settle_s`.
-- `walk_leg` returns its `LegRecord` and does not write it: B13's `run` writes the leg records to the sink.
+- `walk_leg` returns its `LegRecord` and does not write it: `run` writes the leg records to the sink.
+- `run` is one-shot: the stop flag and the "run finished" flag are never cleared, so a walker runs once. A stop
+  before `run` starts ends it at the first leg.
+- `run` releases the keys once on every return path, the empty-rotation `Failure` included (nothing was sent, so the
+  call is harmless), and also when an exception leaves it.
+- A sink `Failure` is printed to stderr once per run, the first one, whether it came from `write_leg` or `write_lap`.
+- A lap record's `start_ns` is its first leg's `start_ns` and its `end_ns` is its last leg's `end_ns`; a leg that
+  ends `STOPPED` or `LINK_DOWN` is written to the sink and counted in `RunSummary.legs`, its lap is not.
+- `max_laps` of 0 (or less) walks the approach leg only and returns reason `"max_laps"`.
 """
 
 import math
+import sys
 import threading
 import time
 from collections.abc import Sequence
@@ -26,12 +36,12 @@ from typing import Protocol
 
 import numpy as np
 from returns.pipeline import is_successful
-from returns.result import Result
+from returns.result import Failure, Result, Success
 
 from src.controller.node import Node
 from src.input.input_layer import InputLayer
 from src.input.link import InputError
-from src.route.leg_log import LegOutcome, LegRecord, LegSink, MoveEntry
+from src.route.leg_log import LapRecord, LegOutcome, LegRecord, LegSink, MoveEntry
 from src.route.moves import execute
 from src.route.planner import next_move
 from src.route.route_graph import RouteGraph
@@ -40,6 +50,8 @@ STALE = "stale"  # the PositionSource Failure that means "no new frame yet"; any
 
 _NS_PER_S = 1_000_000_000
 _LINK_DOWN = frozenset({InputError.LINK_LOST, InputError.NOT_CONNECTED})
+_GUARD_PERIOD_S = 0.05  # the stop guard sends release_all this often, in wall time (PB-D4)
+_GUARD_JOIN_S = 1.0     # how long run waits for the stop guard to end
 
 
 class Clock(Protocol):
@@ -96,7 +108,11 @@ class RouteWalker:
         self._sink = sink
         self._rng = rng
         self._config = config
-        self._stop = threading.Event()  # set by B13's stop_now; walk_leg only reads it
+        self._stop = threading.Event()  # set by stop_now; walk_leg only reads it
+        self._finished = threading.Event()  # "run finished": set once run is about to return
+        self._lock = threading.Lock()  # makes "start the stop guard" and "set run finished" one step each
+        self._guard: threading.Thread | None = None
+        self._sink_failure_printed = False
 
     def walk_leg(self, lap: int, leg: int, src: Node | None, dst: Node) -> LegRecord:
         """Walk from the character's current position to `dst`; the record says how the leg ended."""
@@ -187,6 +203,77 @@ class RouteWalker:
             stalls=stalls,
         )
 
+    def run(self) -> Result[RunSummary, str]:
+        """Walk the approach leg (lap 0), then laps 1, 2, ... of the rotation until stopped, the link is down or
+        `max_laps` laps are done. Returns `Failure` for an empty rotation."""
+        try:
+            if not self._rotation:
+                return Failure("rotation is empty: there is no first node to walk to")
+            return Success(self._run_laps())
+        finally:
+            try:
+                self._layer.release_all()
+            finally:
+                with self._lock:
+                    self._finished.set()
+                    guard = self._guard
+                if guard is not None:
+                    guard.join(timeout=_GUARD_JOIN_S)
+
+    def stop_now(self) -> None:
+        """Stop the run from any thread, any number of times: the walker sees the flag at its next check, the keys
+        are released now (cutting a `play` in flight), and a daemon guard thread keeps releasing them every 50 ms
+        until `run` has finished, so a move that starts inside `InputLayer`'s reaction wait is cut too (PB-D4)."""
+        self._stop.set()
+        self._layer.release_all()
+        with self._lock:
+            if self._guard is None and not self._finished.is_set():
+                self._guard = threading.Thread(target=self._guard_loop, name="route-stop-guard", daemon=True)
+                self._guard.start()
+
+    def _guard_loop(self) -> None:
+        while True:
+            time.sleep(_GUARD_PERIOD_S)
+            if self._finished.is_set():
+                return
+            self._layer.release_all()
+
+    def _run_laps(self) -> RunSummary:
+        rotation = self._rotation
+        n = len(rotation)
+        self._sink_failure_printed = False
+        legs = laps = 0
+
+        record = self.walk_leg(0, 0, None, rotation[0])
+        self._log(self._sink.write_leg(record))
+        legs += 1
+        if record.outcome in (LegOutcome.STOPPED, LegOutcome.LINK_DOWN):
+            return RunSummary(laps, legs, _reason(record))
+
+        lap = 1
+        while self._config.max_laps is None or lap <= self._config.max_laps:
+            lap_start_ns = 0
+            all_reached = True
+            for i in range(n):
+                record = self.walk_leg(lap, i, rotation[i], rotation[(i + 1) % n])
+                if i == 0:
+                    lap_start_ns = record.start_ns
+                self._log(self._sink.write_leg(record))
+                legs += 1
+                if record.outcome in (LegOutcome.STOPPED, LegOutcome.LINK_DOWN):
+                    return RunSummary(laps, legs, _reason(record))
+                all_reached = all_reached and record.outcome == LegOutcome.REACHED
+            self._log(self._sink.write_lap(LapRecord(lap, lap_start_ns, record.end_ns, n, all_reached)))
+            laps += 1
+            lap += 1
+        return RunSummary(laps, legs, "max_laps")
+
+    def _log(self, written: Result[None, str]) -> None:
+        """A sink `Failure` is reported once per run and the walk goes on."""
+        if not is_successful(written) and not self._sink_failure_printed:
+            self._sink_failure_printed = True
+            print(f"leg log write failed (not reported again this run): {written.failure()}", file=sys.stderr)
+
     def _settle(self) -> tuple[tuple[int, int] | None, bool]:
         """Wait for the character to stop moving after a move.
 
@@ -211,3 +298,8 @@ class RouteWalker:
                 last = current
             clock.sleep(params.poll_s)
         return last, False
+
+
+def _reason(record: LegRecord) -> str:
+    """The `RunSummary.reason` for a leg that ends the run."""
+    return "stopped" if record.outcome == LegOutcome.STOPPED else "link_down"
