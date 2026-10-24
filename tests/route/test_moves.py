@@ -1,4 +1,7 @@
-"""Tests for src.route.moves (plan task B8; contract C8): `execute` makes exactly one layer call and returns its Result."""
+"""Tests for src.route.moves (plan task B8; contract C8).
+
+`execute` makes exactly one layer call and returns its Result.
+"""
 
 import pytest
 from returns.result import Failure, Success
@@ -75,7 +78,7 @@ class FakeLink:
 
 
 class RecordingLayer:
-    """Stands in for InputLayer: records each call with its arguments and returns a distinct sentinel per method."""
+    """Stands in for InputLayer: records each call, returns a distinct sentinel per method."""
 
     def __init__(self):
         self.calls = []
@@ -99,9 +102,9 @@ class RecordingLayer:
 @pytest.mark.parametrize(
     "move, expected",
     [
-        (WALK, lambda s: [("walk", Key.LEFT, 750.0, s)]),
-        (TELEPORT_UP, lambda s: [("teleport", Key.UP, s)]),
-        (DROP, lambda s: [("drop", s)]),
+        (WALK, lambda s: ("walk", Key.LEFT, 750.0, s)),
+        (TELEPORT_UP, lambda s: ("teleport", Key.UP, s)),
+        (DROP, lambda s: ("drop", s)),
     ],
     ids=["walk", "teleport", "drop"],
 )
@@ -110,7 +113,7 @@ def test_each_kind_makes_exactly_one_call_with_its_arguments(move, expected, sti
 
     execute(layer, move, stimulus_ns)
 
-    assert layer.calls == expected(stimulus_ns)
+    assert layer.calls == [expected(stimulus_ns)]
 
 
 @pytest.mark.parametrize("move, name", [(WALK, "walk"), (TELEPORT_UP, "teleport"), (DROP, "drop")],
