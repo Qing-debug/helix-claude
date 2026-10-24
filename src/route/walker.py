@@ -109,9 +109,8 @@ class RouteWalker:
         last_progress = start_ns
         entries: list[MoveEntry] = []
         misses = off_graph = stalls = 0
-        outcome: LegOutcome | None = None
 
-        while outcome is None:
+        while True:
             if self._stop.is_set():  # 1
                 outcome = LegOutcome.STOPPED
                 break
@@ -172,6 +171,7 @@ class RouteWalker:
             entries.append(replace(entry, settled=settled))
             if stopped:
                 outcome = LegOutcome.STOPPED
+                break
 
         return LegRecord(
             lap=lap,
