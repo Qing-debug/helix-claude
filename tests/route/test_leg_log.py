@@ -300,6 +300,101 @@ def test_nan_and_infinity_are_a_failure_and_write_nothing(tmp_path, bad):
         log.close()
 
 
+@pytest.mark.parametrize("field,value", [("outcome", "reached"), ("dst", None)])
+def test_a_wrong_typed_leg_record_is_a_failure_and_writes_nothing(tmp_path, field, value):
+    # B11-fix-2 F1: the conversion to JSON is inside the guarded path, so a wrong type is a Failure, not a raise.
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    try:
+        result = log.write_leg(dataclasses.replace(_leg(), **{field: value}))
+        assert isinstance(result, Failure) and isinstance(result.failure(), str)
+        assert (tmp_path / "legs.jsonl").read_bytes() == b""
+        assert is_successful(log.write_leg(_leg()))  # the log still works afterwards
+        assert len(_lines(tmp_path / "legs.jsonl")) == 1
+    finally:
+        log.close()
+
+
+def test_a_wrong_typed_lap_record_is_a_failure_and_writes_nothing(tmp_path):
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    try:
+        result = log.write_lap(dataclasses.replace(_lap(), end_ns=None))
+        assert isinstance(result, Failure) and isinstance(result.failure(), str)
+        assert (tmp_path / "laps.jsonl").read_bytes() == b""
+        assert is_successful(log.write_lap(_lap()))
+        assert len(_lines(tmp_path / "laps.jsonl")) == 1
+    finally:
+        log.close()
+
+
+# 4b. _open_for_append failure branch and the torn-only file (B11-D1)
+
+
+def _fail_rb_open(monkeypatch) -> None:
+    real_open = Path.open
+
+    def opener(self, mode="r", *args, **kwargs):
+        if mode == "rb":
+            raise PermissionError("simulated read failure")
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opener)
+
+
+def test_a_failed_read_of_the_last_byte_is_a_failure_and_leaves_the_file_and_handle_clean(tmp_path, monkeypatch):
+    legs = tmp_path / "legs.jsonl"
+    legs.write_bytes(b'{"a": 1}\n{"a": 2')
+    _fail_rb_open(monkeypatch)
+    result = JsonlLegLog.open(tmp_path)
+    assert isinstance(result, Failure) and "simulated read failure" in result.failure()
+    monkeypatch.undo()
+    assert legs.read_bytes() == b'{"a": 1}\n{"a": 2'
+    legs.unlink()  # fails on Windows if the append handle leaked
+
+
+def test_a_failed_write_of_the_repair_newline_is_a_failure_and_leaves_the_file_and_handle_clean(tmp_path, monkeypatch):
+    laps = tmp_path / "laps.jsonl"
+    laps.write_bytes(b'{"a": 2')
+    real_open = Path.open
+    opened: list = []
+
+    class FailingWrite:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def write(self, data):
+            raise OSError(28, "simulated disk full")
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def opener(self, mode="r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if self.name == "laps.jsonl" and mode == "ab":
+            wrapped = FailingWrite(handle)
+            opened.append(handle)
+            return wrapped
+        return handle
+
+    monkeypatch.setattr(Path, "open", opener)
+    result = JsonlLegLog.open(tmp_path)
+    assert isinstance(result, Failure) and "simulated disk full" in result.failure()
+    monkeypatch.undo()
+    assert opened and opened[0].closed
+    assert laps.read_bytes() == b'{"a": 2'
+    laps.unlink()
+    (tmp_path / "legs.jsonl").unlink()  # the first file was closed too
+
+
+def test_a_file_that_is_only_a_torn_line_gets_a_newline_then_the_new_record(tmp_path):
+    (tmp_path / "legs.jsonl").write_bytes(b'{"a"')
+    log = JsonlLegLog.open(tmp_path).unwrap()
+    assert (tmp_path / "legs.jsonl").read_bytes() == b'{"a"\n'
+    assert is_successful(log.write_leg(_leg(leg=5)))
+    log.close()
+    lines = _lines(tmp_path / "legs.jsonl")
+    assert len(lines) == 2 and lines[0] == '{"a"' and json.loads(lines[1])["leg"] == 5
+
+
 # 5. fsync
 
 

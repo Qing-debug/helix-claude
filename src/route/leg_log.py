@@ -3,7 +3,8 @@
 `JsonlLegLog` appends one JSON object per line to `legs.jsonl` and `laps.jsonl` in one directory. Each record is
 written with one `write` call, then `flush()`, then `os.fsync()` when `fsync` is true, so a crash loses at most the
 record being written. A write that cannot happen (the log is closed, the disk fails, a field is not JSON-serialisable,
-a float is NaN or infinite) returns `Failure(str)` and never raises; a record that cannot be serialised writes nothing.
+a float is NaN or infinite, a field has the wrong type) returns `Failure(str)` and never raises; a record that cannot
+be converted or serialised writes nothing.
 
 Where the plan is silent: the directory (and its parents) is created if missing, `legs.jsonl` and `laps.jsonl` are
 opened for append in binary mode so `\\n` is never turned into `\\r\\n` on Windows, `JsonlLegLog(...)` itself raises
@@ -19,7 +20,7 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import Any, BinaryIO, Callable, Protocol
 
 from returns.result import Failure, Result, Success
 
@@ -173,10 +174,10 @@ class JsonlLegLog:
             return Failure(f"cannot open the leg log in {directory}: {e}")
 
     def write_leg(self, rec: LegRecord) -> Result[None, str]:
-        return self._append(self._legs, leg_to_json(rec))
+        return self._append(self._legs, leg_to_json, rec, "leg")
 
     def write_lap(self, rec: LapRecord) -> Result[None, str]:
-        return self._append(self._laps, lap_to_json(rec))
+        return self._append(self._laps, lap_to_json, rec, "lap")
 
     def close(self) -> None:
         """Close both files. Every record was flushed when written, so a failing close loses nothing."""
@@ -185,16 +186,16 @@ class JsonlLegLog:
             with contextlib.suppress(OSError):
                 handle.close()
 
-    def _append(self, handle: BinaryIO, obj: dict) -> Result[None, str]:
+    def _append(self, handle: BinaryIO, convert: Callable[[Any], dict], rec: Any, kind: str) -> Result[None, str]:
         if self._closed:
             return Failure("the leg log is closed")
         try:
-            # serialise first: a bad record writes nothing
-            line = (json.dumps(obj, allow_nan=False) + "\n").encode("utf-8")
+            # convert and serialise first: a bad record writes nothing
+            line = (json.dumps(convert(rec), allow_nan=False) + "\n").encode("utf-8")
             handle.write(line)
             handle.flush()
             if self._fsync:
                 os.fsync(handle.fileno())
-        except (OSError, TypeError, ValueError) as e:
-            return Failure(f"cannot write the {obj.get('type', 'record')} record: {e}")
+        except (OSError, TypeError, ValueError, AttributeError) as e:
+            return Failure(f"cannot write the {kind} record: {e}")
         return Success(None)
