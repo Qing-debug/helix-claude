@@ -252,18 +252,16 @@ class RouteWalker:
 
         lap = 1
         while self._config.max_laps is None or lap <= self._config.max_laps:
-            lap_start_ns = 0
-            all_reached = True
+            records: list[LegRecord] = []
             for i in range(n):
                 record = self.walk_leg(lap, i, rotation[i], rotation[(i + 1) % n])
-                if i == 0:
-                    lap_start_ns = record.start_ns
+                records.append(record)
                 self._log(self._sink.write_leg(record))
                 legs += 1
                 if record.outcome in (LegOutcome.STOPPED, LegOutcome.LINK_DOWN):
                     return RunSummary(laps, legs, _reason(record))
-                all_reached = all_reached and record.outcome == LegOutcome.REACHED
-            self._log(self._sink.write_lap(LapRecord(lap, lap_start_ns, record.end_ns, n, all_reached)))
+            all_reached = all(r.outcome == LegOutcome.REACHED for r in records)
+            self._log(self._sink.write_lap(LapRecord(lap, records[0].start_ns, records[-1].end_ns, n, all_reached)))
             laps += 1
             lap += 1
         return RunSummary(laps, legs, "max_laps")
