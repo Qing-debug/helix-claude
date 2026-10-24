@@ -36,7 +36,6 @@ FLOOR_RIGHT = (113, 60)  # rotation[0]
 FLOOR_MID = (82, 60)
 TOP_LEFT = (49, 28)
 TOP_RIGHT = (101, 24)
-GUARD_THREAD = "route-stop-guard"
 
 # Virtual-time guard for the sim runs that should finish: a leg that never arrives ends TIMED_OUT and fails the
 # assertions, rather than looping forever on the SimClock.
@@ -166,8 +165,9 @@ def _real_time_rig(ff2, config, link):
     return _walker(ff2, layer, positions, RealClock(), config, sink), sink, releases
 
 
-def _guard_threads():
-    return [t for t in threading.enumerate() if t.name == GUARD_THREAD and t.is_alive()]
+def _new_threads(before):
+    """Threads alive now that were not in the `before` snapshot (the stop guard is a thread the walker starts)."""
+    return [t for t in threading.enumerate() if t not in before and t.is_alive()]
 
 
 # --- the plan's tests -------------------------------------------------------------------------------------
@@ -212,6 +212,7 @@ def test_2_stop_from_another_thread_cuts_a_play_in_flight(ff2):
 
 
 def test_3_stop_during_the_reaction_wait(ff2, monkeypatch):
+    threads_before = set(threading.enumerate())
     link = BlockingLink()
     config = WalkerConfig(use_stimulus=True, leg_timeout_s=10.0, max_laps=1)
     walker, sink, releases = _real_time_rig(ff2, config, link)
@@ -248,7 +249,7 @@ def test_3_stop_during_the_reaction_wait(ff2, monkeypatch):
     count = releases.count
     real_sleep(0.2)
     assert releases.count == count, "release_all was called after run returned"
-    assert _guard_threads() == []
+    assert _new_threads(threads_before) == []
 
 
 def test_4_link_lost_ends_the_run_as_link_down(ff2):
@@ -315,15 +316,23 @@ def test_7_a_timed_out_leg_does_not_end_the_run(ff2):
     assert lap.legs == 7 and lap.all_reached is False
 
 
-def test_8_release_all_counts(ff2):
+def test_8a_release_all_once_when_the_run_ends_at_max_laps(ff2):
     done = _sim(ff2, FLOOR_RIGHT, config=replace(SIM, max_laps=1))
+
     assert is_successful(done.walker.run())
+
     assert done.releases.count == 1
 
+
+def test_8b_release_all_once_when_the_link_goes_down(ff2):
     down = _sim(ff2, FLOOR_RIGHT, wrap_link=LinkLostOnPlay5)
+
     assert down.walker.run().unwrap().reason == "link_down"
+
     assert down.releases.count == 1
 
+
+def test_8c_release_all_counts_when_stopped_and_stays_quiet_afterwards(ff2):
     link = BlockingLink()
     config = WalkerConfig(use_stimulus=False, leg_timeout_s=10.0, max_laps=1)
     walker, _, releases = _real_time_rig(ff2, config, link)
@@ -376,6 +385,7 @@ def test_the_empty_rotation_return_path_also_releases_once(ff2):
 
 
 def test_a_stop_before_run_ends_the_run_at_the_approach_leg(ff2):
+    threads_before = set(threading.enumerate())
     rig = _sim(ff2, FLOOR_MID)
 
     rig.walker.stop_now()
@@ -386,27 +396,29 @@ def test_a_stop_before_run_ends_the_run_at_the_approach_leg(ff2):
     assert leg.outcome == LegOutcome.STOPPED and leg.moves == ()
     assert rig.link.plays == 0
     assert rig.releases.count >= 2  # stop_now, then the end of run
-    assert _guard_threads() == []
+    assert _new_threads(threads_before) == []
 
 
 def test_stop_now_twice_starts_one_guard_and_run_joins_it(ff2):
+    threads_before = set(threading.enumerate())
     rig = _sim(ff2, FLOOR_MID)
 
     rig.walker.stop_now()
     rig.walker.stop_now()
-    assert len(_guard_threads()) == 1
+    assert len(_new_threads(threads_before)) == 1
     rig.walker.run()
 
-    assert _guard_threads() == []
+    assert _new_threads(threads_before) == []
 
 
 def test_stop_now_after_run_finished_starts_no_guard(ff2):
     rig = _sim(ff2, FLOOR_RIGHT, config=replace(SIM, max_laps=1))
     assert is_successful(rig.walker.run())
+    threads_before = set(threading.enumerate())
 
     rig.walker.stop_now()
 
-    assert _guard_threads() == []
+    assert _new_threads(threads_before) == []
 
 
 def test_a_sink_that_fails_on_laps_too_is_still_printed_once_per_run(ff2, capsys):
@@ -422,7 +434,18 @@ def test_a_sink_that_fails_on_laps_too_is_still_printed_once_per_run(ff2, capsys
     assert rig.walker.run() == Success(RunSummary(2, 15, "max_laps"))
 
     out, err = capsys.readouterr()
-    assert len((out + err).strip().splitlines()) == 1
+    assert (out + err).count("leg write failed") == 1
+    assert "lap write failed" not in out + err
+
+
+def test_a_lap_record_spans_its_first_leg_start_to_its_last_leg_end(ff2):
+    rig = _sim(ff2, FLOOR_RIGHT, config=replace(SIM, max_laps=2))
+
+    assert is_successful(rig.walker.run())
+
+    for lap in rig.sink.laps:
+        legs = [r for r in rig.sink.legs if r.lap == lap.lap]
+        assert (lap.start_ns, lap.end_ns) == (legs[0].start_ns, legs[-1].end_ns)
 
 
 def test_a_timed_out_approach_leg_moves_on_to_the_laps(ff2):
