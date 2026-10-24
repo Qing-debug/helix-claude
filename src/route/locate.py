@@ -75,13 +75,17 @@ def _beyond_end(rg: RouteGraph, px: int, py: int) -> Anchor | None:
             (px - zx, zy, Anchor(None, index, last, None)),
         )
         for dx, y, anchor in candidates:
-            if 0 < dx <= rg.reach_h and abs(py - y) <= rg.params.attach_y_px and (best is None or dx < best_dx):
+            within_reach = 0 < dx <= rg.reach_h
+            if within_reach and abs(py - y) <= rg.params.attach_y_px and (best is None or dx < best_dx):
                 best, best_dx = anchor, dx
     return best
 
 
 def attach(rg: RouteGraph, pos: tuple[int, int]) -> Result[Anchor, str]:
-    """Anchor a measured minimap position `pos` to `rg`, or `Failure("off-graph: (x, y)")` when no rule applies."""
+    """Anchor a measured minimap position `pos` to `rg`.
+
+    Returns `Failure("off-graph: (x, y)")` when no rule applies.
+    """
     px, py = pos
     for rule in (_on_node, _on_segment, _beyond_end):
         anchor = rule(rg, px, py)
