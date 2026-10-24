@@ -1068,3 +1068,35 @@ Cost if wrong: two more exit codes and a few test cases for the B19 builder; a g
 Undo: revert the `docs(plan): amend B19 ...` commit on `p1b-route-walking`.
 
 Pointer: ledger.md:854 (ruling); notes/PB-amend.md; PB-ladder-report.md §4.
+
+## B11-D1 (2026-10-24): the leg log ends a torn last line before it appends
+
+Question: when the leg log opens an existing `legs.jsonl` or `laps.jsonl` whose last line a crash left without its newline, should it leave the file alone (so the next session's first record is glued to the torn line and both are lost), or write a newline first?
+
+Ruling [Hong]: option A: "when the log opens an existing file whose last byte is not `\n`, it writes a `\n` first". Empty or missing files are unchanged.
+
+Reason: contract C9 says a crash loses at most the record being written. Gluing the next session's first record onto a torn line loses a second, whole record.
+
+Affects: `src/route/leg_log.py` (`_open_for_append`, used by `JsonlLegLog`), tests in `tests/route/test_leg_log.py`. The torn line itself stays in the file as its own (unparseable) line, so a Feature D reader must skip a line that does not parse.
+
+Cost if wrong: one extra byte in a file after a crash; nothing else changes.
+
+Undo: revert the `fix(route): leg log ends a torn last line ...` commit on `p1b-route-walking`.
+
+Pointer: `W/ab/B11/judge.md` (X2 silent area "torn lines"); `W/notes/B11-fix.md`.
+
+## B11-D2 (2026-10-24): the leg log writes strict JSON and refuses NaN and infinity
+
+Question: should a leg or lap record with a NaN or infinite float be written as the bare words `NaN` / `Infinity` (the `json.dumps` default, not valid JSON), or refused with a `Failure`?
+
+Ruling [Hong]: option A: strict JSON. "A record containing NaN or +-Infinity is refused: the write method returns a `Failure` and writes nothing."
+
+Reason: the bare words break any non-Python reader of the log (`jq`, a browser). The refusal uses the `Failure` path the log already has for an unserialisable record.
+
+Affects: `src/route/leg_log.py` (`json.dumps(..., allow_nan=False)` in `JsonlLegLog._append`; the module docstring no longer says NaN is written), tests in `tests/route/test_leg_log.py`. A walker that produced a NaN `walk_ms` or `cost_to_go_s` now gets a `Failure` from `write_leg` / `write_lap` and loses that record.
+
+Cost if wrong: a record with a non-finite float is dropped instead of logged with a non-JSON token.
+
+Undo: revert the same `fix(route): leg log ends a torn last line ...` commit (it carries both decisions).
+
+Pointer: `W/ab/B11/judge.md` (X2 m1; X3 :173 had the same choice); `W/notes/B11-fix.md`.
