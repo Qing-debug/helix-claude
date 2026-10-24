@@ -10,9 +10,9 @@ for display), so the frame is greyed with `COLOR_RGB2GRAY` and the template with
 BGR image that `cv2.imread` returns; both give the same grey for the same colour. `getCharacterCoords`
 (controller.py) uses `TM_CCORR_NORMED`, which does not subtract the mean: a flat background of any
 brightness scores about 0.88 against this icon, so the background and a real match are only about 0.1 apart.
-`TM_CCOEFF_NORMED` subtracts the masked mean from both sides, so background scores about 0.5 and a match
-scores 1.0. The measured scores of both methods on the synthetic frames of tests/route/test_character.py
-are in the B15 commit body.
+`TM_CCOEFF_NORMED` subtracts the masked mean from both sides, so background scores up to about 0.6 (0.44 to
+0.62 on the synthetic frames) and a match scores 1.0. The measured scores of both methods on the synthetic
+frames of tests/route/test_character.py are in the B15 commit body.
 """
 
 from pathlib import Path
@@ -55,13 +55,14 @@ class CharacterLocator:
             raise ValueError("min_score must be in (0, 1]")
         if not min_margin >= 0.0:
             raise ValueError("min_margin must be >= 0")
-        if not (isinstance(exclusion_px, int) and not isinstance(exclusion_px, bool) and exclusion_px >= 0):
+        if not (isinstance(exclusion_px, (int, np.integer)) and not isinstance(exclusion_px, bool)
+                and exclusion_px >= 0):
             raise ValueError("exclusion_px must be an int >= 0")
         self._icon = np.ascontiguousarray(icon_gray).copy()
         self._mask = np.ascontiguousarray(mask).copy()
         self._min_score = float(min_score)
         self._min_margin = float(min_margin)
-        self._exclusion_px = exclusion_px
+        self._exclusion_px = int(exclusion_px)
 
     @classmethod
     def from_files(cls, icon_path: Path, mask_path: Path) -> Result["CharacterLocator", str]:

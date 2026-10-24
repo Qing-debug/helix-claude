@@ -157,7 +157,8 @@ def test_7_flat_frames_are_a_miss_not_an_exception(locator):
 
 def test_8_the_frame_is_read_as_rgb_not_bgr():
     """A red | blue icon greys to 76 | 29 as RGB and to 29 | 76 as BGR; with the channels read the wrong way
-    round the template would correlate at -1 instead of 1. (The real icon is too close to symmetric to show it.)"""
+    round the template would correlate at -1 instead of 1. (The real icon cannot show it: its two greys differ by
+    up to 47 levels under the mask but correlate at 0.9998, so TM_CCOEFF_NORMED scores it about 1 either way.)"""
     icon_rgb = np.zeros((ICON_H, ICON_W, 3), np.uint8)
     icon_rgb[:, :ICON_W // 2] = (255, 0, 0)
     icon_rgb[:, ICON_W // 2:] = (0, 0, 255)
