@@ -159,6 +159,25 @@ def test_out_dir_gets_one_jsonl_line_per_leg_and_lap(tmp_path):
     assert [json.loads(line)["type"] for line in legs] == ["leg"] * report.legs
 
 
+def test_a_missing_map_or_terrain_is_a_failure_not_an_exception(tmp_path):
+    missing_map = run_sim(tmp_path / "no_such_map.csv", TERRAIN, 1, 1)
+    missing_terrain = run_sim(CSV, tmp_path / "no_such_terrain.json", 1, 1)
+    assert not is_successful(missing_map) and missing_map.failure()
+    assert not is_successful(missing_terrain) and missing_terrain.failure()
+
+
+def test_run_counts_are_consistent_with_the_lap_structure():
+    laps = 3
+    rotation_nodes = sum(line.startswith("blue_node") for line in CSV.read_text(encoding="utf-8").splitlines())
+    report = _run(laps)
+    assert report.legs == 1 + laps * rotation_nodes
+    assert report.legs_reached == report.legs
+    assert report.no_ops < report.moves
+    assert report.single_error_legs + report.multi_error_legs <= report.legs
+    assert report.single_error_within_3 <= report.single_error_legs
+    assert report.multi_error_within_bound <= report.multi_error_legs
+
+
 def test_run_module_writes_no_teleport_reach_and_no_map_position():
     source = Path(run_module.__file__).read_text(encoding="utf-8")
     assert re.search(r"(?<![\w.])(19|23)(?![\w.])", source) is None
