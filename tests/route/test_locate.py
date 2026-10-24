@@ -77,10 +77,7 @@ def test_position_between_two_nodes_attaches_to_the_segment_a2(ff2):
 def test_position_two_pixels_from_a_node_attaches_to_the_node_a1(ff2):
     agent, rg = ff2
     n = _node(agent, (105, 42))
-    anchor = _attach(rg, (103, 42))
-    assert anchor.node is n
-    assert anchor.platform == 3
-    assert anchor.left is None and anchor.right is None
+    assert _attach(rg, (103, 42)) == Anchor(node=n, platform=3, left=None, right=None)
 
 
 def test_position_beyond_the_right_end_of_a_platform_a3(ff2):
@@ -191,5 +188,6 @@ def test_same_x_segment_in_a_platform_does_not_break_attach():
     # (10,10) and (10,16) share x and sit on one platform through (0,13) (a slope to each)
     nodes, rg = _synthetic([(0, 13), (10, 10), (10, 16)])
     assert len(rg.terrain.platforms) == 1
+    # pins today's behaviour: the same-x segment is skipped; how it should attach is pending B6-D1
     anchor = _attach(rg, (10, 13))
-    assert anchor.platform == 0
+    assert anchor == Anchor(None, 0, nodes[0], nodes[1])
