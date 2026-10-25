@@ -15,7 +15,7 @@ ignore = ["E741"]                  # ambiguous name `l`: style only
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
-include = ["src"]
+include = ["src", "tests/input/input_fakes.py"]
 exclude = ["src/rune_solver"]
 pythonVersion = "3.14"
 venvPath = "."
