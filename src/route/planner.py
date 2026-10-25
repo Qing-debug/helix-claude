@@ -8,6 +8,7 @@ teleport or a drop. It plans one move at a time; the walker re-plans from the me
 from dataclasses import dataclass
 from enum import StrEnum
 
+import networkx as nx
 import numpy as np
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
@@ -103,6 +104,67 @@ def _walk_run_end(rg: RouteGraph, path: tuple[Node, ...], i: int) -> int:
     return i
 
 
+def _surface_ys(platform: tuple[Node, ...], x: int) -> list[float]:
+    """The y of each piece of `platform` at `x`: the interpolated y of every segment spanning x (both ends of a
+    vertical step), or the node's y for a one-node platform at x."""
+    if len(platform) == 1:
+        node_x, node_y = platform[0].minimap_position
+        return [float(node_y)] if node_x == x else []
+    ys: list[float] = []
+    for p, q in zip(platform, platform[1:]):
+        (lx, ly), (rx, ry) = p.minimap_position, q.minimap_position
+        if not lx <= x <= rx:
+            continue
+        ys.extend((ly, ry) if lx == rx else (ly + (ry - ly) * (x - lx) / (rx - lx),))
+    return ys
+
+
+def _piece_beyond(rg: RouteGraph, x: int, y: int, up: bool, own: int) -> int | None:
+    """Index of the platform nearest to (x, y) straight above it (`up`) or below it, other than platform `own`."""
+    best: tuple[float, int] | None = None
+    for index, platform in enumerate(rg.terrain.platforms):
+        if index == own:
+            continue
+        for surface_y in _surface_ys(platform, x):
+            gap = y - surface_y if up else surface_y - y
+            if gap > 0 and (best is None or gap < best[0]):
+                best = (gap, index)
+    return None if best is None else best[1]
+
+
+def _launch_x(rg: RouteGraph, g: Node, h: Node) -> int | None:
+    """Where the UP/DOWN move g -> h is made from (B14-inv-D1), or None when the planner does not offer it.
+
+    (1) g's platform spans h's x: from h's x. (2) It ends before h's x: from the platform end nearest h, but only if
+    the nearest platform straight above (UP) or below (DOWN) that end is h's platform.
+    """
+    own = rg.terrain.platform_index(g)
+    platform = rg.terrain.platforms[own]
+    hx = h.minimap_position[0]
+    first, last = platform[0], platform[-1]
+    if first.minimap_position[0] <= hx <= last.minimap_position[0]:
+        return hx
+    end = last if hx > last.minimap_position[0] else first
+    ex, ey = end.minimap_position
+    up = _edge_kind(rg, g, h) == EdgeKind.UP
+    if _piece_beyond(rg, ex, ey, up, own) == rg.terrain.platform_index(h):
+        return ex
+    return None
+
+
+def _offered(rg: RouteGraph) -> RouteGraph:
+    """`rg` without the UP/DOWN edges that have no launch point, so no path takes them."""
+    blocked = {
+        (u, v)
+        for u, v, kind in rg.graph.edges(data="kind")
+        if kind in (EdgeKind.UP, EdgeKind.DOWN) and _launch_x(rg, u, v) is None
+    }
+    if not blocked:
+        return rg
+    view = nx.subgraph_view(rg.graph, filter_edge=lambda u, v: (u, v) not in blocked)
+    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params)
+
+
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:
     """P5's DOWN edge: teleport down or drop. Within `ability_mix_band` of each other the two are a coin flip."""
     options = down_options(abs(h.minimap_position[1] - g.minimap_position[1]), bool(g.can_fall), rg.reach_v, rg.params)
@@ -138,7 +200,8 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
     if anchor is None:
         return Failure(anchor_result.failure())
 
-    # P3: the cheapest start, ties left before right
+    # P3: the cheapest start, ties left before right, over the moves the planner offers
+    rg = _offered(rg)
     on_slope = _on_slope_segment(rg, anchor)
     candidates = []
     for start, approach in _starts(rg, pos, anchor, on_slope):
@@ -157,11 +220,21 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
     # P4: on a slope segment the goal is the start itself, otherwise the end of the WALK run from the start
     gi = 0 if on_slope else _walk_run_end(rg, path, 0)
     g = path[gi]
-    if not _is_at(rg, pos, g, anchor):
+    # P4: when g's next edge is UP/DOWN and the character is on g's platform, the goal is that move's launch x
+    # (B14-inv-D1), so the character lines up before it moves; otherwise the goal is g
+    launch = None
+    if gi + 1 < len(path) and anchor.platform == rg.terrain.platform_index(g):
+        h = path[gi + 1]
+        if _edge_kind(rg, g, h) in (EdgeKind.UP, EdgeKind.DOWN):
+            launch = _launch_x(rg, g, h)  # never None here: `_offered` dropped the edges without one
+            if launch is not None and abs(px - launch) > rg.params.arrive_px:
+                move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch)
+                return Success(Decision(move, total, h))
+    if launch is None and not _is_at(rg, pos, g, anchor):
         move = _walk(rg, px, g.minimap_position[0]) if on_slope else _run(rg, px, g.minimap_position[0])
         return Success(Decision(move, total, g))
 
-    # P5: at g (and g is not the target, or P1 would have applied); take the next path edge
+    # P5: at g, or lined up on the launch x of g's UP/DOWN edge (g is not the target, or P1 would have applied)
     h = path[gi + 1]
     kind = _edge_kind(rg, g, h)
     if kind == EdgeKind.SLOPE:
