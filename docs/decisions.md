@@ -1134,3 +1134,19 @@ Cost if wrong: a run with stray keys in the focused window, or a run aborted by 
 Undo: revert the `docs(safety)` commit that adds H15; agents then ask Hong before each live run again.
 
 Pointer: root CLAUDE.md "Safety rules"; `src/input/CLAUDE.md` "Harness tools"; H13.
+
+## H16 (2026-10-26): a map file is checked against the expected format, and the user is told plainly what is wrong
+
+Question: what should happen when a map CSV does not match the format (behaviour issue 7: a file with no header, or a row with an extra cell, crashed the runtime parser with `TypeError`, and the crash left the bad file marked as loaded)?
+
+Ruling [Hong]: fix it. Hong's words (2026-10-26): "Fix, check the map file to ensure it matches what we expect, make it obvious to the user if it isnt what we expect so it can be easily fixed."
+
+As built: `map_format.read_rows` checks the whole file before any `Node` is built: no header row (empty file, or only `#` lines), a wrong header (reported alone, with the expected and the found line), a row with the wrong number of cells (a stray comma at the end, or an empty row of commas, gets its own message), an unknown node type, a bad `TRUE`/`FALSE` cell and a bad `(x, y)` position. `#` lines and blank lines are skipped. Every problem is reported, each with its line number in the file, under one line that names the file and says to fix it in a text editor and load it again; at most 20 are listed. A bad file returns `Failure`, `loadMap` resets `CSV_file` to `None` as before, and the main window shows the message in a message box as well as in its console. The map editor's reader uses the same check and the same messages (raised to Hong as ISS7-D1, made provisionally by the implementer).
+
+Affects: `src/controller/map_format.py` (`read_rows`, `problems_message`), `csv_parser.py`, `map_csv.py`, `src/gui/gui.py` (`_loadMapBrowse`), `src/gui/map_editor.py` (load error box), the pins in `tests/controller/test_map_csv_characterization.py`, `src/controller/CLAUDE.md` "Map CSV readers". Still open: the route simulator's `_write_offset_csv` reads only files that already passed `loadMap`.
+
+Cost if wrong: a file both readers used to accept is now refused (an extra cell the editor ignored, a whitespace-only line is now skipped instead of refused); the message says which line to fix.
+
+Undo: revert the `feat(controller)` commit that adds `read_rows`. To undo only the editor part (ISS7-D1), restore `read_editor_nodes`'s own checks from 20e57bf and drop the editor assertion in the test helper `_both_refuse`.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ISS7.md` (every message, verbatim), `notes/CW-EXPL.md` issue 7, `ledger-cleanup.md:78`.

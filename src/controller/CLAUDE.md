@@ -13,8 +13,9 @@ camelCase package (root CLAUDE.md, "Naming"). Results, not exceptions (root, "Er
 ## Map CSV readers
 
 - The format constants and helpers are in `map_format.py` (pure: no `Node` or `EditorNode`). Readers: `csv_parser.py` (runtime) and `map_csv.py` (editor); the third, in the route simulator, is in `src/route/CLAUDE.md`.
-- Known differences, pinned in `tests/controller/test_map_csv_characterization.py` and deliberately not fixed yet: the runtime reports every bad row, the editor stops at the first; a bad `# minimap_size=` passes the runtime and fails the editor; a file with no header, or a row with an extra cell, raises `TypeError` in the runtime, while the editor fails the first and ignores the extra cell; a position such as `{[1]: 2}` fails the runtime and raises `TypeError` in the editor; the messages differ.
-- `map_csv.CSV_HEADER` must stay a `list`: it is compared with `DictReader.fieldnames` by `!=`.
+- Both readers check the whole file with `map_format.read_rows` before building anything and return the same message (`problems_message`, plus `not_found_message` / `unreadable_message`): every bad row is reported with its file line number, a bad header is reported alone, `#` and blank lines are skipped (decision H16). The wording is what the user sees, pinned word for word in `tests/controller/test_map_csv_characterization.py`; change it there and in `map_format.py` together.
+- Differences left, pinned in the same file: a bad `# minimap_size=` line passes the runtime and fails the editor (the editor's own check, `map_csv._parse_metadata_lines`); `CSVParser()` with no path fails with "CSV file is a None object, failed to load CSV file." (the editor always has a path); runtime loads create `Node`s, editor loads don't (below).
+- A header-only file (no node rows) passes both readers; the runtime then fails later, when the graph is built from an empty `node_map`.
 
 ## Nodes
 

@@ -74,7 +74,7 @@ The format lives in one place, `src/controller/map_format.py` (header, node type
 - `csv_parser.py` (runtime) creates `Node`s, which increments the global `Node.node_id_counter`.
 - `map_csv.py` (editor) uses `EditorNode` with an editor-only `local_id`, so editor loads don't increment the counter.
 
-They still differ in how they report and survive bad files (pinned in `tests/controller/test_map_csv_characterization.py`; the list is in `src/controller/CLAUDE.md`), and the route simulator has a third reader (`src/route/CLAUDE.md`). Map CSVs live in `maps/`, which is gitignored.
+Both check the whole file with `map_format.read_rows` before building anything and give the user the same message, naming the file, each bad line and how to fix it (decision H16); the few differences left are listed in `src/controller/CLAUDE.md`. The route simulator has a third reader (`src/route/CLAUDE.md`). Map CSVs live in `maps/`, which is gitignored.
 
 **Map editor** (`src/gui/map_editor.py`). A `tk.Toplevel` owned by `MapleGUI`, used to place, edit, and order nodes on the live minimap at `RENDER_SCALE=2`. It has dirty tracking, pre-save validation, and an unsaved-changes modal on close. Its edge preview builds a throwaway `PathGraph` in `map_format.ordered_local_ids` order, the order `write_editor_nodes` writes (rotation-order blue nodes first, then orange nodes by `local_id`), so the preview matches what the runtime builds after save→load. The preview is gated on a character class being selected. `MapleGUI` calls `onCharacterClassChanged()` when the selection changes.
 
