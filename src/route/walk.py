@@ -19,7 +19,7 @@ Rulings this builds on top of the plan text:
   counted an off-graph position (the walker's `off_graph` counter also counts "no path to the target",
   planner.py:211-213), else `trigger("no_position")` (only misses, or no new frame at all), and then calls
   `walker.stop_now()` itself on the walker thread, so no move follows the lost leg (`trigger` only sets an event,
-  runtime.py:64-72). `stop.json` reason is that source and the exit is 10, also when the lost leg was the last leg of
+  runtime.py:81-89). `stop.json` reason is that source and the exit is 10, also when the lost leg was the last leg of
   the last lap. A leg that sent moves and then timed out does not end the run (the walker goes on to the next leg).
 - B19-D2 (re-run into a used --out): `main` refuses with exit 2, before capture starts or any file is written, when
   `--out` is an existing file or holds any of `session.json`, `stop.json`, `legs.jsonl`, `laps.jsonl`,

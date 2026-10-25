@@ -5,12 +5,12 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 ## The loop
 
 - `RouteGraph.build(path_graph, params: MovementParams)` (route_graph.py:82) wraps the controller's `PathGraph` and infers terrain (`terrain.infer_terrain`, route_graph.py:18).
-- `RouteWalker.walk_leg` (walker.py:117): `self._positions.read()` (:141) → `planner.next_move(rg, pos, dst, rng)` (:150; it anchors the position with `locate.attach`, planner.py:17) → `moves.execute(layer, move, stimulus_ns)` (:169) → settle → repeat from the measured position. `run` cycles the rotation in laps and writes the leg and lap records.
+- `RouteWalker.walk_leg` (walker.py:117): `self._positions.read()` (:141) → `planner.next_move(rg, pos, dst, rng)` (:150; it anchors the position with `locate.attach`, planner.py:193) → `moves.execute(layer, move, stimulus_ns)` (:169) → settle → repeat from the measured position. `run` cycles the rotation in laps and writes the leg and lap records.
 
 ## Seams
 
 - controller: `Node` and `PathGraph` (route_graph.py:15-16, terrain.py:14-15). `terrain.py:163` calls `PathGraph._isVerticalEdgeValid`, so that private name is part of the seam.
-- input: `InputLayer` / `InputError` (moves.py:5-6, walker.py:42-43), `Key` (planner.py:16 and `sim/`). The simulator's `SimLink` (sim/link.py) stands in for `BleLink`.
+- input: `InputLayer` / `InputError` (moves.py:5-6, walker.py:42-43), `Key` (planner.py:17 and `sim/`). The simulator's `SimLink` (sim/link.py) stands in for `BleLink`.
 - gui: `src/gui/gui.py` imports `CharacterLocator` (`from_files`, `locate`) from `character.py` (decision H20), so a change to those signatures or a move of `character.py` reaches the GUI. Contract d is the reverse direction (route may not import gui).
 - vision: `harness/record_minimap.py:163` imports `src.vision.vision` inside `main`; `harness/detection_check.py` imports `src.vision.vision_helper_lib` (cv2/numpy/enum only, not bettercam) inside `crop_minimap` (:128); `pyproject.toml` contract e has an `ignore_imports` entry for each (:57-58). `position.py` reads the shared minimap frame; `character.py` is the character locator.
 
