@@ -2,7 +2,7 @@
 
 **Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
-Amended after approval: B19 (PB-amend, 2026-10-23)
+Amended after approval: B19 (PB-amend, 2026-10-23); B15 score scrub (B15-D1, 2026-10-26)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -1107,7 +1107,7 @@ class CharacterLocator:
 ```
 
 - [ ] **Behaviour:** converts with `COLOR_RGB2GRAY` (the shared frame is RGB, G26/G30); masked template match;
-  scrubs non-finite and > 1 scores as `vision.py` does; the reported position is the best match's top-left plus
+  scrubs non-finite scores and scores above 1 + 1e-3 (`vision.py` scrubs above 1; the locator allows 1e-3 of slack because float32 rounding can put an exact match at 1.0000001, B15-D1); the reported position is the best match's top-left plus
   (w//2, h//2), the same centre convention as `getCharacterCoords` (`controller.py:227`). `Failure("miss")` if the
   best score < `min_score`; `Failure("ambiguous")` if the best score outside `exclusion_px` of the best location is
   ≥ best − `min_margin`; `Failure` for a frame that is not `uint8` H×W×3 or is smaller than the icon. The method

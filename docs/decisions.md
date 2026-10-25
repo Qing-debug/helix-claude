@@ -1201,3 +1201,101 @@ Cost if wrong: a file the editor could load before (header only) is now refused 
 Undo: revert the `fix(controller)` commit that adds `no_nodes_message` (restores the old pin too).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ISS7-R.md` (m1), `notes/ISS7-m1.md` (as built).
+
+## B15-D1 (2026-10-26): the character locator scrubs a match score only above 1 + 1e-3, not above 1
+
+Question: the plan (task B15, Behaviour) says the locator "scrubs non-finite and > 1 scores as `vision.py` does", but the locator as built scrubs a score only above 1 + 1e-3. Keep the built rule and amend the plan, or scrub at exactly 1 as the plan says?
+
+Ruling [Hong]: option A: keep the 1 + 1e-3 scrub as built in 0a41d5a, amend the plan line to match, and record it here. Hong's words (2026-10-26), after a plain explanation: "Record A."
+
+Reason: the explanation Hong was given: float32 rounding can put a perfect match at 1.00000012, so a scrub at "> 1" would turn the best possible match into a miss.
+
+As built: `_SCORE_CEILING = 1.0 + 1e-3` (`src/route/character.py:29`, with the comment at :24-27); `locate` sets every non-finite score and every score above it to `_SCRUBBED` (:91). The plan's B15 Behaviour line now says "scrubs non-finite scores and scores above 1 + 1e-3", and its "Amended after approval" line lists B15-D1.
+
+Affects: the plan `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (B15 Behaviour line, Status block). No code changed.
+
+Cost if wrong: one constant and its tests; a bogus score between 1 and 1.001 would be taken as a real score.
+
+Undo: set `_SCORE_CEILING` to `1.0` in `src/route/character.py`, run `tests/route/test_character.py`, and revert the plan amendment (the `docs(decisions)` commit that records this).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:224` (provisional ruling) and :274 (Hong's answer).
+
+## B6-D1 (2026-10-26): `attach` skips a platform segment whose two ends share an x
+
+Question: when `locate.attach` looks for the platform segment under the character, should it keep skipping a segment whose two ends share an x (a vertical step, which has no y to interpolate), or attach to such a segment some other way?
+
+Ruling [Hong]: option A: keep as built. Hong's words (2026-10-26): "there will never be a vertical platform though … we'll never have to use a rope/ladder due to the various movement abilities in the game".
+
+Reason: maps never contain rope or ladder segments. Revisit only if a map ever does.
+
+As built: `_on_segment` (`src/route/locate.py:40-48`) skips a segment whose ends share an x; `tests/route/test_locate.py:185-195` pins it (the comment at :191 still says "pending B6-D1"; it is decided now).
+
+Affects: nothing in the code; this entry settles the open question in the pin test's comment.
+
+Cost if wrong: a position on a vertical segment would not attach to it; fix `_on_segment` and the pin test then.
+
+Undo: not needed (no code change).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:275`.
+
+## B12-D1 (2026-10-26): `MoveEntry.t_ns` is the clock reading taken right after the position read, the same value as the layer's `stimulus_ns`
+
+Question: the plan does not say which clock reading the leg log's `MoveEntry.t_ns` holds for a move. Which should it be?
+
+Ruling [Hong]: option A: `MoveEntry.t_ns` is the `now_ns()` taken right after the position read the move was planned from, and it is the same value passed to the input layer as `stimulus_ns`. That is the moment the walker "saw" the character, so the time the move was sent minus `t_ns` is the reaction time.
+
+As built: already so, no change needed. `read_ns = clock.now_ns()` right after `self._positions.read()` (`src/route/walker.py:141-142`); `stimulus_ns = read_ns if self._config.use_stimulus else None` (:168); `MoveEntry(t_ns=read_ns, ...)` (:172); documented at :10-11. The clock is `time.perf_counter_ns` (`RealClock`, :70-71), the clock `InputLayer` measures a stimulus on. With `use_stimulus` off (the simulator) no `stimulus_ns` is passed but `t_ns` is still `read_ns`. `tests/route/test_walker_leg.py:240-260` pins that the layer's `stimulus_ns` is the clock right after the read; no test compares `MoveEntry.t_ns` to it directly (`:289-290` checks only that the `t_ns` values are ordered and inside the leg).
+
+Affects: the leg log's `t_ns` meaning for Feature D and for B13/B14 tests that pin it.
+
+Cost if wrong: if `t_ns` were taken elsewhere, send minus `t_ns` would no longer be the reaction time; one line in `walk_leg`.
+
+Undo: change the value passed as `t_ns` in `walk_leg` (`src/route/walker.py:172`).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:276`; `notes/B12-ab-runner.md`, `notes/B12-orch-opus-xhigh.md`.
+
+## B12-fix-D1 (2026-10-26): the leg log's `misses` counts planning reads only
+
+Question: should a leg record's `misses` count only the position reads a move is planned from, or also the reads that fail while the walker waits for the character to settle?
+
+Ruling [Hong]: option A: keep as built. `misses` counts planning reads only (as documented in `walker.py`); a failed read in the settle is a retry and is not counted.
+
+As built: `walk_leg` adds to `misses` when a planning read fails with anything but the `STALE` Failure, which means "no new frame yet" (`src/route/walker.py:141-147`). `_settle` (:275-298) never touches it. Documented at :14-15. The JSON key is `misses` (`src/route/leg_log.py:60`, :120).
+
+Affects: what a Feature D reader may conclude from `misses`; the field name and key are unchanged. No code changed.
+
+Cost if wrong: `misses` undercounts the failed reads of a leg (the settle's and the stale frames); counting them is a change in `_settle` plus the docstring and tests.
+
+Undo: not needed (no code change).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:277`; `notes/B12-fix.md`.
+
+## B17-D1 (2026-10-26): the minimap recorder refuses a folder that already holds a recording, exits 1 on a failed or empty recording, and takes `--out` only inside `data/`
+
+Question: keep the recorder (`src/route/harness/record_minimap.py`, plan task B17) as built: `record` refuses an `out_dir` that already holds `index.jsonl`, `main` exits 1 when recording fails or saves nothing, and `--out` must be a folder strictly inside the repo's gitignored `data/`?
+
+Ruling [Hong]: option A: keep as built.
+
+As built: `record` returns a `Failure` for an `out_dir` that already holds an `index.jsonl`, because a second recording would overwrite the first one's frames (docstring `record_minimap.py:23-25`). `_resolve_out` (:128-134) refuses `data/` itself and anything outside it, and `main` returns 2 for that (:154-157). `main` returns 1 when `record` fails or saves no frame (:175-183), 0 otherwise.
+
+Affects: the B19 brief must account for the refusal (a recording needs a new folder each time). B17-fix is not needed for these rules. No code changed.
+
+Cost if wrong: re-recording into a used folder needs the old `index.jsonl` removed first, and a recording cannot be written outside `data/`.
+
+Undo: not needed (no code change).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:280`; `notes/B17-ab-runner.md`.
+
+## B14-inv-D1 (2026-10-26): the planner is fixed so an up/down move is made only from where the character can really make it
+
+Question: the planner can loop on a platform that a small step splits in two (found by plan test 3b with +-2 px node offsets: seeds 34, 36 and 50, about 1 run in 18 on the Fossil Walk map; with world noise off it never escapes). It fires an up/down move from the character's own x as soon as the character is within 2 px of the edge's start node, the landing attaches to the other half of the platform, and the planner sends the character straight back. Four options were on the b14 page: A drop the `stalls` check from test 3b; B walk to the target's x first, as the plan words it; B' a vertical move starts at its target's x; C leave it and record the finding. Which?
+
+Ruling [Hong]: fix the planner: option B', refined by Hong. Hong's rule for an up/down move from A toward B: (1) if A's platform extends over B's x, walk until level with B's x, then move; (2) if A's platform ends before B's x, walk to A's platform end nearest B and move from there only if the floor directly below (above, for up-moves) that point is a piece connected to B; otherwise the planner must not offer that move (find another route, or report unreachable). Walking keeps the 2 px arrive rule. The fix is checked against seeds 34, 36 and 50, a wide seed sweep with and without noise, and seed 136 (the F-b off-graph freeze). Plan test 3b keeps `stalls`.
+
+Affects: `src/route/planner.py` (where an up/down move starts and whether it is offered), plan contract C7 and plan test 3b, and the planner tests that pin the old start rule. The files `src/route/CLAUDE.md` lists as frozen stay frozen until the fix lands. Another unit implements it on its own branch; this entry records only the decision.
+
+Cost if wrong: contract C7 changes; until the fix lands the livelock stays in the planner and can reach B19's live sessions.
+
+Undo: revert the planner-fix commit.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:281`; `notes/B14-inv.md`, `notes/explain40/b14.html`.
