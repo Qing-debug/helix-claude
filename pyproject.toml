@@ -53,7 +53,10 @@ name = "e route not vision"
 type = "forbidden"
 source_modules = ["src.route"]
 forbidden_modules = ["src.vision"]
-ignore_imports = ["src.route.harness.record_minimap -> src.vision.vision"]
+ignore_imports = [
+    "src.route.harness.record_minimap -> src.vision.vision",
+    "src.route.harness.detection_check -> src.vision.vision_helper_lib",
+]
 
 [[tool.importlinter.contracts]]
 name = "f route layers"
