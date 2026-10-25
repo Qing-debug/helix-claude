@@ -1180,3 +1180,20 @@ Cost if wrong: the window shows before there is a minimap to draw; the minimap a
 Undo: revert that unit's commit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CW-EXPL.md` issue 1, `notes/ISS1-ANS.md`.
+
+
+## H19 (2026-10-26): a map file with a header but no nodes is refused when it is loaded
+
+Question: what should happen when a map CSV has the right header but no node rows (behaviour issue 7, finding m1: the format check let it through, the main window then failed late with "Node_dict is empty. Cannot create any edges." and kept the file marked as loaded)?
+
+Ruling [Hong]: refuse it at once. Hong's words (2026-10-26): "Refuse it at once". Asked in the same round whether an Excel-saved file (a UTF-8 byte-order mark in front of the header) should be accepted, he answered: "i expect that they'll use my map creator and not actually need to edit the maps files themselves". That is context, not a ruling to add anything: no byte-order-mark support was added, and the H16 wording for a wrong header is unchanged.
+
+As built: after `map_format.read_rows` finds no problems, both readers (`CSVParser._readRows` and `map_csv.read_editor_nodes`) return `Failure(map_format.no_nodes_message(path))` when it also found no rows. This covers a header alone and a header with only `#` and blank lines. The message is `The map file <path> has no nodes, so it was not loaded. Place nodes in the map editor and save the map, then load it again.` It names the file and says how to fix it, but it is not a "fix it in a text editor" problem line, so it does not go through `problems_message`. `loadMap` resets `CSV_file` to `None` on the Failure as for every other refused file, so the main window does not keep the file marked as loaded, and it shows the message in the same box as H16 ("Could not load map"). The map editor's Load shows it in its load-error box. The old late "Node_dict is empty" message can no longer be reached from a header-only file.
+
+Affects: `src/controller/map_format.py` (`no_nodes_message`), `csv_parser.py`, `map_csv.py`; the test that pinned the old behaviour (`test_header_only_file_is_accepted`, now `test_header_only_file_is_refused`) and new cases in `tests/controller/test_map_load_errors.py`; `src/controller/CLAUDE.md` "Map CSV readers". Not changed: `read_rows` itself still accepts a header-only file, a file with node rows but no blue node still loads (with an empty rotation), and the route simulator's reader.
+
+Cost if wrong: a file the editor could load before (header only) is now refused by the editor too. The editor never writes such a file (it blocks a save with no blue node), so this only affects a hand-made or hand-emptied file; start a new map in the editor instead.
+
+Undo: revert the `fix(controller)` commit that adds `no_nodes_message` (restores the old pin too).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ISS7-R.md` (m1), `notes/ISS7-m1.md` (as built).
