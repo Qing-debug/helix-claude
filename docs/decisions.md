@@ -91,6 +91,8 @@ Affects: module boundaries for A and everything B–D import; plan A task C3 and
 
 Ruling as Hong under H9; undo: one `git mv` plus an import rewrite after P1, and the same for `firmware/`. The undo list, with plan lines as of `6d4f677`: C3 (:203-296); the Files lines of P1–P5 and H1–D1 (:647, :788, :825, :853, :1027, :1071, :1136, :1206, :1306, :1380, :1423, :1498); the command and import lines (H1's `$PY -m src.input.harness.listener` :1127, P4's logger and import text `src.input.link` :896, :934, :979, G1's test layout rule :456); tasks V1–V3 and D1; and the `firmware/` half: C1's shared `firmware/test/vectors.json` line (:179), F1 (:472-483), F2 (:490-523), F3 (:529 and its flash command :552-553), F4 (:598-599 and its compile and g++ commands :636, :639), F5 (:665 and its flash command :764), P1's vectors test (:649), V1's probe build (:1159-1160), H2's `firmware/README.md` reference (:1237), V3's reflash (:1450-1452) and D1 (:1498, :1505). `grep -nE 'src[./]input|firmware/' <plan>` lists every site except G1's test layout rule (it names `tests/input/`).
 
+Superseded in part by H14: `src/ble/` was deleted on 2026-10-25.
+
 ## PA-D6 (2026-10-21): Timing model documented in spec A as built
 
 Task D1 appends a "Timing model (as built)" section to spec A, built from `src/input/timing.py` `MODEL` at HEAD with differences from task C4 listed. Citations are in full with the quoted figures and carry no pointers into `.superpowers/` (gitignored). A new step P2 Step 0 re-reads the primary source of any figure that was seen only through a summary (Woods 2015) before `MODEL` is coded. The soak task S1's precondition becomes "V3 passes and D1 committed".
@@ -1100,3 +1102,19 @@ Cost if wrong: a record with a non-finite float is dropped instead of logged wit
 Undo: revert the same `fix(route): leg log ends a torn last line ...` commit (it carries both decisions).
 
 Pointer: `W/ab/B11/judge.md` (X2 m1; X3 :173 had the same choice); `W/notes/B11-fix.md`.
+
+## H14 (2026-10-25): `src/ble/` is deleted
+
+Question: may the codebase cleanup delete `src/ble/`, which PA-D2 left untouched?
+
+Ruling [Hong]: yes. Hong's decision (2026-10-25, going to bed), as the ledger records it: "Deletions allowed: ... and src/ble/ (reverses docs/decisions.md:86 → record the new decision in decisions.md)".
+
+Reason: nothing imports `src/ble/`. `ble.py` does not parse (empty `async def establish_connection`), `bleV2.py` connects to an ESP32 at import time and imports `classes.classes` (not `src.`), and `test.py` runs `asyncio.run` at import. `src/input/` replaces all three. Left in the tree they block tooling that imports or type-checks every file.
+
+Affects: `src/ble/` (removed with `git rm -r`) and the four `src/ble` lines of CLAUDE.md "Incomplete / experimental code". `bleak` stays in `requirements.txt` (`src/input/link.py` uses it). Reverses the "`src/ble/` left untouched" clause of PA-D2 (the rest of PA-D2 stands).
+
+Cost if wrong: the three files are experiments with no callers; nothing is lost that `src/input/` does not do.
+
+Undo: `git revert` the `chore(cleanup): remove src/ble ...` commit on `cleanup/agent-friendly` (or `git checkout <commit>^ -- src/ble`).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:270` (decision), `notes/DRV41.md` (Final executable wave plan, row 1), `notes/AUD40-p5.md` CW-12.

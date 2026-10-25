@@ -39,7 +39,7 @@ python -m src.main
 
 **Vision** (`src/vision/`). Template-matches four minimap corner borders (`assets/brds/*_grayscale.png` + masks) across the whole monitor using masked `TM_CCORR_NORMED`. inf/nan/>1 scores are scrubbed before `minMaxLoc`. Corners must pass a confidence threshold, ordering checks, and rectangle-alignment checks. After that it grabs just the minimap region for `MINIMAP_POSITION_RECALC_INTERVAL` frames before re-detecting. It re-detects early if the region goes invalid or black.
 
-**Controller** (`src/controller/controller.py`). `Controller` is a thin facade the GUI talks to, and `MapleAgent` holds the state. A graph needs **both** a character class and a loaded CSV. Either setter (`setCharacterClass`, `loadMap`) returns `Result[BuildOutcome, str]`: `BUILT`, `PENDING_CSV`, or `PENDING_CHARACTER`. `Failure` is reserved for real errors, never for "the other half is missing". `CSVParser.CSV_file` is the single source of truth for whether a map is loaded, because `loadMap` resets it to `None` on parse failure. `buildPathGraphFor(node_map)` is the only place a `PathGraph` is constructed; both the runtime and the editor preview use it. The pathfinding/movement loop (`executePathFinding`) is commented out and references a stale movement API.
+**Controller** (`src/controller/controller.py`). `Controller` is a thin facade the GUI talks to, and `MapleAgent` holds the state. A graph needs **both** a character class and a loaded CSV. Either setter (`setCharacterClass`, `loadMap`) returns `Result[BuildOutcome, str]`: `BUILT`, `PENDING_CSV`, or `PENDING_CHARACTER`. `Failure` is reserved for real errors, never for "the other half is missing". `CSVParser.CSV_file` is the single source of truth for whether a map is loaded, because `loadMap` resets it to `None` on parse failure. `buildPathGraphFor(node_map)` is the only place a `PathGraph` is constructed; both the runtime and the editor preview use it.
 
 **Path graph** (`src/controller/path_graph.py`). A `networkx.MultiDiGraph` whose nodes are `Node` objects themselves, keyed by identity. `node_map` (uuid → Node) must always match `graph.nodes()` exactly, and `_createEdges` fails otherwise. Each node gets at most one edge per direction (left/right/up/down), pointing to the closest node that meets all three conditions:
 - it is aligned within the x/y alignment allowance
@@ -89,10 +89,6 @@ Because the listener logs every key pressed on the machine, `keys.jsonl` is effe
 
 ## Incomplete / experimental code
 
-- `src/input/` (see Input layer) replaces `src/ble/`: the input spec calls both files there experiments to replace, not APIs to preserve. `src/ble/` is still in the tree, untouched, and the notes below describe it.
-- `src/ble/ble.py` does not parse (empty `async def establish_connection`).
-- `src/ble/bleV2.py` connects to an ESP32 named `"Guiness"` **at import time** and imports `classes.classes` (not `src.`), so it only runs as a script from `src/`.
-- `src/ble/test.py` is asyncio practice.
 - `src/rune_solver/pipeline.py` loads YOLO models from placeholder `.../modeltraining/...` paths. The weights are in `assets/models/`. The stated plan is to move to ONNX runtime for CPU, platform-agnostic inference.
 
 ## Repo conventions
