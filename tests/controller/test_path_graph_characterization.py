@@ -184,6 +184,73 @@ def test_vertical_edge_to_a_left_platform_edge_only_from_a_source_with_x_at_or_r
     assert pg_equal.graph.has_edge(equal, target)       # source x 50 >= target x 50 (equality counts)
 
 
+# 4b. Vertical edges: closest node first, platform-edge rule after, no fallback (path_graph.py:312-313, :365-366) ----
+
+# Per direction (up = smaller y, down = larger y): the source at y 50, a nearer candidate 5 px away and a farther
+# plain candidate 15 px away. x offsets stay inside the alignment allowance of 2.
+_VERTICAL = {"up": -1, "down": 1}
+
+
+def _vertical_case(direction, source_x, near_x, far_x, near_flags):
+    sign = _VERTICAL[direction]
+    source = _node(source_x, 50)
+    near = _node(near_x, 50 + sign * 5, **near_flags)
+    far = _node(far_x, 50 + sign * 15)
+    return source, near, far
+
+
+@pytest.mark.parametrize("direction", ["up", "down"])
+def test_invalid_nearest_vertical_node_leaves_no_edge_even_with_a_valid_farther_node(direction):
+    # CURRENT BEHAVIOUR (not necessarily intended): the closest node is chosen first and only then checked
+    # against the platform-edge rule; there is no fallback to the next-closest node. Source x 10 is left of
+    # the nearer left-edge node at x 11, so that edge is invalid, and the plain node 15 px away is never tried.
+    source, near, far = _vertical_case(direction, 10, 11, 10, {"left_edge": True})
+    pg = _build(source, near, far)
+    assert list(pg.graph.out_edges(source)) == []
+
+    # Same for the mirrored right-edge rule: source x 12 is right of the nearer right-edge node at x 11.
+    source, near, far = _vertical_case(direction, 12, 11, 12, {"right_edge": True})
+    pg = _build(source, near, far)
+    assert list(pg.graph.out_edges(source)) == []
+
+
+@pytest.mark.parametrize("direction", ["up", "down"])
+def test_valid_nearest_vertical_node_wins_over_a_farther_one(direction):
+    sign = _VERTICAL[direction]
+    # nearer left-edge node at x 10, source x 11 (>= 10) -> valid, so the edge goes to it and not to `far`.
+    source, near, far = _vertical_case(direction, 11, 10, 11, {"left_edge": True})
+    pg = _build(source, near, far)
+    assert list(pg.graph.out_edges(source)) == [(source, near)]
+    assert pg.graph[source][near][0]["weight"] == 5
+    assert (near.minimap_position[1] - source.minimap_position[1]) * sign > 0
+
+
+@pytest.mark.parametrize("direction", ["up", "down"])
+def test_vertical_edge_to_a_right_platform_edge_only_from_a_source_with_x_at_or_left_of_it(direction):
+    sign = _VERTICAL[direction]
+    target_y = 50 + sign * 20
+    target = _node(50, target_y, right_edge=True)
+    left_of = _node(49, 50)
+    right_of = _node(51, 50)
+    equal = _node(50, 50)
+
+    pg = _build(target, left_of, right_of)
+    assert pg.graph.has_edge(left_of, target)           # source x 49 <= target x 50
+    assert not pg.graph.has_edge(right_of, target)      # source x 51 > target x 50
+
+    pg_equal = _build(target, equal)
+    assert pg_equal.graph.has_edge(equal, target)       # source x 50 <= target x 50 (equality counts)
+
+
+@pytest.mark.parametrize("direction", ["up", "down"])
+def test_vertical_edge_to_a_node_flagged_both_platform_edges_is_valid_from_either_side(direction):
+    sign = _VERTICAL[direction]
+    target = _node(50, 50 + sign * 20, left_edge=True, right_edge=True)
+    for source_x in (49, 50, 51):
+        source = _node(source_x, 50)
+        assert _build(target, source).graph.has_edge(source, target), source_x
+
+
 # 5. getPathToGoalNode on an unreachable goal -----------------------------------------------------------
 
 def test_get_path_to_goal_node_is_empty_for_an_unreachable_goal(ff2):
