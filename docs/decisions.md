@@ -1228,7 +1228,7 @@ Ruling [Hong]: option A: keep as built. Hong's words (2026-10-26): "there will n
 
 Reason: maps never contain rope or ladder segments. Revisit only if a map ever does.
 
-As built: `_on_segment` (`src/route/locate.py:40-48`) skips a segment whose ends share an x; `tests/route/test_locate.py:185-195` pins it (the comment at :191 still says "pending B6-D1"; it is decided now).
+As built: `_on_segment` (`src/route/locate.py:42-61`; the same-x skip is at :56) skips a segment whose ends share an x; `tests/route/test_locate.py:187-193` pins it. The comment at `test_locate.py:191` still says "how it should attach is pending B6-D1": that comment is stale, because this entry decided it (skip). It is left as it is on purpose: `test_locate.py` is a frozen file (`src/route/CLAUDE.md`, Traps), so nobody edits it for a comment (final Feature B review, FINB54 P2-F3, ruled by the orchestrator). Read the comment as "decided in B6-D1: skip".
 
 Affects: nothing in the code; this entry settles the open question in the pin test's comment.
 
@@ -1244,7 +1244,7 @@ Question: the plan does not say which clock reading the leg log's `MoveEntry.t_n
 
 Ruling [Hong]: option A: `MoveEntry.t_ns` is the `now_ns()` taken right after the position read the move was planned from, and it is the same value passed to the input layer as `stimulus_ns`. That is the moment the walker "saw" the character, so the time the move was sent minus `t_ns` is the reaction time.
 
-As built: already so, no change needed. `read_ns = clock.now_ns()` right after `self._positions.read()` (`src/route/walker.py:141-142`); `stimulus_ns = read_ns if self._config.use_stimulus else None` (:168); `MoveEntry(t_ns=read_ns, ...)` (:172); documented at :10-11. The clock is `time.perf_counter_ns` (`RealClock`, :70-71), the clock `InputLayer` measures a stimulus on. With `use_stimulus` off (the simulator) no `stimulus_ns` is passed but `t_ns` is still `read_ns`. `tests/route/test_walker_leg.py:240-260` pins that the layer's `stimulus_ns` is the clock right after the read; no test compares `MoveEntry.t_ns` to it directly (`:289-290` checks only that the `t_ns` values are ordered and inside the leg).
+As built: already so, no change needed. `read_ns = clock.now_ns()` right after `self._positions.read()` (`src/route/walker.py:141-142`); `stimulus_ns = read_ns if self._config.use_stimulus else None` (:168); `MoveEntry(t_ns=read_ns, ...)` (:172); documented at :10-11. The clock is `time.perf_counter_ns` (`RealClock`, :70-71), the clock `InputLayer` measures a stimulus on. With `use_stimulus` off (the simulator) no `stimulus_ns` is passed but `t_ns` is still `read_ns`. `tests/route/test_walker_leg.py:240-260` pins that the layer's `stimulus_ns` is the clock right after the read, and `:289-290` checks that the `t_ns` values are ordered and inside the leg. `tests/route/test_walker_t_ns.py` (added in the final Feature B review, FINB54 P2-F2) pins `MoveEntry.t_ns` itself: equal to the `stimulus_ns` the layer was given, equal to the clock right after the read, and still the read time when no stimulus is passed. It uses a clock that moves on at every reading and a layer call that takes time, so a `t_ns` taken before the read, after the call or from a second reading fails it.
 
 Affects: the leg log's `t_ns` meaning for Feature D and for B13/B14 tests that pin it.
 
@@ -1362,7 +1362,7 @@ Ruling [as Hong]: option A, widened (ruled as Hong while away, 2026-10-26). The 
 
 Reason: the spec leaves leg timeouts to the builder, no key is sent in these cases, and the ruling only replaces idling until F12 with an end reason. The simulator's longest leg over 20 laps was 6.55 s and a 28,200-leg sweep had no 60 s timeout (`notes/B19-D-adjudicator.md`).
 
-As built: `_LEG_TIMEOUT_S = 60.0` (`src/route/walk.py:77`) is passed to `WalkerConfig` (:295) and written into `session.json` as `leg_timeout_s` (:308). `_LostLegSink.write_leg` (:144-154) writes the record, then on a `TIMED_OUT` leg with no move calls the stop control's `trigger("off_graph")` or `trigger("no_position")` and `walker.stop_now()` on the walker thread. `main` returns 10 with `stop.json` reason equal to that source (:353-355), after errors (6/7) and `link_down` (1). The walker's `off_graph` counter also counts "no path to the target" (`src/route/planner.py:211-213`). Tests: the lost-leg tests in `tests/route/test_walk_cli.py` (approach leg, mid-lap off-graph with no move after the trigger, last leg of the last lap, a leg with moves that times out does not end the run, and a run where the stop control's own stop also fires). The stop control's lock is reentrant so a Ctrl+C on the main thread during that trigger cannot deadlock (B19 review M1).
+As built: `_LEG_TIMEOUT_S = 60.0` (`src/route/walk.py:73`) is passed to `WalkerConfig` (:274) and written into `session.json` as `leg_timeout_s` (:287). `_LostLegSink.write_leg` (:129-139) writes the record, then on a `TIMED_OUT` leg with no move calls the stop control's `trigger("off_graph")` or `trigger("no_position")` and `walker.stop_now()` on the walker thread. `main` returns 10 with `stop.json` reason equal to that source (:332-334), after errors (6/7) and `link_down` (1). The walker's `off_graph` counter also counts "no path to the target" (`src/route/planner.py:211-213`). Tests: the lost-leg tests in `tests/route/test_walk_cli.py` (approach leg, mid-lap off-graph with no move after the trigger, last leg of the last lap, a leg with moves that times out does not end the run, and a run where the stop control's own stop also fires). The stop control's lock is reentrant so a Ctrl+C on the main thread during that trigger cannot deadlock (B19 review M1).
 
 Affects: the walk CLI's exit codes and `stop.json` reasons (new: 10, `off_graph`, `no_position`), `session.json` (`leg_timeout_s`), the plan's Task B19 (amendment note and exit-code list).
 
@@ -1380,12 +1380,12 @@ Ruling [as Hong]: option A, widened (ruled as Hong while away, 2026-10-26). The 
 
 Reason: it is Hong's B17-D1 rule (the recorder refuses a folder that already holds a recording) applied to the walk's files; the live runs use a fresh default `--out`.
 
-As built: `_check_out` (`src/route/walk.py:174-182`) is called before the map is loaded and before capture (:249). It returns "<out> is not a folder; choose a new --out" for an existing non-folder, else "<path> already exists; choose a new --out" for the first of the five files found, and `main` prints it and returns 2. Tests: `test_out_holding_a_walk_file_is_refused` (each of the five files; nothing is written and capture never starts) and `test_out_naming_a_file_is_refused`. Leftover files from an attempt that ended with exit 9 or 2 also refuse a re-run; the message says to choose a new `--out`.
+As built: `_check_out` (`src/route/walk.py:159-161`, a one-line delegate to `runtime.check_out`, `src/route/runtime.py:231-242`, which B20 shares) is called before the map is loaded and before capture (`walk.py:228`). It returns "<out> is not a folder; choose a new --out" for an existing non-folder, else "<path> already exists; choose a new --out" for the first of the five files found, and `main` prints it and returns 2. Tests: `test_out_holding_a_walk_file_is_refused` (each of the five files; nothing is written and capture never starts) and `test_out_naming_a_file_is_refused`. Leftover files from an attempt that ended with exit 9 or 2 also refuse a re-run; the message says to choose a new `--out`.
 
 Affects: the walk CLI's exit 2 cases, the plan's Task B19 (amendment note and exit-code list).
 
 Cost if wrong: a re-run needs a new folder name.
 
-Undo: remove the `_check_out` call in `main` (`src/route/walk.py:249`).
+Undo: remove the `_check_out` call in `main` (`src/route/walk.py:228`).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:338`; `notes/B19.md`, `notes/B19-R.md`.
