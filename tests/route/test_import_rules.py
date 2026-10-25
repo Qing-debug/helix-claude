@@ -92,9 +92,18 @@ class _Scan(ast.NodeVisitor):
         self.windows_names: list[NameUse] = []
         self.int_literals: list[tuple[int, int]] = []  # (line, value)
 
-    def _in_def(self, node: ast.AST) -> None:
+    def _in_def(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        # Decorators and argument defaults run when the `def` statement runs (at import time for a module-level def);
+        # the rest (annotations, which are lazy on 3.14, and the body) counts as inside the def.
+        args = node.args
+        for expr in (*node.decorator_list, *args.defaults, *args.kw_defaults):
+            if expr is not None:  # kw_defaults holds None for a keyword-only argument without a default
+                self.visit(expr)
         self.defs += 1
-        self.generic_visit(node)
+        for child in (*args.posonlyargs, *args.args, args.vararg, *args.kwonlyargs, args.kwarg, node.returns,
+                      *node.type_params, *node.body):
+            if child is not None:
+                self.visit(child)
         self.defs -= 1
 
     visit_FunctionDef = visit_AsyncFunctionDef = _in_def
@@ -281,6 +290,19 @@ def test_module_level_rule_accepts_the_same_imports_inside_functions():
               "async def b():\n    import bettercam\n"
               "class C:\n    def m(self):\n        import winreg\n")
     assert module_level_windows_violations(HARNESS, source) == []
+
+
+def test_module_level_rule_rejects_a_windows_name_in_a_decorator():
+    source = "import ctypes\n@ctypes.WINFUNCTYPE(None)\ndef cb():\n    pass\n"
+    found = module_level_windows_violations(HARNESS, source)
+    assert len(found) == 1 and found[0].startswith(f"{HARNESS}:2:") and "WINFUNCTYPE" in found[0]
+
+
+def test_module_level_rule_rejects_a_windows_name_in_an_argument_default():
+    for source in ("import ctypes\ndef f(h=ctypes.windll):\n    pass\n",
+                   "import ctypes\ndef f(*, h=ctypes.windll):\n    pass\n"):
+        found = module_level_windows_violations(HARNESS, source)
+        assert len(found) == 1 and found[0].startswith(f"{HARNESS}:2:") and "windll" in found[0], source
 
 
 def test_literal_rule_rejects_int_19_and_23_in_any_form():
