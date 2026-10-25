@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from PIL import Image, ImageTk
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
+from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
 from returns.pipeline import is_successful
 
@@ -844,8 +845,9 @@ class MapEditor:
         Build a throwaway PathGraph that matches what the runtime would build after
         a save → load cycle of the current editor state.
 
-        Insertion order into node_map mirrors map_csv.write_editor_nodes: rotation-order
-        blue_nodes first, then orange_nodes sorted by local_id. This matters because
+        Insertion order into node_map is map_format.ordered_local_ids, the row order
+        map_csv.write_editor_nodes writes: rotation-order blue_nodes first, then
+        orange_nodes sorted by local_id. This matters because
         PathGraph._findClosest* methods break distance ties by keeping the first-inserted
         candidate (strict `>` comparison), so iteration order can flip edges in tie cases.
 
@@ -854,11 +856,7 @@ class MapEditor:
         every call — accepted tradeoff documented under Task 12 in the plan; UUIDs are
         runtime-only and not persisted.
         """
-        order = list(self.state.rotation_order)
-        order += sorted(
-            lid for lid, n in self.state.nodes.items()
-            if n.nodetype != "blue_node"
-        )
+        order = ordered_local_ids(self.state.nodes, self.state.rotation_order)
         id_to_node = {}
         node_map = {}
         for local_id in order:
