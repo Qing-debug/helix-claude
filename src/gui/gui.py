@@ -320,7 +320,10 @@ class MapleGUI:
             self.map_editor.onCharacterClassChanged()
 
     def _openMapEditor(self):
-        """Open the map editor Toplevel. If one is already open, raise it to the front."""
+        """Open the map editor Toplevel. If one is already open, raise it to the front. Not before the first minimap
+        frame: the editor's load checks and node drawing need the minimap size (see src/gui/CLAUDE.md)."""
+        if not self._minimapReady():
+            return
         if self.map_editor is not None and self.map_editor.window.winfo_exists():
             self.map_editor.window.lift()
             self.map_editor.window.focus_force()
