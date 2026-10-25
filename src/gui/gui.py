@@ -5,13 +5,17 @@ import tkinter.messagebox as messagebox
 from PIL import Image, ImageTk
 import networkx as nx
 import matplotlib.pyplot as plt
-import time
 from returns.pipeline import is_successful
 import tkinter.ttk as ttk
 from src.controller.node import  CharacterNode
 from src.controller.controller import BuildOutcome
 from src.classes.classes import CharacterClass
 from src.gui.map_editor import MapEditor
+
+# Shown where the minimap will appear, and in the console by the buttons that need it, until the first frame arrives.
+MINIMAP_NOT_FOUND_LABEL = ("Minimap not found yet. Waiting for the game's minimap to be visible on the captured "
+                           "monitor; it appears here as soon as it is found.")
+MINIMAP_NOT_FOUND_MESSAGE = "Minimap not found yet: make the game's minimap visible on the captured monitor, then try again."
 
 
 class MapleGUI:
@@ -20,6 +24,7 @@ class MapleGUI:
         self.minimap_canvas_height = None
         self.minimap_canvas = None
         self.minimap_canvas_bg_img_id = None #new
+        self.minimap_status_label = None #placeholder shown until the first minimap frame creates minimap_canvas
         self.gui = tk.Tk()
         self.gui_console = None #created in _setupGUI so it can be parented to the scrollable inner frame
         self.scrollable_frame = None #inner frame inside the scrolling canvas; parent for all content widgets
@@ -205,26 +210,22 @@ class MapleGUI:
         # tk.Button(parent, text="set pathing node", command=self.controller.setPathingNode).pack(side = "right")
         # tk.Button(parent, text="draw path and nodes", command=self.controller.drawPathAndNodes).pack(side = "right")
 
-        #uncomment this when you actually need info from maplestory - uncomment the other block of code in main.py that has the exact same comment
-        time.sleep(5) #give minimap capture thread some time to start and possibly capture a minimap frame
-        is_canvas_setup = False
-        while not is_canvas_setup:
-            with self.sharedInfo.minimap_frame_lock:
-                if self.sharedInfo.minimap_frame is not None:
-                    is_canvas_setup = True
-                    self.minimap_canvas_height, self.minimap_canvas_width, _ = self.sharedInfo.minimap_frame.shape
-                    self.minimap_canvas = tk.Canvas(parent, width= self.minimap_canvas_width,
-                                                    height= self.minimap_canvas_height,
-                                                    background='pink',
-                                                    highlightthickness=0,
-                                                    borderwidth=0,
-                                                    relief = 'flat')
-                    self.minimap_canvas.pack(side=tk.LEFT)
-                else:
-                    print("failed to setup GUI due to unavailable minimap image, sleeping GUI thread for 10 seconds before trying again.")
-                    time.sleep(10)
+        # The window must not wait for the game. The minimap area is built by _updateCanvas when the first frame
+        # arrives; until then this label stands where it will go, and the buttons that need it say so in the console.
+        self.minimap_status_label = tk.Label(parent, text=MINIMAP_NOT_FOUND_LABEL, bg='lightblue')
+        self.minimap_status_label.pack(side=tk.TOP, pady=10)
+
+    def _minimapReady(self):
+        """True once the minimap area exists. Before that, say so in the console and return False: the buttons that
+        draw on the minimap or read the character's position from it start with `if not self._minimapReady(): return`."""
+        if self.minimap_canvas is not None:
+            return True
+        self._printToGUIConsole(MINIMAP_NOT_FOUND_MESSAGE)
+        return False
 
     def drawBlueNodeOnCharacter(self):
+        if not self._minimapReady():
+            return
         x, y  = self.controller.getCharacterCoords()
         node_type = "Blue Node"
         self.node_count += 1
@@ -233,6 +234,8 @@ class MapleGUI:
         self._drawNodeCount(x, y, text= self.node_count)
 
     def drawOrangeNodeOnCharacter(self):
+        if not self._minimapReady():
+            return
         x, y = self.controller.getCharacterCoords()
         node_type = "Orange Node"
         self.node_count += 1
@@ -242,6 +245,8 @@ class MapleGUI:
 
     #delete once you don't need a direct way to test this. This should only exist inside the PathGraph class
     def showPathToGoalNode(self):
+        if not self._minimapReady():
+            return
         print("-----------------------------------------------")
         character_coords = self.controller.getCharacterCoords()
         char_node = CharacterNode(character_coords)
@@ -315,7 +320,10 @@ class MapleGUI:
             self.map_editor.onCharacterClassChanged()
 
     def _openMapEditor(self):
-        """Open the map editor Toplevel. If one is already open, raise it to the front."""
+        """Open the map editor Toplevel. If one is already open, raise it to the front. Not before the first minimap
+        frame: the editor's load checks and node drawing need the minimap size (see src/gui/CLAUDE.md)."""
+        if not self._minimapReady():
+            return
         if self.map_editor is not None and self.map_editor.window.winfo_exists():
             self.map_editor.window.lift()
             self.map_editor.window.focus_force()
@@ -355,6 +363,8 @@ class MapleGUI:
         # Also print to the IDE console for debugging
 
     def _clearDrawnNodesOnGUIMinimap(self):
+        if not self._minimapReady():
+            return
         self.minimap_canvas.delete("node")
         self.minimap_canvas.delete("node_tag")
 
@@ -366,27 +376,49 @@ class MapleGUI:
         plt.gca().invert_yaxis() #invert y-axis so origin is top-left
         plt.show()
 
+    def _createMinimapCanvas(self, frame):
+        """Build the minimap area at the frame's size, where the placeholder label stands, and return it. Called by
+        _updateCanvas on the first frame."""
+        self.minimap_canvas_height, self.minimap_canvas_width, _ = frame.shape
+        if self.minimap_status_label is not None:
+            self.minimap_status_label.destroy()
+            self.minimap_status_label = None
+        self.minimap_canvas = tk.Canvas(self.scrollable_frame, width= self.minimap_canvas_width,
+                                        height= self.minimap_canvas_height,
+                                        background='pink',
+                                        highlightthickness=0,
+                                        borderwidth=0,
+                                        relief = 'flat')
+        self.minimap_canvas.pack(side=tk.LEFT)
+        return self.minimap_canvas
+
     #draws minimap on GUI
     def _updateCanvas(self):
+        # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
+        # The vision thread stores a new array for every frame (src/vision/vision.py:81), so the array read here is not mutated.
         with self.sharedInfo.minimap_frame_lock:
-            if self.sharedInfo.minimap_frame is not None:
+            frame = self.sharedInfo.minimap_frame
+        if frame is not None:
+            canvas = self.minimap_canvas
+            if canvas is None:
+                canvas = self._createMinimapCanvas(frame)
 
-                # Image conversion pipeline: numpy array → PIL Image → Tkinter PhotoImage
-                pil_minimap = Image.fromarray(self.sharedInfo.minimap_frame)
-                minimap_img = ImageTk.PhotoImage(pil_minimap)
+            # Image conversion pipeline: numpy array → PIL Image → Tkinter PhotoImage
+            pil_minimap = Image.fromarray(frame)
+            minimap_img = ImageTk.PhotoImage(pil_minimap)
 
-                # Prevent garbage collection by maintaining reference
-                self.minimap_canvas.image = minimap_img
-                # Canvas image management: create once, update thereafter
-                if self.minimap_canvas_bg_img_id is None:
-                    # Initial creation: place image at canvas center
-                    self.minimap_canvas_bg_img_id = self.minimap_canvas.create_image(0,
-                                                                                     0,
-                                                                                     image=minimap_img,
-                                                                                     anchor= tk.NW)
-                else:
-                    # Subsequent updates: modify existing image item (preserves layer order)
-                    self.minimap_canvas.itemconfig(self.minimap_canvas_bg_img_id, image=minimap_img)
+            # Prevent garbage collection by maintaining reference
+            canvas.image = minimap_img
+            # Canvas image management: create once, update thereafter
+            if self.minimap_canvas_bg_img_id is None:
+                # Initial creation: place image at canvas center
+                self.minimap_canvas_bg_img_id = canvas.create_image(0,
+                                                                    0,
+                                                                    image=minimap_img,
+                                                                    anchor= tk.NW)
+            else:
+                # Subsequent updates: modify existing image item (preserves layer order)
+                canvas.itemconfig(self.minimap_canvas_bg_img_id, image=minimap_img)
 
         # Schedule next frame update
         self.gui.after(10, self._updateCanvas)
