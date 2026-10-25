@@ -1127,7 +1127,7 @@ Ruling [Hong]: no. Hong's decision (2026-10-26): "you dont nneed my explicit per
 
 Reason: the board's keys go to whichever window has focus, and a person's typing during a run is an extra key event that fails `analyze`'s Delivery check. Everything else in the safety rules still holds: the "Helix input test sink" window, a real Bluetooth link, `keys.jsonl` stays in the gitignored `data/`, and no push to `upstream`.
 
-Affects: the "Safety rules" list in the root CLAUDE.md, the "Harness tools" section of `src/input/CLAUDE.md` and `firmware/CLAUDE.md`. It narrows H13's per-run unattended ruling into a standing one.
+Affects: the "Safety rules" list in the root CLAUDE.md, the "Harness tools" section of `src/input/CLAUDE.md` and `firmware/CLAUDE.md`. It generalises H13, which allowed two named live runs (the A-M6fix re-run and the V3 2 h soak) unattended on the night of 2026-10-23 only, into a standing permission that adds the idle-PC condition.
 
 Cost if wrong: a run with stray keys in the focused window, or a run aborted by the MapleStory check; rerun it.
 
