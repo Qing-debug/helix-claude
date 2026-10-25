@@ -1389,3 +1389,91 @@ Cost if wrong: a re-run needs a new folder name.
 Undo: remove the `_check_out` call in `main` (`src/route/walk.py:228`).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:338`; `notes/B19.md`, `notes/B19-R.md`.
+
+## B20-D1 (2026-10-26): the measurement tool writes directions as `Key` names, leaves no-op moves out of reach and walk speed, and takes the teleport settle from flat sideways teleports
+
+Question: the plan's task B20 (`measure_moves`, the tool that measures Kanna's moves in the game) leaves eleven conventions of the file and the summary open. Keep them all as the first build chose them (A), or change the ones that would skew the numbers B21 compares (B)? The first build wrote `direction` in lower case (`"left"`), counted a move that did not happen in the means, and took the teleport settle over every teleport.
+
+Ruling [as Hong]: option B, three changes, the rest kept as built. Ruled by the orchestrator in Hong's place while he was away, 2026-10-26 (maximum autonomy); not yet seen by Hong when this entry was written. An opus-xhigh adjudicator advised it and the ruling follows its advice (`notes/B20-D1-adjudicator.md`). It judged the changes small enough that Hong would not need to see them even as himself (summary arithmetic only: no key sending, no `--supervised`, `--reps` or `--out` guard changes, no spec text).
+- B1: `direction` is the `Key` name (`"LEFT"`, `"RIGHT"`, `"UP"`, `"DOWN"`) or `null` for a drop, the same spelling as the leg log's `dir`.
+- B2: a move that went 2 px or less along its axis did not happen (a no-op, as the simulator's `NO_OP`) and is left out of `reach_h_*`, `reach_v_peak_mean` and `walk_px_per_s`. This amends the plan's own B20 definitions of those keys.
+- B3: `teleport_settle_s` is the median over the flat horizontal teleports kept for the reach only.
+- Kept as built: the line is `dataclasses.asdict(MoveSample)` with positions as `[x, y]`; `kind` is the `MoveKind` value (`"teleport"`, `"walk"`, `"drop"`); the vertical reach is `before_y − peak_y`; `reach_h_sd` is the sample standard deviation, `null` below two samples; a key with no samples is `null` and `reach_h_n` is 0; `--reps` is at least 2; the default `--out` is `data/route/measure/<UTC stamp>`; a used `--out` is refused only for the tool's own files, on the condition that every file the tool writes is named in `_OUT_FILES`.
+
+Reason: B1 closes a silent trap: the project turns a `Key` into text with `.name` (`src/route/leg_log.py:43`, `src/route/walker.py:175`), and with lower-case names in the summary code such a writer gives a summary of all `null` with no error (the adjudicator ran it). B2 and B3 stop two things from moving the numbers B21 acts on: with nine 19 px teleports and one no-op the reach mean is 17.1 instead of 19, which B21 step 4 would turn into a change of Kanna's reach; and a median over all teleports reads 0.5 s instead of 0.4 s because the up and down teleports include a fall, 25% off against step 5's 20% rule. Each no-op also lowers the walk speed by 10% in ten walks. If real no-ops were as common as the simulator's stress setting (6%), a run of ten would contain one with probability 0.46 (inferred, not measured).
+
+Reviewer verdicts: B20-R (`notes/B20-R.md`): built as ruled. B20-fix-R (`notes/B20-fix-R.md`) and the final Feature B review (`notes/FINB54.md`): agree.
+
+As built (`src/route/harness/measure_moves.py` at 1523c99): `_direction` returns `key.name` (:300-301); `_HORIZONTAL` is built from `Key.LEFT.name` and `Key.RIGHT.name` (:90) and the up test uses `Key.UP.name` (:143); `_NO_MOVE_PX = 2` (:89); in `summarize`, `flat` drops no-ops (:140-141), `reach_v` keeps only rises above 2 px (:143-144), `walks` drops no-ops (:145-146) and `teleport_settle_s` is the median of `flat` (:155); docstring :29-38. The kept conventions: `sample_to_json` (:122-124), `_MIN_REPS` and its check (:88, :502-504), the default `--out` (:505-506), `check_out` with `_OUT_FILES` = `measure.jsonl` and `summary.json` (:86, :507), `reach_h_sd` (:151). The plan's B20 `summarize` bullet carries the amendment note (`docs/superpowers/plans/2026-10-23-p1b-route-walking.md:1602`). Tests in `tests/route/test_measure_moves.py`: `test_directions_are_key_names` (:123), `test_moves_that_did_not_happen_are_left_out_of_reach_and_walk_speed` (:130), `test_teleport_settle_is_the_median_of_flat_horizontal_teleports` (:117), `test_out_holding_measure_jsonl_is_refused` (:194), `test_out_holding_summary_json_is_refused` (:216).
+
+Affects: `measure.jsonl` and `summary.json` (a new file format), the plan's B20 summary definitions, and what B21 steps 4 and 5 read. `summary.json` has no count of the kept up-teleports (`reach_v_peak_mean` has no `_n`); the B21 report counts them from `measure.jsonl`.
+
+Cost if wrong: small: summary arithmetic and the spelling of one field, before any real run.
+
+Undo: the B1-B3 hunks of the piece-2 commit `252ca8f` (`feat(route): measuring procedure for the movement measurement tool (B20 piece 2)`, where they were applied): the `Key` names and `_HORIZONTAL`, `_NO_MOVE_PX` and the `flat`, `reach_v` and `walks` filters in `summarize`, the matching docstring lines, the amendment note at plan :1602 and the three tests named above.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:372-376`; `notes/B20-D1-adjudicator.md`, `notes/B20.md`.
+
+## B20-D2 (2026-10-26): the measurement tool settles a move on one position held for 0.5 s, and only a fresh successful read confirms it
+
+Question: how does `measure_moves` decide that a move has finished? A: poll every 10 ms, a move is settled when one position has been read unchanged for 0.5 s, give up after 5 s with no sample, and time the settle from the layer call's return to the first read of the final position. B: use the walker's own rule (two equal successful reads in a row, 2 s timeout, at least 0.15 s).
+
+Ruling [as Hong]: option A', which is A plus a required fix: the 0.5 s of stability counts only on fresh successful reads (a failed read, whether a miss or "no new frame", neither confirms a settle nor resets it). The constants stay (10 ms, 0.5 s, 5 s). Ruled by the orchestrator in Hong's place while he was away, 2026-10-26; not yet seen by Hong when this entry was written. The fix is the one the B20 reviewer found as I1 and the adjudicator specified (`notes/B20-D2D3-adjudicator.md`, "Required change (A')").
+
+Reason: the minimap position is re-detected every `MINIMAP_POSITION_RECALC_INTERVAL` frames (`src/vision/vision.py`), and on this PC with no game running the four matching calls alone took 0.27 s at 1920x1080 and 0.47-0.49 s at 2560x1440, so the frame feed can pause for 0.5 s or more. A stability test on wall-clock time then confirmed a settle on the last position read: probes settled a fall on (99, 41) in mid-air and a flat teleport on the position before the move (80, 60), and the reviewer's case of a teleport UP kept a peak of about 10 px instead of 23, enough to move `reach_v_peak_mean` past B21 step 4's 1 px threshold (how often it happens was not measured). Option B settles mid-fall and has a 0.15 s floor, so a flat teleport would measure the rule, not the game. A tolerance of 1 px for a flickering position was rejected: it would hide real 1 px slides and bias the reach; no sample or exit 10 is the loud, correct failure.
+
+Reviewer verdicts: B20-R (`notes/B20-R.md`, I1): found the pause bug. B20-fix-R (`notes/B20-fix-R.md`, Q1): agree. The final Feature B review (`notes/FINB54.md`): agree; the walker's settle rule differs on purpose, because it controls movement and this one measures it.
+
+As built (`src/route/harness/measure_moves.py` at 1523c99): `_POLL_S = 0.01`, `_STABLE_S = 0.5`, `_SETTLE_TIMEOUT_S = 5.0` (:92-94). `_Session._settle` (:392-414): the stability check is the `elif` at :410 inside `if is_successful(read)`, so only a fresh successful read confirms; `settle_s` is `(since_ns - start_ns)`, the time to the first read of the final position (:411); a timeout returns `settled=False` (:412-413). A move that does not settle gives no sample and a line on stderr (`_move`, :373-376), and the next move's `before` is settled afresh; a position that is lost, or never held, at the start of a phase or after a skipped move ends the run with exit 10 before another move (`_before`, :349-358). Docstring :44-49. Tests in `tests/route/test_measure_moves.py`: `test_a_capture_stall_does_not_settle_a_move` (:441), `test_misses_after_a_position_do_not_settle_a_move` (:449), `test_a_feed_pause_after_a_teleport_up_does_not_end_its_settle_on_a_partial_peak` (:457), `test_a_move_that_does_not_settle_gives_no_sample_and_the_next_before_is_settled_afresh` (:422), `test_character_lost_after_a_move_exits_10_after_cleanup` (:432). The new settle tests fail on `252ca8f` and pass on `eafb861`.
+
+Not verified: a frame feed that stops for 5 s ends in "character lost" (exit 10), which can also mean a frozen capture. A teleport UP whose peak lies entirely inside a feed gap is not recovered (B20-D4 covers it as a lower bound). The check that the character's position does not flicker on recorded still frames was not run.
+
+Affects: `measure.jsonl` values `after`, `peak_y` and `settle_s`, hence B21 steps 4 and 5; the walker's settle rule is untouched.
+
+Cost if wrong: small: three constants, or the body of `_settle`.
+
+Undo: to give up the fresh-read rule, revert the `_settle` hunks of `eafb861` (`fix(route): settle needs a fresh read in the measurement tool (B20 review)`); that restores the wall-clock stability the adjudicator showed settling mid-fall. `eafb861` also holds the B20 review's m2 fix (`_ask` and `_wait_line`, :246-286, a stray second Enter is dropped), which is a separate item and stays. To change the constants, edit `_POLL_S`, `_STABLE_S` and `_SETTLE_TIMEOUT_S` (first built in `252ca8f`).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:378`, `:382-383` and `:385`; `notes/B20-D2D3-adjudicator.md`, `notes/B20-R.md`, `notes/B20-fix-R.md`.
+
+## B20-D3 (2026-10-26): the measurement tool keeps the CLI and file surface it was built with: `summary.json`, no `--seed`, no reaction wait, walk's exit codes, a prompt and countdown before each move that needs one
+
+Question: the plan's B20 leaves the tool's surface open. As built: it writes `summary.json` (the `summarize` keys) next to `measure.jsonl`; it has no `--seed` (its timing generator is seeded from the OS) and no `session.json`; it sends moves with no stimulus, so no reaction wait; `held_ms` is the walk hold the timing model drew; its exit codes reuse walk's (0 done or stopped, 1 link down, 2 usage, 3 no first frame or no character, 4 connect failed, 5 icon failed, 6 a move failed, 7 the procedure raised, 9 stop control failed, 10 character lost); and it prompts for Enter and counts down 5 s before each phase and before each teleport-down and drop. A: keep as built. B: add `--seed` and a `session.json` like walk's.
+
+Ruling [as Hong]: option A, no change. Ruled by the orchestrator in Hong's place while he was away, 2026-10-26; not yet seen by Hong when this entry was written. The ledger rated it send-to-Hong (CLI and file surface, extends the plan) and an opus-xhigh adjudicator advised it (`notes/B20-D2D3-adjudicator.md`).
+
+Reason: every exit path checked matches walk's meaning, and none leaves a key held: a stop at a prompt has no move in flight, because each `play` has returned. Nothing B21 compares depends on an unrecorded random draw: the only draw that enters the summary is the walk hold, and it is recorded per sample as `held_ms`; the game's outcome cannot be reproduced from a seed anyway; a `session.json` would only add a third file to `_OUT_FILES`. `held_ms` as drawn is what the simulator uses for a walk (`src/route/sim/link.py:105-110`), so measured and simulated walk speed share a definition, and it differs from the hold the game sees by under 1% (inferred, about one connection interval). The prompt and countdown are needed because the character ends below the platform after a teleport down or a drop, and focus must move from the console to the game.
+
+Reviewer verdicts: B20-R (`notes/B20-R.md`, Q2 and Q3): not unsafe, no exit path leaves a key held. B20-fix-R (`notes/B20-fix-R.md`, Q2): agree. The final Feature B review (`notes/FINB54.md`): agree, the exit codes are walk's list (`src/route/walk.py:6-9`) and both tools share `check_out`.
+
+As built (`src/route/harness/measure_moves.py` at 1523c99): `_write_summary` (:417-421), run as the last cleanup step (:487); `_SUMMARY_FILE` and `_OUT_FILES` (:85-86); `TimingModel(np.random.default_rng())` (:458); `_play` passes no stimulus (:385-390); `_held_ms` (:295-297); exit codes in the docstring (:21-26); `_ask` (:246-264), `_countdown` (:289-292) with `_countdown_s = 5.0` (:102); the phases (:316-329); the stop guard (`_StopGuard`, :203-235).
+
+Not verified: Ctrl+C at a prompt on a real console, and the 0.3 s typed-ahead Enter drop in `_ask`, have only run against pipes and fakes; Hong tries both once in B21. With a closed stdin (an agent shell) the tool exits 0 with an empty summary, so it is run in Hong's own console.
+
+Affects: the tool's files and exit codes; B21 step 3 (how Hong runs it).
+
+Cost if wrong: small CLI edits before B21.
+
+Undo: nothing to revert; this ruling kept what `252ca8f` built. To switch to option B, add `--seed` and a `session.json` to `measure_moves.py` (and name `session.json` in `_OUT_FILES`).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:379-381` and `:385`; `notes/B20-D2D3-adjudicator.md`.
+
+## B20-D4 (2026-10-26): the measured vertical reach is a lower bound, and B21 checks it on hand-teleport frames before it changes Kanna's 23
+
+Question: the tool reads `peak_y` (the smallest y during a teleport UP) only after the teleport's key schedule has returned, about 60-310 ms after the blink (mean about 146 ms, plus the board's DONE latency; inferred from the key timings). If Kanna starts falling at once, the first frame it sees may be 1-2 px below the true peak, and B21 step 4 changes Kanna's 23 on a 1 px difference. A: no code; amend B21 so that step 2's recording includes at least 5 hand teleports UP into open space and step 4 treats `reach_v_peak_mean` as a lower bound, checked on those frames before 23 is changed. B: a watcher thread polls positions during the play and seeds `peak_y` (a thread, a test seam, another review cycle).
+
+Ruling [as Hong]: option A. Ruled by the orchestrator in Hong's place while he was away, 2026-10-26; not yet seen by Hong when this entry was written. It changes Hong's B21 steps, so the orchestrator is to tell him before B21. The block came from the opus-xhigh adjudicator's own case analysis (`notes/B20-D2D3-adjudicator.md`), so no second adjudicator was used.
+
+Reason: A costs nothing now and tests the assumption itself; B adds concurrent reads of one position source and a test seam to fix a bias that may not exist. Whether the game moves the character the instant the blink ends is unknown.
+
+Reviewer verdicts: B20-fix-R (`notes/B20-fix-R.md`, Q3): agree; its m-a asked for the missing rule on how to use the frames, now in the plan. The final Feature B review (`notes/FINB54.md`): agree.
+
+As built: no code change. `peak_y` is the smallest y read during the settle (`src/route/harness/measure_moves.py:406-407`, for a teleport UP only, :369-370), so the measured rise is at most the true one. The plan's amendment is in step 4 of task B21 (`docs/superpowers/plans/2026-10-23-p1b-route-walking.md:1627-1629`, commit `6a397b5`), with the rule for using the frames after it (:1630-1634, from this review: run `detection_check draft` on the step-2 recording, use the frames' rise if it is higher, and a rise above 24 is already conclusive).
+
+Affects: Hong's B21 steps (step 2: at least 5 extra teleports UP into open space by hand while recording); the plan only.
+
+Cost if wrong: a few extra teleports for Hong in B21; a peak missed inside a feed gap is not recovered, which the lower-bound rule covers.
+
+Undo: delete the two amendment paragraphs in step 4 of task B21 in the plan (`6a397b5` and the FDOC54 docs commit).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:384` and `:386`; `notes/B20-D2D3-adjudicator.md`, `notes/B20-fix-R.md`.
