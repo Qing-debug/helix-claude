@@ -6,12 +6,12 @@ src.controller.node (Node) so that:
   1. Editor loads don't bump Node.node_id_counter.
   2. Editor I/O lifecycle stays isolated from the agent's runtime state.
 
-Shares the CSV header format with CSVParser. The duplication is an accepted
-tradeoff (the upstream map-editor spec, not present in this repo): when the format changes, edit csv_parser.py
-and this module together.
+The format itself (header, node types, cell encodings, row order) lives in
+src.controller.map_format, which CSVParser uses too: change the format there.
+This module keeps the editor's own accept/reject rules and error texts, which
+differ from CSVParser's (tests/controller/test_map_csv_characterization.py).
 """
 
-import ast
 import csv
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,23 +20,23 @@ from typing import Tuple, List, Dict, Optional, Any
 from returns.result import Result, Success, Failure
 from returns.pipeline import is_successful
 
-
-CSV_HEADER = [
-    "nodetype",
-    "pos_in_minimap",
-    "can_fall",
-    "fall_dist_exceeds_vertical_tp",
-    "is_left_platform_edge",
-    "is_right_platform_edge",
-]
-
-VALID_NODETYPES = {"blue_node", "orange_node"}
-BOOL_FIELDS = (
-    "can_fall",
-    "fall_dist_exceeds_vertical_tp",
-    "is_left_platform_edge",
-    "is_right_platform_edge",
+from src.controller.map_format import (
+    BLUE_NODE,
+    BOOL_CELLS,
+    BOOL_FIELDS,
+    HEADER,
+    NODETYPES,
+    bool_from_cell,
+    bool_to_cell,
+    is_pos,
+    ordered_local_ids,
+    pos_from_cell,
+    pos_to_cell,
 )
+
+# A list, not map_format's tuple: read_editor_nodes compares it with DictReader.fieldnames, a list.
+CSV_HEADER = list(HEADER)
+VALID_NODETYPES = set(NODETYPES)
 
 
 @dataclass
@@ -101,16 +101,12 @@ def read_editor_nodes(
             # Parse position.
             pos_raw = row["pos_in_minimap"]
             try:
-                pos = ast.literal_eval(pos_raw)
+                pos = pos_from_cell(pos_raw)
             except (ValueError, SyntaxError) as e:
                 return Failure(
                     f"Row {i + 1}: pos_in_minimap {pos_raw!r} not a valid literal: {e}"
                 )
-            if not (
-                isinstance(pos, tuple)
-                and len(pos) == 2
-                and all(isinstance(c, int) for c in pos)
-            ):
+            if not is_pos(pos):
                 return Failure(
                     f"Row {i + 1}: pos_in_minimap {pos_raw!r} must be a 2-tuple of ints"
                 )
@@ -118,11 +114,11 @@ def read_editor_nodes(
             bool_values: Dict[str, bool] = {}
             for field in BOOL_FIELDS:
                 cell = row[field]
-                if cell not in ("TRUE", "FALSE"):
+                if cell not in BOOL_CELLS:
                     return Failure(
                         f"Row {i + 1}: {field} must be TRUE or FALSE, got {cell!r}"
                     )
-                bool_values[field] = (cell == "TRUE")
+                bool_values[field] = bool_from_cell(cell)
             node = EditorNode(
                 local_id=i,
                 nodetype=nodetype,
@@ -130,7 +126,7 @@ def read_editor_nodes(
                 **bool_values,
             )
             nodes.append(node)
-            if nodetype == "blue_node":
+            if nodetype == BLUE_NODE:
                 rotation_order.append(i)
         return Success((nodes, rotation_order, metadata))
     except OSError as e:
@@ -146,7 +142,8 @@ def write_editor_nodes(
     """
     Write editor nodes to a CSV at `path`.
 
-    Row order: blue_nodes in rotation_order first, then orange_nodes by ascending local_id.
+    Row order: map_format.ordered_local_ids, i.e. blue_nodes in rotation_order
+    first, then orange_nodes by ascending local_id.
     Creates parent directory if it doesn't exist.
 
     If `minimap_size` is provided, a `# minimap_size=W,H` comment line is written
@@ -164,12 +161,8 @@ def write_editor_nodes(
                 f.write(f"# minimap_size={minimap_size[0]},{minimap_size[1]}\r\n")
             writer = csv.writer(f, delimiter=",")
             writer.writerow(CSV_HEADER)
-            for local_id in rotation_order:
+            for local_id in ordered_local_ids(nodes, rotation_order):
                 writer.writerow(_row_from_node(nodes[local_id]))
-            for local_id in sorted(nodes.keys()):
-                node = nodes[local_id]
-                if node.nodetype == "orange_node":
-                    writer.writerow(_row_from_node(node))
         return Success(None)
     except OSError as e:
         return Failure(f"OS error writing {path}: {e}")
@@ -178,11 +171,11 @@ def write_editor_nodes(
 def _row_from_node(node: EditorNode) -> List[str]:
     return [
         node.nodetype,
-        f"({node.pos[0]}, {node.pos[1]})",
-        "TRUE" if node.can_fall else "FALSE",
-        "TRUE" if node.fall_dist_exceeds_vertical_tp else "FALSE",
-        "TRUE" if node.is_left_platform_edge else "FALSE",
-        "TRUE" if node.is_right_platform_edge else "FALSE",
+        pos_to_cell(node.pos),
+        bool_to_cell(node.can_fall),
+        bool_to_cell(node.fall_dist_exceeds_vertical_tp),
+        bool_to_cell(node.is_left_platform_edge),
+        bool_to_cell(node.is_right_platform_edge),
     ]
 
 

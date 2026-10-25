@@ -1,18 +1,17 @@
 import csv
-import ast
 from returns.result import Failure, Success, Result
 from returns.pipeline import is_successful
+from src.controller.map_format import BLUE_NODE, BOOL_CELLS, HEADER, NODETYPES, bool_from_cell, pos_from_cell
 from src.controller.node import Node
 from typing import Dict
 
 class CSVParser:
     def __init__(self, CSV = None):
         self.CSV_file = CSV
-        self.CSV_fields = {"nodetype": "nodetype", "pos_in_minimap": "pos_in_minimap" , "can_fall" : "can_fall",
-                           "fall_dist_exceeds_vertical_tp": "fall_dist_exceeds_vertical_tp", "is_left_platform_edge": "is_left_platform_edge",
-                           "is_right_platform_edge": "is_right_platform_edge"}
-        self.valid_node_types = {"blue_node", "orange_node"}
-        self.valid_boolean_values = {"TRUE", "FALSE"}
+        self.CSV_fields = {field: field for field in HEADER}
+        self.valid_node_types = set(NODETYPES)
+        # A set on purpose: an over-long row gives a list cell, and `list in set` raises TypeError (pinned by tests).
+        self.valid_boolean_values = set(BOOL_CELLS)
 
 
     def parseCSV(self, map_rotation_order: list[Node], node_map: Dict[int, Node]) -> Result[None, str]:
@@ -28,16 +27,16 @@ class CSVParser:
             for dict_row in csv_reader:
                 #converting to in-memory literals
                 nodetype = dict_row[self.CSV_fields["nodetype"]]
-                pos_in_minimap = ast.literal_eval(dict_row[self.CSV_fields["pos_in_minimap"]])
-                can_fall = (dict_row[self.CSV_fields["can_fall"]] == "TRUE")
-                fall_dist_exceeds_vertical_tp = (dict_row[self.CSV_fields["fall_dist_exceeds_vertical_tp"]] == "TRUE")
-                is_left_platform_edge = (dict_row[self.CSV_fields["is_left_platform_edge"]] == "TRUE")
-                is_right_platform_edge = (dict_row[self.CSV_fields["is_right_platform_edge"]] == "TRUE")
+                pos_in_minimap = pos_from_cell(dict_row[self.CSV_fields["pos_in_minimap"]])
+                can_fall = bool_from_cell(dict_row[self.CSV_fields["can_fall"]])
+                fall_dist_exceeds_vertical_tp = bool_from_cell(dict_row[self.CSV_fields["fall_dist_exceeds_vertical_tp"]])
+                is_left_platform_edge = bool_from_cell(dict_row[self.CSV_fields["is_left_platform_edge"]])
+                is_right_platform_edge = bool_from_cell(dict_row[self.CSV_fields["is_right_platform_edge"]])
 
                 #create node
                 node = Node(nodetype, pos_in_minimap, can_fall, fall_dist_exceeds_vertical_tp, is_left_platform_edge, is_right_platform_edge)
                 node_map.update({node.uuid:node})
-                if nodetype == "blue_node":
+                if nodetype == BLUE_NODE:
                     map_rotation_order.append(node)
 
                 print(f"succesfully created node for row {row}")
@@ -94,7 +93,7 @@ class CSVParser:
                 # Check for valid boolean values
                 elif key == self.CSV_fields["pos_in_minimap"]:
                     try:
-                        evaluated_string = ast.literal_eval(value)
+                        evaluated_string = pos_from_cell(value)
                         if not isinstance (evaluated_string, tuple):
                             row_errors.append(f"Row {row_number}: Value '{value}' is not a tuple.")
                         elif len(evaluated_string) != 2:
