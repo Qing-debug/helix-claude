@@ -726,6 +726,27 @@ numpy and `src.input.protocol.Key`.
      `(79, 22)`, written to a temporary CSV and loaded the same way; pos `(77,25)` (on the slope segment, at the
      `(79,22)` node by the platform test), target `(101,24)` → `TELEPORT` `Key.RIGHT` `toward` the `(101,24)` node
      (g′ advanced over the WALK edges via `(90,24)`, d = 24), never `Failure` or `None`.
+  11. Launch point (B14-inv-D1, PLF48), synthetic graphs built the runtime way:
+     a. Case 1, DOWN: nodes `(10,10) (25,10) (40,10) (29,28) (45,28)`, target `(29,28)`: pos `(25,10)` → `WALK`
+        `Key.RIGHT` 500 ms `toward` the target; pos `(29,10)` and `(27,10)` (within `arrive_px`) → `TELEPORT DOWN`.
+     b. Case 1, UP: nodes `(10,10) (25,10) (20,28) (29,28)`, target `(25,10)`: pos `(29,28)` → `WALK` `Key.LEFT`
+        500 ms `toward` the target; pos `(25,28)` → `TELEPORT UP`.
+     c. Case 2a, DOWN: nodes `(10,10) (25,10) (20,28) (29,28)`, target `(29,28)`: pos `(21,10)` → `WALK` `Key.RIGHT`
+        500 ms (to the end x 25, not x 29); pos `(25,10)` → `TELEPORT DOWN`.
+     d. Case 2a, UP: nodes `(10,28) (25,28) (20,10) (29,10)`, target `(29,10)`: pos `(21,28)` → `WALK` `Key.RIGHT`
+        500 ms (to the end x 25); pos `(25,28)` → `TELEPORT UP`.
+     e. Case 2b, DOWN, rerouted: nodes `(10,10) (25,10) (29,28) (45,28) (5,45) (20,45) (35,45) (50,45)`, all
+        `can_fall`, target `(29,28)`: the DOWN edge `(25,10)→(29,28)` is in the route graph but the floor is below
+        x 25, so pos `(25,10)` → `TELEPORT` `Key.LEFT` `toward` `(5,45)`; pos `(10,10)` → `DROP`.
+     f. Case 2b, UP, rerouted: nodes `(10,60) (25,60) (29,50) (45,50) (6,38) (18,38) (30,38)`, target `(29,50)`: the
+        UP edge `(25,60)→(29,50)` is in the route graph but `(6,38)-(30,38)` is above x 25, so pos `(25,60)` →
+        `TELEPORT` `Key.LEFT` `toward` `(6,38)` (the UP at the left end x 10 is case 2a); pos `(10,60)` →
+        `TELEPORT UP`.
+     g. Case 2b, no other route: nodes `(10,10) (25,10) (29,28) (45,28)`, pos `(25,10)`, target `(29,28)` →
+        `Failure("no path from (25, 10) to (29, 28)")`.
+     h. Seed-34 split: FF2 with `(97,43)`→`(97,45)` and `(105,42)`→`(105,40)` in a temporary CSV, `ability_mix_band=0`,
+        target `(105,40)`: the lone `(97,45)` is its own platform; pos `(99,24)` → `WALK` `Key.RIGHT` 750 ms (to x 105);
+        pos `(105,23)` → `TELEPORT DOWN`.
 - **Run:** `python -m pytest -q tests/route/test_planner.py`
 - **Commit:** `feat(route): plan the next move and choose walk, teleport or drop`
 
