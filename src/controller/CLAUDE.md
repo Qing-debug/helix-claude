@@ -4,10 +4,10 @@ camelCase package (root CLAUDE.md, "Naming"). Results, not exceptions (root, "Er
 
 ## Edge choice (path_graph.py)
 
-- For each node and direction, `_findClosestLeftNode`, `_findClosestRightNode`, `_findClosestNodeAbove` and `_findClosestNodeBelow` (path_graph.py:230, :276, :318, :371) take the closest node that is aligned within the x/y allowance and within `max_horizontal_traversal_dist` / `max_vertical_traversal_dist`.
-- Vertical edges: the closest node above or below is picked first and only then checked with `_isVerticalEdgeValid` (:313, :366). If it fails there is no up/down edge at all, even when a farther node would pass (no fallback). This is pinned as current behaviour in `tests/controller/test_path_graph_characterization.py`; changing it is a behaviour decision, not a cleanup.
-- `_isVerticalEdgeValid` (:405-432): a target flagged left platform edge is valid from a source whose x is ≥ the target's x; flagged right edge, from x ≤; flagged both, from anywhere; flagged neither, always.
-- Ties: the distance comparisons are strict `>` (:260, :304, :348, :401), so among equally close nodes the first inserted wins and **`node_map` insertion order changes edges**.
+- For each node and direction, `_findClosestLeftNode`, `_findClosestRightNode`, `_findClosestNodeAbove` and `_findClosestNodeBelow` (path_graph.py:230, :276, :319, :376) take the closest node that is aligned within the x/y allowance and within `max_horizontal_traversal_dist` / `max_vertical_traversal_dist`.
+- Vertical edges (decision H17): `_findClosestNodeAbove` / `_findClosestNodeBelow` skip every candidate that fails `_isVerticalEdgeValid` (:347, :404) and take the nearest of the rest, so a nearer platform end Kanna can't teleport to gives way to a farther node she can. Pinned in `tests/controller/test_path_graph_characterization.py` (section 4b, with the issue-6 S/M/T example). Route walking's own finder (`src/route/terrain.py:140-164`) still keeps the nearest node only, with no second try.
+- `_isVerticalEdgeValid` (:414-441): a target flagged left platform edge is valid from a source whose x is ≥ the target's x; flagged right edge, from x ≤; flagged both, from anywhere; flagged neither, always.
+- Ties: the distance comparisons are strict `>` (:260, :304, :352, :409), so among equally close nodes the first inserted wins and **`node_map` insertion order changes edges**.
 - `src/route/terrain.py:163` calls `PathGraph._isVerticalEdgeValid`: don't rename it without that caller (and terrain.py is frozen, see `src/route/CLAUDE.md`).
 
 ## Map CSV readers

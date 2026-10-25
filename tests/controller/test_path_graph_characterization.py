@@ -184,7 +184,7 @@ def test_vertical_edge_to_a_left_platform_edge_only_from_a_source_with_x_at_or_r
     assert pg_equal.graph.has_edge(equal, target)       # source x 50 >= target x 50 (equality counts)
 
 
-# 4b. Vertical edges: closest node first, platform-edge rule after, no fallback (path_graph.py:312-313, :365-366) ----
+# 4b. Vertical edges: the closest node that passes the platform-edge rule (decision H17, path_graph.py:319-411) ----
 
 # Per direction (up = smaller y, down = larger y): the source at y 50, a nearer candidate 5 px away and a farther
 # plain candidate 15 px away. x offsets stay inside the alignment allowance of 2.
@@ -200,18 +200,39 @@ def _vertical_case(direction, source_x, near_x, far_x, near_flags):
 
 
 @pytest.mark.parametrize("direction", ["up", "down"])
-def test_invalid_nearest_vertical_node_leaves_no_edge_even_with_a_valid_farther_node(direction):
-    # CURRENT BEHAVIOUR (not necessarily intended): the closest node is chosen first and only then checked
-    # against the platform-edge rule; there is no fallback to the next-closest node. Source x 10 is left of
-    # the nearer left-edge node at x 11, so that edge is invalid, and the plain node 15 px away is never tried.
+def test_invalid_nearest_vertical_node_is_skipped_for_a_valid_farther_node(direction):
+    # Before H17 the closest node was chosen first and only then checked, so this source had no edge at all.
+    # Now a candidate that fails the platform-edge rule is skipped. Source x 10 is left of the nearer left-edge
+    # node at x 11, so that node is skipped and the plain node 15 px away gets the edge.
     source, near, far = _vertical_case(direction, 10, 11, 10, {"left_edge": True})
     pg = _build(source, near, far)
-    assert list(pg.graph.out_edges(source)) == []
+    assert list(pg.graph.out_edges(source)) == [(source, far)]
+    assert pg.graph[source][far][0]["weight"] == 15
 
     # Same for the mirrored right-edge rule: source x 12 is right of the nearer right-edge node at x 11.
     source, near, far = _vertical_case(direction, 12, 11, 12, {"right_edge": True})
     pg = _build(source, near, far)
-    assert list(pg.graph.out_edges(source)) == []
+    assert list(pg.graph.out_edges(source)) == [(source, far)]
+    assert pg.graph[source][far][0]["weight"] == 15
+
+
+def test_issue_6_example_s_links_up_to_t_past_the_unreachable_left_end_m():
+    # The issue-6 example: S(70,60) on the floor, M1(72,50) the left end of a middle platform that starts 2 px
+    # right of S (so Kanna at S has no pixel of it above her), T(70,40) on the top platform. S links up to T and
+    # T links down to S; the links that already existed are unchanged.
+    f1, s, f2 = _node(56, 60), _node(70, 60), _node(86, 60)
+    m1, m2 = _node(72, 50, left_edge=True), _node(88, 50, right_edge=True)
+    t1, t, t2 = _node(56, 40), _node(70, 40), _node(84, 40)
+    pg = _build(f1, s, f2, m1, m2, t1, t, t2)
+
+    assert not pg.graph.has_edge(s, m1)
+    assert pg.graph.has_edge(s, t) and pg.graph[s][t][0]["weight"] == 20
+    assert not pg.graph.has_edge(t, m1)                  # T x 70 < M1 x 72: still not a valid drop onto M1
+    assert pg.graph.has_edge(t, s) and pg.graph[t][s][0]["weight"] == 20
+    assert set(pg.graph.out_edges(s)) == {(s, f1), (s, f2), (s, t)}
+    assert set(pg.graph.out_edges(t)) == {(t, t1), (t, t2), (t, s)}
+    assert pg.graph.has_edge(m1, s) and pg.graph.has_edge(m1, t)   # M1 x 72 is within 2 px of S and T
+    assert pg.graph.number_of_edges() == 19              # 17 before H17, plus S->T and T->S
 
 
 @pytest.mark.parametrize("direction", ["up", "down"])

@@ -309,8 +309,9 @@ class PathGraph:
     def _createUpEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
         source_nodes = [char_node] if is_for_character_node else self.node_map.values()
         for curr_node in source_nodes:
+            # The finder only returns nodes that pass _isVerticalEdgeValid (decision H17).
             closest = self._findClosestNodeAbove(curr_node)
-            if closest is not None and self._isVerticalEdgeValid(curr_node, closest):
+            if closest is not None:
                 abs_dist = abs(curr_node.minimap_position[1] - closest.minimap_position[1])
                 self.graph.add_edge(curr_node, closest, weight=abs_dist)
         return Success(None)
@@ -324,6 +325,8 @@ class PathGraph:
         2. Is approximately at the same horizontal level (x-coordinate within edge_x_alignment_allowance)
         3. Is within max_vertical_traversal_dist on the y-axis (character-class vertical reach gate)
         4. Is not the same node as the current node
+        5. Passes _isVerticalEdgeValid (the platform-edge rule): a candidate the character can't teleport to is
+           skipped, so a farther valid node can win over a nearer invalid one (decision H17)
 
         Args:
             curr_node (Node): The reference node to search from
@@ -340,7 +343,8 @@ class PathGraph:
             # lower y value means higher up since origin is topleft.
             if next_node_y_pos < curr_node_y_pos \
                     and abs(curr_node_y_pos - next_node_y_pos) <= self.max_vertical_traversal_dist \
-                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance:
+                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance \
+                    and self._isVerticalEdgeValid(curr_node, next_node):
                 if closest is None:
                     closest = next_node
                 else:
@@ -351,7 +355,7 @@ class PathGraph:
 
     def _createDownEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
         """
-        Create edges from nodes to their closest valid nodes below.
+        Create edges from nodes to their closest valid nodes below (the closest node that passes _isVerticalEdgeValid).
 
         Args:
             char_node (Node|None): Character node to connect (when is_for_character_node=True)
@@ -362,8 +366,9 @@ class PathGraph:
         """
         source_nodes = [char_node] if is_for_character_node else self.node_map.values()
         for curr_node in source_nodes:
+            # The finder only returns nodes that pass _isVerticalEdgeValid (decision H17).
             closest = self._findClosestNodeBelow(curr_node)
-            if closest is not None and self._isVerticalEdgeValid(curr_node, closest):
+            if closest is not None:
                 abs_dist = abs(curr_node.minimap_position[1] - closest.minimap_position[1])
                 self.graph.add_edge(curr_node, closest, weight=abs_dist)
         return Success(None)
@@ -377,6 +382,8 @@ class PathGraph:
         2. Is approximately at the same horizontal level (x-coordinate within edge_x_alignment_allowance)
         3. Is within max_vertical_traversal_dist on the y-axis (character-class vertical reach gate)
         4. Is not the same node as the current node
+        5. Passes _isVerticalEdgeValid (the platform-edge rule): a candidate the character can't teleport to is
+           skipped, so a farther valid node can win over a nearer invalid one (decision H17)
 
         Args:
             curr_node (Node): The reference node to search from
@@ -393,7 +400,8 @@ class PathGraph:
             # lower y value means higher up since origin is topleft.
             if next_node_y_pos > curr_node_y_pos \
                     and abs(next_node_y_pos - curr_node_y_pos) <= self.max_vertical_traversal_dist \
-                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance:
+                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance \
+                    and self._isVerticalEdgeValid(curr_node, next_node):
                 if closest is None:
                     closest = next_node
                 else:
