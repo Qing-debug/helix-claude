@@ -372,6 +372,7 @@ def test_walk_error_stats_and_chord_collapse_and_ci_history(tmp_path):
     assert "15.00 ms" in ci.summary + " ".join(ci.details) and "30.00 ms" in " ".join(ci.details)
 
 
+@pytest.mark.slow
 def test_cli_exit_0_on_a_simulated_soak(tmp_path, capsys):
     rows = soak()
     keys = [e for r in rows for e in events_for(r)]

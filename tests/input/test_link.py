@@ -331,6 +331,7 @@ def test_disconnect_during_long_play_is_link_lost_within_1s(link, board):
     assert [e for _, e in link.faults()] == [InputError.LINK_LOST]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("handler", [hang, held, dead_peer(queued_cancel=True)],
                          ids=["cancel_ends_write", "writes_held", "in_flight_write_held"])
 def test_keepalive_pong_loss_is_fault_within_0_8s_of_the_last_pong(link, board, handler):
@@ -390,6 +391,7 @@ def test_ping_returns_pong(link):
 # ---------------------------------------------------------------- early notifications (PA-rev3a N1)
 
 
+@pytest.mark.slow
 def test_early_pong_for_connect_and_keepalive(board):
     async def ping(client, seq, data):
         board.send_pong(client, seq)
@@ -490,6 +492,7 @@ def test_connect_no_pong(board, monkeypatch):
     assert board.client.disconnect_calls == 1
 
 
+@pytest.mark.slow
 def test_connect_one_deadline(board):
     board.on_connect = hang
     scanner = FakeScanner(delay=0.6)
@@ -506,6 +509,7 @@ def test_connect_one_deadline(board):
 # ---------------------------------------------------------------- pre-emption (PA-adj2-D1, m4, I2(vi))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("drop_abort_done", [False, True])
 def test_release_all_preempts_play(link, board, drop_abort_done):
     board.drop_abort_done = drop_abort_done
@@ -597,6 +601,7 @@ def test_release_all_write_raises(link, board):
     assert link.release_all().failure() == InputError.WRITE_FAILED
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("handler", [hang, held], ids=["cancel_ends_write", "write_held"])
 def test_release_all_write_never_completes(link, board, handler):
     board.release = handler
@@ -656,6 +661,7 @@ def assert_reconnects(lk, board):
     assert is_successful(lk.play(tap_steps()))
 
 
+@pytest.mark.slow
 def test_after_keepalive_miss(board):
     lk = connected_link(board)
     try:
@@ -735,6 +741,7 @@ def test_connect_on_live_session_fails(link, board):
 # ---------------------------------------------------------------- keepalive timing (m11)
 
 
+@pytest.mark.slow
 def test_keepalive_schedule_and_blocked_write(link, board):
     async def slow_ping(client, seq, data):
         asyncio.get_running_loop().call_later(0.2, board.send_pong, client, seq)
@@ -799,6 +806,7 @@ def soft_miss_warnings(caplog):
 SOFT = pytest.mark.parametrize("soft", [protocol_error, no_pong], ids=["att_error", "no_pong"])
 
 
+@pytest.mark.slow
 @SOFT
 def test_one_soft_keepalive_miss_is_a_warning_not_a_fault(link, board, caplog, soft):
     """T1/T2: the board answered the PING's write, so the link is alive: one WARNING, no fault, the session stays."""
@@ -814,6 +822,7 @@ def test_one_soft_keepalive_miss_is_a_warning_not_a_fault(link, board, caplog, s
     assert not any("link fault" in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.slow
 @SOFT
 def test_third_soft_keepalive_miss_in_a_row_is_link_lost(link, board, soft):
     """T3: K = 3. Every PING soft: LINK_LOST at the 3rd soft miss, the only fault; a pending play returns LINK_LOST."""
@@ -834,6 +843,7 @@ def test_third_soft_keepalive_miss_in_a_row_is_link_lost(link, board, soft):
         assert handler.starts[2] <= fault_ns < handler.starts[2] + 0.1e9
 
 
+@pytest.mark.slow
 @SOFT
 def test_a_pong_resets_the_soft_miss_count(link, board, soft):
     """T4: soft and answered PINGs alternating for >= 8 ticks never end the session."""
@@ -855,6 +865,7 @@ def test_keepalive_write_unreachable_is_a_hard_miss(link, board):
     assert (link.faults()[0][0] - handler.starts[0]) / 1e9 < 0.3
 
 
+@pytest.mark.slow
 def test_hard_miss_after_a_soft_miss_does_not_wait_for_the_count(link, board):
     """T6: one soft miss, then every write blocked (dead peer): LINK_LOST at the first blocked PING's 500 ms limit.
     Bound 0.7 s, not 0.8: a hard miss that went through the count would end the session at the 2nd blocked PING's
@@ -869,6 +880,7 @@ def test_hard_miss_after_a_soft_miss_does_not_wait_for_the_count(link, board):
 # ---------------------------------------------------------------- PONG log (A-PF-D2)
 
 
+@pytest.mark.slow
 def test_take_pongs(link, board):
     time.sleep(0.8)  # >= 3 keepalive ticks
     pongs = link.take_pongs()
@@ -1009,6 +1021,7 @@ def test_other_failures_are_not_faults(link, board, handler, err):
     assert link.faults() == []
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("handler", [hang, held, answering()], ids=["write_blocked", "write_held", "no_pong"])
 def test_ping_ack_timeout_is_a_fault_and_the_session_stays_live(board, monkeypatch, handler):
     monkeypatch.setattr(L, "KEEPALIVE_PERIOD_S", 100.0)  # after connect(), only this ping() writes
@@ -1084,6 +1097,7 @@ def test_ping_pending_when_the_session_ends(board, monkeypatch, end, err, faults
 # ---------------------------------------------------------------- a write blocked at session end (A-P4-R I2, P4 :1084-1086)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("call", ["play", "release_all"])
 def test_command_blocked_in_its_write_fails_at_once_on_link_lost(link, board, call):
     blocked = []
@@ -1121,6 +1135,7 @@ def test_play_blocked_in_its_write_fails_at_once_when_the_session_ends(link, boa
         release_held(link, client)
 
 
+@pytest.mark.slow
 def test_abandoned_writes_leave_no_unretrieved_task_exception(board):
     """A PING returns on its PONG without waiting for its write (A-LK); a write that fails after that is retrieved,
     so asyncio never reports "Task exception was never retrieved" (nor a pending task destroyed)."""

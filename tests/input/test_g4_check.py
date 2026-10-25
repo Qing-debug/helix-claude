@@ -6,6 +6,7 @@ scripts run through faults.py's real Popen path, so pipe buffering behaves as it
 import json
 import sys
 
+import pytest
 from returns.pipeline import is_successful
 from returns.result import Success
 
@@ -39,6 +40,7 @@ BLOCK_BUFFERED = _p("esptool v5.3.0", False) + "time.sleep(0.6)\n" + _p("MAC: 10
     _p(faults.RESET_LINE, False) + "time.sleep(0.3)\n"
 
 
+@pytest.mark.slow
 def test_reset_on_board_list_port_logs_every_line_and_exit_minus_injected(monkeypatch):
     calls = _fake(monkeypatch, LINE_BUFFERED)
     rep = g4_check.run_check()
@@ -51,6 +53,7 @@ def test_reset_on_board_list_port_logs_every_line_and_exit_minus_injected(monkey
     assert rep.verdict() == g4_check.READ_BEFORE_EXIT
 
 
+@pytest.mark.slow
 def test_block_buffered_output_is_flagged(monkeypatch):
     _fake(monkeypatch, BLOCK_BUFFERED)
     rep = g4_check.run_check()
@@ -67,6 +70,7 @@ def test_no_reset_line_is_its_own_verdict(monkeypatch):
     assert rep.exit_minus_injected_ms() is None and rep.verdict() == g4_check.NO_RESET
 
 
+@pytest.mark.slow
 def test_main_exit_codes_and_printed_lines(monkeypatch, capsys):
     _fake(monkeypatch, LINE_BUFFERED)
     assert g4_check.main([]) == 0

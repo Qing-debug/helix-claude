@@ -341,6 +341,7 @@ def test_sequence_clips_a_non_adjacent_repeat_too():
     assert_plan_ok(p)
 
 
+@pytest.mark.slow
 def test_sequences_over_three_keys_validate_with_every_hold_and_gap_at_its_extreme():
     # Longest hold (250 ms) and shortest gap (60 ms) maximise overlap. Every key list of length 1-8 over three keys
     # (9 840 lists) must still be valid: the clip must cover non-adjacent repeats (A-P3-D1), not only adjacent ones.

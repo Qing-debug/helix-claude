@@ -5,6 +5,7 @@ import json
 import sys
 import time
 
+import pytest
 from returns.pipeline import is_successful
 from returns.result import Failure, Success
 from winrt.windows.devices.radios import RadioAccessStatus, RadioState
@@ -47,6 +48,7 @@ def _fake_reset(monkeypatch, board_json, script=RESET_SCRIPT):
 
 # ---- reset_board: port lookup (hard rule 3) -----------------------------------------
 
+@pytest.mark.slow
 def test_reset_board_runs_reset_on_the_one_matching_port(monkeypatch):
     calls = _fake_reset(monkeypatch, _board_list(("COM7", "0x303A", "0x1001"), ("COM3", "0x10C4", "0xEA60")))
     stamps = FaultStamps()
@@ -55,6 +57,7 @@ def test_reset_board_runs_reset_on_the_one_matching_port(monkeypatch):
     assert stamps.launch_ns is not None and stamps.injected_ns is not None
 
 
+@pytest.mark.slow
 def test_reset_board_matches_vid_pid_case_insensitively(monkeypatch):
     calls = _fake_reset(monkeypatch, _board_list(("COM9", "0x303a", "0X1001")))
     assert is_successful(reset_board())
@@ -81,6 +84,7 @@ def test_reset_board_with_two_matching_ports_fails_and_runs_nothing(monkeypatch)
     assert stamps.injected_ns is None
 
 
+@pytest.mark.slow
 def test_reset_board_looks_the_port_up_on_every_call(monkeypatch):
     calls = _fake_reset(monkeypatch, _board_list(("COM4", "0x303A", "0x1001")))
     assert is_successful(reset_board())
@@ -104,6 +108,7 @@ def test_reset_cmd_is_the_recorded_esptool_reset(monkeypatch):
 
 # ---- reset_board: I5 stamps -----------------------------------------------------------
 
+@pytest.mark.slow
 def test_reset_board_stamps_the_reset_line_not_launch_or_exit(monkeypatch):
     _fake_reset(monkeypatch, _board_list(("COM4", "0x303A", "0x1001")))
     stamps = FaultStamps()
@@ -209,6 +214,7 @@ def test_radio_off_then_on_waits_the_given_seconds(monkeypatch):
     assert radio.calls[1][1] - radio.calls[0][1] >= 200_000_000
 
 
+@pytest.mark.slow
 def test_radio_unspecified_drops_the_stamp_and_the_fallback_marker_gives_injected(monkeypatch):
     radio = FakeRadio(RadioAccessStatus.UNSPECIFIED)
     _fake_radio(monkeypatch, radio)
@@ -221,6 +227,7 @@ def test_radio_unspecified_drops_the_stamp_and_the_fallback_marker_gives_injecte
     assert stamps.injected_ns - start >= 300_000_000  # not the radio call's stamp, not the launch
 
 
+@pytest.mark.slow
 def test_fallback_stamps_the_marker_not_launch_or_exit(monkeypatch):
     _fake_radio(monkeypatch, FakeRadio(RadioAccessStatus.DENIED_BY_USER))
     _fake_fallback(monkeypatch, GOOD_FALLBACK)
@@ -257,6 +264,7 @@ def test_radio_denied_with_no_fallback_is_a_null_entry(monkeypatch):
     assert ran == []
 
 
+@pytest.mark.slow
 def test_no_bluetooth_radio_goes_to_the_fallback(monkeypatch):
     monkeypatch.setattr(faults, "_find_bluetooth_radio", lambda: Failure("no Bluetooth radio"))
     ran = _fake_fallback(monkeypatch, GOOD_FALLBACK)
@@ -287,6 +295,7 @@ class RaisingRadio(FakeRadio):
         return super().set_state(on)
 
 
+@pytest.mark.slow
 def test_radio_off_call_raising_takes_the_fallback_like_a_refusal(monkeypatch):
     # A-H2-R M2: an exception from the WinRT call is a refusal, not an error leaving run_soak
     _fake_radio(monkeypatch, RaisingRadio(raise_on=False))
@@ -317,6 +326,7 @@ def test_radio_on_call_raising_after_off_keeps_the_stamp_and_fails(monkeypatch):
     assert stamps.injected_ns is not None and ran == []  # the radio did go off; no fallback after it
 
 
+@pytest.mark.slow
 def test_fallback_enable_failure_keeps_the_stamp_and_fails(monkeypatch):
     _fake_radio(monkeypatch, FakeRadio(RadioAccessStatus.UNSPECIFIED))
     _fake_fallback(monkeypatch, GOOD_FALLBACK, on_body="raise SystemExit(1)\n")
@@ -336,6 +346,7 @@ def _short_timeouts(monkeypatch):
     monkeypatch.setattr(faults, "_RADIO_POLL_S", 0.01)
 
 
+@pytest.mark.slow
 def test_radio_off_and_on_are_each_confirmed_before_moving_on(monkeypatch):
     radio = FakeRadio(RadioAccessStatus.ALLOWED, lag=3)
     _fake_radio(monkeypatch, radio)
