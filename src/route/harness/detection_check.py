@@ -10,27 +10,34 @@ minimap crops already) or a folder of full-screen frames (PNGs of the whole moni
 `draft` finds the character in each frame by a method that is independent of `CharacterLocator`: the centroid of the
 blob of the dot's colour. It writes `labels_draft.json` (`{file: [x, y] | "absent" | null}`, one line per frame, in file
 order) and, beside it, a folder `<name>_sheets/` with one contact sheet per 50 frames: every minimap at 8x with a 1-px
-cross at the label and the file name and label above it. Human step: Hong looks at the sheets, corrects any label, marks a
+cross at the label and the file name and label above it (a frame that could not be cropped is `null` and has no cell, see
+below). Human step: Hong looks at the sheets, corrects any label, marks a
 frame unusable (`null`) or without a character (`"absent"`), and saves the result as `labels.json`. Nothing here
 writes `labels.json`. `check` runs the locator on every frame and scores it against that file (`score`); it exits 0 iff
 the hit rate is at least 0.995 and no position is wrong (spec B:L67).
 
 Where the plan is silent:
-- The colour range is that of the icon's inside: the pixels `assets/chr/chr_mask.png` keeps (mask > 0), minus the
-  one-pixel ring at their edge (the dark outline, which the map's own dark pixels share), per channel from the lowest to
-  the highest value with 10 levels of slack. A blob is a connected group (8-neighbours) of in-range pixels with at least
-  half the area the icon's own dot has. One blob gives a position; none gives `"absent"`; two or more give `null`,
-  because the draft cannot tell which is the character (Hong decides on the sheet).
-- The position is the blob's centroid, moved by the offset that the icon's own dot has from `(w // 2, h // 2)`, so that a
-  perfectly drawn icon is labelled with exactly the position `CharacterLocator` reports for it.
+- The colour range is that of the icon's inside, in HSV so that a brighter or dimmer capture still falls in it: the
+  pixels `assets/chr/chr_mask.png` keeps (mask > 0), minus the one-pixel ring at their edge (the dark outline, which the
+  map's own dark pixels share). Hue runs from the lowest to the highest of those pixels' hues with `HUE_SLACK` either
+  side; saturation and value run from their lowest, less `SAT_SLACK` and `VAL_SLACK`, up to 255. A blob is a connected
+  group (8-neighbours) of in-range pixels with at least half the area the icon's own dot has. One blob gives a position;
+  none gives `"absent"`; two or more give `null`, because the draft cannot tell which is the character (Hong decides on
+  the sheet).
+- The position is the blob's centroid, moved by the offset that the icon's own dot has from `(w // 2, h // 2)` and rounded
+  half up, so that a perfectly drawn icon is labelled with exactly the position `CharacterLocator` reports for it.
 - `draft` refuses to overwrite `--out` (a rerun would otherwise be able to replace Hong's file if he named it so); it
   writes the sheets first and the labels file last, so a failure part-way leaves no labels file. `--out` must resolve to a
   file inside the repo's gitignored `data/` (recordings, labels and sheets are never committed).
-- A frame that cannot be read or cropped fails `load_frames` as a whole, with the file name: a quietly skipped frame
-  would change what the hit rate means. `check` also refuses labels whose file names differ from the frames' (a label
-  for a missing frame, or a frame without a label), for the same reason. `null` is how a frame is marked unusable.
+- A full-screen frame whose minimap cannot be cropped (another window covers the game, the minimap is black, no corner
+  border is found: ruling B18-D1) is skipped and reported, never dropped quietly: `load_frames` returns it in
+  `uncroppable` with the reason, `draft` labels it `null` and prints it, and `check` scores it as nothing found, so an
+  `[x, y]` label on it is a miss and skipping can only lower the hit rate. A PNG that cannot be read, corner border
+  images that cannot be read, and a folder in which no frame can be cropped still fail the whole run. `check` also
+  refuses labels whose file names differ from the frames' (a label for a missing frame, or a frame without a label; an
+  uncroppable frame needs a label too), for the same reason. `null` is how a frame is marked unusable.
 - Exit codes: 0 done / PASS; 1 `check` ran and did not pass; 2 could not run (bad arguments, `--out` outside `data/`,
-  unreadable frames or labels, a file that would be overwritten).
+  unreadable frames or labels, no frame that could be cropped, a file that would be overwritten).
 
 Imports: `vision_helper_lib` (cv2, numpy and enum only; the corner-border helpers of `src/vision/vision.py`) is imported
 inside `crop_minimap`, never at module level (plan hard rule 9). `src/vision/vision.py` itself needs bettercam and is
@@ -44,6 +51,7 @@ import json
 import math
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -57,6 +65,7 @@ from src.route.character import CharacterLocator
 from src.route.harness.record_minimap import INDEX_NAME
 
 Label = tuple[int, int] | Literal["absent"] | None
+JsonLabel = Label | list[int]  # a label as `json.loads` gives it: `score` takes `[x, y]` as well as `(x, y)`
 
 _REPO = Path(__file__).resolve().parents[3]
 _DATA = _REPO / "data"
@@ -71,7 +80,10 @@ HIT_PX = 1             # found within this many px on both axes: a hit
 WRONG_PX = 3           # found more than this many px away in a straight line: wrong (spec "never reported > 3 px away")
 MIN_HIT_RATE = 0.995   # spec B:L67
 
-COLOUR_SLACK = 10      # levels added to each side of the dot's colour range
+HUE_SLACK = 4          # hue steps (OpenCV 0-179) added to each side of the dot's hue range
+SAT_SLACK = 30         # saturation levels below the dot's lowest: takes in its anti-aliased edge (S 228 beside a core of 253)
+VAL_SLACK = 90         # value levels below the dot's lowest: takes in that edge (V 149 beside a core of 238) and a dimmer capture
+MAX_LISTED = 20        # lines of one list printed before "... and N more"
 SHEET_SIZE = 50        # frames per contact sheet
 SHEET_COLUMNS = 5
 SCALE = 8              # contact sheet zoom
@@ -125,7 +137,7 @@ def crop_minimap(full_bgr: np.ndarray) -> Result[np.ndarray, str]:
         scores[~np.isfinite(scores) | (scores > 1.0)] = -1.0  # as vision.py:55
         _, best, _, (x, y) = cv2.minMaxLoc(scores)
         matches[corner] = _Match(x, y, best)
-    seen = ", ".join(f"{corner} {match.conf_score:.3f}" for corner, match in matches.items())
+    seen = ", ".join(f"{corner} {match.conf_score:.4f}" for corner, match in matches.items())
     borders = {corner: border for corner, (border, _) in templates.unwrap().items()}
     with contextlib.redirect_stdout(io.StringIO()) as printed:  # the helpers print; 300 frames would drown the report
         valid = helper.isMatchedTemplateLocValid(matches, _CORNERS, _BORDER_CONFIDENCE)
@@ -144,11 +156,18 @@ def crop_minimap(full_bgr: np.ndarray) -> Result[np.ndarray, str]:
     return Success(crop)
 
 
-def load_frames(frames_dir: Path) -> Result[dict[str, np.ndarray], str]:
-    """File name -> RGB minimap for every PNG in `frames_dir`, sorted by name.
+class LoadedFrames(NamedTuple):
+    crops: dict[str, np.ndarray]   # file name -> RGB minimap, sorted by name
+    uncroppable: dict[str, str]    # file name -> why `crop_minimap` failed, sorted by name; always {} for a B17 recording
+
+
+def load_frames(frames_dir: Path) -> Result[LoadedFrames, str]:
+    """The RGB minimap of every PNG in `frames_dir` that has one, sorted by name, and the PNGs that have none.
 
     A folder with an `index.jsonl` is a B17 recording: its PNGs are minimap crops already (`cv2.imread` gives BGR, converted
-    to RGB). Any other folder holds full-screen frames: `cv2.imread`, `crop_minimap`, then BGR to RGB.
+    to RGB), so none is uncroppable. Any other folder holds full-screen frames: `cv2.imread`, `crop_minimap`, then BGR to
+    RGB. A frame `crop_minimap` fails on goes to `uncroppable` with its reason (B18-D1). A PNG `cv2.imread` cannot read,
+    corner border images that cannot be read, and a folder in which no frame can be cropped are a `Failure`.
     """
     if not frames_dir.is_dir():
         return Failure(f"{frames_dir} is not a folder")
@@ -156,7 +175,12 @@ def load_frames(frames_dir: Path) -> Result[dict[str, np.ndarray], str]:
     if not paths:
         return Failure(f"no PNG files in {frames_dir}")
     recording = (frames_dir / INDEX_NAME).is_file()
-    frames = {}
+    if not recording:
+        templates = _corner_templates()  # without them no frame would crop, which is not a problem of the frames
+        if not is_successful(templates):
+            return Failure(templates.failure())
+    crops: dict[str, np.ndarray] = {}
+    uncroppable: dict[str, str] = {}
     for path in paths:
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
@@ -164,16 +188,21 @@ def load_frames(frames_dir: Path) -> Result[dict[str, np.ndarray], str]:
         if not recording:
             cropped = crop_minimap(bgr)
             if not is_successful(cropped):
-                return Failure(f"{path.name}: {cropped.failure()}")
+                uncroppable[path.name] = cropped.failure()
+                continue
             bgr = cropped.unwrap()
-        frames[path.name] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return Success(frames)
+        crops[path.name] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    if not crops:  # every PNG failed to crop
+        name, reason = next(iter(uncroppable.items()))
+        return Failure(f"no frame in {frames_dir} could be cropped ({len(uncroppable)} of {len(uncroppable)}); "
+                       f"first: {name}: {reason}")
+    return Success(LoadedFrames(crops, uncroppable))
 
 
 # ---- the draft: the character found by the colour of its dot, independently of CharacterLocator ------------------------
 
 class _Dot(NamedTuple):
-    low: np.ndarray        # RGB, per channel
+    low: np.ndarray        # HSV (OpenCV hue 0-179), per channel
     high: np.ndarray
     min_area: int          # px of a blob worth a candidate
     offset: tuple[float, float]  # (w // 2, h // 2) minus the centroid of the icon's own in-range pixels
@@ -188,23 +217,25 @@ def _read_dot() -> Result[_Dot, str]:
     inside = cv2.erode(kept.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0  # without the outline ring
     if not inside.any():
         return Failure("the icon mask has no inside to take a colour from")
-    icon = cv2.cvtColor(icon_bgr, cv2.COLOR_BGR2RGB)
-    low = np.clip(icon[inside].min(axis=0).astype(int) - COLOUR_SLACK, 0, 255).astype(np.uint8)
-    high = np.clip(icon[inside].max(axis=0).astype(int) + COLOUR_SLACK, 0, 255).astype(np.uint8)
+    icon = cv2.cvtColor(icon_bgr, cv2.COLOR_BGR2HSV)
+    hue, sat, val = (icon[inside][:, channel].astype(int) for channel in range(3))
+    low = np.array([max(0, hue.min() - HUE_SLACK), max(0, sat.min() - SAT_SLACK), max(0, val.min() - VAL_SLACK)], dtype=np.uint8)
+    high = np.array([min(179, hue.max() + HUE_SLACK), 255, 255], dtype=np.uint8)
     ys, xs = np.nonzero((cv2.inRange(icon, low, high) > 0) & kept)
     height, width = kept.shape
     return Success(_Dot(low, high, max(1, len(xs) // 2), (width // 2 - float(xs.mean()), height // 2 - float(ys.mean()))))
 
 
 def _draft_label(frame_rgb: np.ndarray, dot: _Dot) -> Label:
-    count, _, stats, centroids = cv2.connectedComponentsWithStats(cv2.inRange(frame_rgb, dot.low, dot.high), connectivity=8)
+    in_range = cv2.inRange(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV), dot.low, dot.high)
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(in_range, connectivity=8)
     blobs = [i for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= dot.min_area]  # component 0 is the background
     if not blobs:
         return "absent"
     if len(blobs) > 1:
         return None
     cx, cy = centroids[blobs[0]]
-    return round(cx + dot.offset[0]), round(cy + dot.offset[1])
+    return math.floor(cx + dot.offset[0] + 0.5), math.floor(cy + dot.offset[1] + 0.5)  # half up, as the locator's w // 2
 
 
 def _label_json(label: Label) -> str:
@@ -242,8 +273,12 @@ def _write_sheets(frames: dict[str, np.ndarray], labels: dict[str, Label], folde
     return Success(-(-len(names) // SHEET_SIZE))
 
 
-def draft_labels(frames_dir: Path, out: Path) -> Result[int, str]:
-    """Write the draft labels for every frame in `frames_dir` to `out` and the contact sheets beside it. Returns the label count."""
+def draft_labels(frames_dir: Path, out: Path) -> Result[tuple[int, dict[str, str]], str]:
+    """Write the draft labels for every PNG in `frames_dir` to `out` and the contact sheets beside it.
+
+    Returns the label count and the frames that could not be cropped (file name -> reason). Those are labelled `null` and
+    have no cell on a sheet.
+    """
     if out.exists():
         return Failure(f"{out} already exists; refusing to overwrite it")
     loaded = load_frames(frames_dir)
@@ -252,43 +287,53 @@ def draft_labels(frames_dir: Path, out: Path) -> Result[int, str]:
     dot = _read_dot()
     if not is_successful(dot):
         return Failure(dot.failure())
-    frames = loaded.unwrap()
-    labels: dict[str, Label] = {name: _draft_label(frame, dot.unwrap()) for name, frame in frames.items()}
-    sheets = _write_sheets(frames, labels, out.parent / f"{out.stem}_sheets")
+    crops, uncroppable = loaded.unwrap()
+    drafted: dict[str, Label] = {name: _draft_label(frame, dot.unwrap()) for name, frame in crops.items()}
+    sheets = _write_sheets(crops, drafted, out.parent / f"{out.stem}_sheets")
     if not is_successful(sheets):
         return Failure(sheets.failure())
+    labels: dict[str, Label] = {name: drafted.get(name) for name in sorted([*crops, *uncroppable])}  # an uncroppable frame has no draft: null
     text = "{\n" + ",\n".join(f"{json.dumps(name)}: {_label_json(label)}" for name, label in labels.items()) + "\n}\n"
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")
     except OSError as error:
         return Failure(f"cannot write {out}: {error}")
-    return Success(len(labels))
+    return Success((len(labels), uncroppable))
 
 
 # ---- the score ---------------------------------------------------------------------------------------------------------
 
-def _verdict(label: Label, position: tuple[int, int] | None) -> str:
+def _target(label: JsonLabel) -> tuple[int, int] | None:
+    """The `[x, y]` of a label, written as a tuple or as the list JSON gives; None for `"absent"` and `null`."""
+    if isinstance(label, (tuple, list)):
+        return label[0], label[1]
+    return None
+
+
+def _verdict(label: JsonLabel, position: tuple[int, int] | None) -> str:
     """skipped | hit | miss | wrong | near (neither a hit nor wrong: 2 or 3 px off)."""
     if label is None:
         return "skipped"
-    if isinstance(label, str):  # "absent": any position found there is wrong
+    target = _target(label)
+    if target is None:  # "absent": any position found there is wrong
         return "skipped" if position is None else "wrong"
     if position is None:
         return "miss"
-    dx, dy = position[0] - label[0], position[1] - label[1]
+    dx, dy = position[0] - target[0], position[1] - target[1]
     if abs(dx) <= HIT_PX and abs(dy) <= HIT_PX:
         return "hit"
     return "wrong" if math.hypot(dx, dy) > WRONG_PX else "near"
 
 
-def score(found: dict[str, tuple[int, int] | None], labels: dict[str, Label]) -> dict:
+def score(found: Mapping[str, tuple[int, int] | None], labels: Mapping[str, JsonLabel]) -> dict:
     """Score the positions found against the labels.
 
-    `null` labels are skipped. An `"absent"` label counts only as wrong when a position was found, and stays out of
-    `frames`, `hits`, `misses`, `hit_rate` and `max_err_px`. A file with an `[x, y]` label that is not in `found` counts as
-    not found. `max_err_px` is the largest straight-line error over `[x, y]` labels with a position found (0.0 if none);
-    `hit_rate` is 0.0 when no frame has an `[x, y]` label.
+    A label is `(x, y)` or `[x, y]` (as JSON gives it), `"absent"` or `null`. `null` labels are skipped. An `"absent"`
+    label counts only as wrong when a position was found, and stays out of `frames`, `hits`, `misses`, `hit_rate` and
+    `max_err_px`. A file with an `[x, y]` label that is not in `found` counts as not found. `max_err_px` is the largest
+    straight-line error over `[x, y]` labels with a position found (0.0 if none); `hit_rate` is 0.0 when no frame has an
+    `[x, y]` label.
     """
     frames = 0
     max_err = 0.0
@@ -299,10 +344,11 @@ def score(found: dict[str, tuple[int, int] | None], labels: dict[str, Label]) ->
         if verdict == "skipped":
             continue
         tally[verdict] += 1
-        if isinstance(label, tuple):
+        target = _target(label)
+        if target is not None:
             frames += 1
             if position is not None:
-                max_err = max(max_err, math.hypot(position[0] - label[0], position[1] - label[1]))
+                max_err = max(max_err, math.hypot(position[0] - target[0], position[1] - target[1]))
     return {"frames": frames, "hits": tally["hit"], "misses": tally["miss"], "wrong": tally["wrong"],
             "hit_rate": tally["hit"] / frames if frames else 0.0, "max_err_px": max_err}
 
@@ -348,6 +394,14 @@ def _error(message: str) -> int:
     return 2
 
 
+def _print_listed(lines: list[str]) -> None:
+    """The first `MAX_LISTED` of `lines`, then how many more there are."""
+    for line in lines[:MAX_LISTED]:
+        print(line)
+    if len(lines) > MAX_LISTED:
+        print(f"  ... and {len(lines) - MAX_LISTED} more")
+
+
 def _run_draft(frames_dir: Path, out: Path) -> int:
     resolved = _under_data(out)
     if not is_successful(resolved):
@@ -356,7 +410,10 @@ def _run_draft(frames_dir: Path, out: Path) -> int:
     if not is_successful(result):
         return _error(result.failure())
     out_path = resolved.unwrap()
-    print(f"{result.unwrap()} draft labels in {out_path}; contact sheets in {out_path.parent / f'{out_path.stem}_sheets'}")
+    count, uncroppable = result.unwrap()
+    print(f"{count} draft labels in {out_path}; contact sheets in {out_path.parent / f'{out_path.stem}_sheets'}")
+    print(f"uncroppable: {len(uncroppable)} of {count} frames, labelled null, not on the sheets")
+    _print_listed([f"  {name}: {reason}" for name, reason in uncroppable.items()])
     print("Next: check the sheets, correct the labels, save the result as labels.json, then run `check`.")
     return 0
 
@@ -371,26 +428,25 @@ def _run_check(frames_dir: Path, labels_path: Path) -> int:
     locator = CharacterLocator.from_files(_CHR / "chr.png", _CHR / "chr_mask.png")
     if not is_successful(locator):
         return _error(locator.failure())
-    frames, wanted = loaded.unwrap(), labels.unwrap()
-    unlabelled, unmatched = sorted(set(frames) - set(wanted)), sorted(set(wanted) - set(frames))
+    crops, uncroppable = loaded.unwrap()
+    names, wanted = sorted([*crops, *uncroppable]), labels.unwrap()  # every PNG needs a label, cropped or not
+    unlabelled, unmatched = sorted(set(names) - set(wanted)), sorted(set(wanted) - set(names))
     if unlabelled or unmatched:
         return _error(f"the labels and the frames differ: {len(unlabelled)} frames without a label {unlabelled[:3]}, "
                       f"{len(unmatched)} labels without a frame {unmatched[:3]}")
 
-    found: dict[str, tuple[int, int] | None] = {}
-    why: dict[str, str] = {}
-    for name, frame in frames.items():
+    found: dict[str, tuple[int, int] | None] = {name: None for name in uncroppable}  # nothing found on a frame with no minimap
+    why: dict[str, str] = {name: f"uncroppable: {reason}" for name, reason in uncroppable.items()}
+    for name, frame in crops.items():
         located = locator.unwrap().locate(frame)
         found[name] = located.unwrap() if is_successful(located) else None
         if not is_successful(located):
             why[name] = located.failure()
     result = score(found, wanted)
-    problems = [name for name in frames if _verdict(wanted[name], found[name]) in ("miss", "wrong", "near")]
-    for name in problems[:20]:
-        print(f"  {name}: label {_label_json(wanted[name])}, locator {found[name] or why[name]} "
-              f"({_verdict(wanted[name], found[name])})")
-    if len(problems) > 20:
-        print(f"  ... and {len(problems) - 20} more")
+    _print_listed([f"  {name}: label {_label_json(wanted[name])}, locator {found[name] or why[name]} "
+                   f"({_verdict(wanted[name], found[name])})"
+                   for name in names if _verdict(wanted[name], found[name]) in ("miss", "wrong", "near")])
+    print(f"uncroppable: {len(uncroppable)} of {len(names)} frames (scored as nothing found)")
     positions = {pos for pos in found.values() if pos is not None}
     labelled = {label for label in wanted.values() if isinstance(label, tuple)}
     print(f"distinct positions: {len(positions)} found, {len(labelled)} labelled")

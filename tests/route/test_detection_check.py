@@ -8,10 +8,15 @@ Everything is synthetic: no real frame, no recording from `data/`. Recording fol
 
 Tests 1-6 are the plan's: `score` on hand-made dicts (1-5) and `load_frames` on a recording folder (6). The rest pin
 what the plan leaves open: `score` edge cases, `crop_minimap`, `load_frames` on full-screen folders, `draft_labels`
-and its contact sheets, the labels file, and `main`.
+and its contact sheets, the labels file, and `main`. Tests 26-41 are the B18 fix round: `score` on JSON-list labels, frames
+that cannot be cropped (ruling B18-D1: skipped, reported, scored as nothing found), the draft's colour range and
+rounding, and the import-isolation proof.
 """
 
 import json
+import re
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -25,7 +30,8 @@ from src.route.harness import detection_check
 from src.route.harness.detection_check import crop_minimap, draft_labels, load_frames, main, passed, score
 from src.route.harness.record_minimap import record
 
-ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+REPO = Path(__file__).resolve().parents[2]
+ASSETS = REPO / "assets"
 FRAME_W, FRAME_H = 162, 82
 LINE_ROWS = (28, 45, 60)
 
@@ -170,7 +176,8 @@ def test_6_a_recording_is_loaded_as_rgb_and_never_cropped(tmp_path, monkeypatch)
     folder = _write_recording(tmp_path / "rec", [red])
     result = load_frames(folder)
     assert is_successful(result)
-    frames = result.unwrap()
+    frames = result.unwrap().crops
+    assert result.unwrap().uncroppable == {}  # a recording is never cropped, so no frame can fail to crop
     assert list(frames) == ["frame_000000.png"]
     assert frames["frame_000000.png"].shape == (6, 8, 3)
     assert (frames["frame_000000.png"] == (255, 0, 0)).all()
@@ -182,9 +189,10 @@ def test_10_a_recording_is_returned_sorted_by_name_and_ignores_files_that_are_no
     (folder / "notes.txt").write_text("not a frame", encoding="utf-8")
     result = load_frames(folder)
     assert is_successful(result)
-    assert list(result.unwrap()) == _names(12)
+    crops = result.unwrap().crops
+    assert list(crops) == _names(12)
     for i, frame in enumerate(frames):
-        assert np.array_equal(result.unwrap()[f"frame_{i:06d}.png"], frame)
+        assert np.array_equal(crops[f"frame_{i:06d}.png"], frame)
 
 
 def test_11_load_frames_fails_on_a_missing_folder_an_empty_folder_and_an_unreadable_png(tmp_path):
@@ -260,7 +268,7 @@ def test_14_crop_minimap_fails_when_there_is_no_minimap_a_black_minimap_or_a_bad
         assert isinstance(crop_minimap(bad), Failure)  # type: ignore[arg-type]
 
 
-def test_15_load_frames_crops_a_full_screen_folder_converts_to_rgb_and_names_the_frame_it_cannot_crop(tmp_path):
+def test_15_load_frames_crops_a_full_screen_folder_converts_to_rgb_and_reports_the_frame_it_cannot_crop(tmp_path):
     folder = tmp_path / "screens"
     folder.mkdir()
     frames, regions = zip(*(_full_screen(seed) for seed in (4, 5)))
@@ -269,13 +277,15 @@ def test_15_load_frames_crops_a_full_screen_folder_converts_to_rgb_and_names_the
     result = load_frames(folder)
     assert is_successful(result)
     loaded = result.unwrap()
-    assert list(loaded) == ["screen_0.png", "screen_1.png"]
+    assert list(loaded.crops) == ["screen_0.png", "screen_1.png"] and loaded.uncroppable == {}
     for i, (x1, y1, x2, y2) in enumerate(regions):
-        assert np.array_equal(loaded[f"screen_{i}.png"], cv2.cvtColor(frames[i][y1:y2, x1:x2], cv2.COLOR_BGR2RGB))
+        assert np.array_equal(loaded.crops[f"screen_{i}.png"], cv2.cvtColor(frames[i][y1:y2, x1:x2], cv2.COLOR_BGR2RGB))
     nothing = np.random.default_rng(9).integers(0, 256, size=(300, 400, 3), dtype=np.uint8)
     assert cv2.imwrite(str(folder / "screen_2.png"), nothing)
-    result = load_frames(folder)
-    assert isinstance(result, Failure) and "screen_2.png" in result.failure()
+    result = load_frames(folder)  # B18-D1: a frame with no minimap on screen is skipped and reported, not a failure
+    assert is_successful(result)
+    assert list(result.unwrap().crops) == ["screen_0.png", "screen_1.png"]
+    assert list(result.unwrap().uncroppable) == ["screen_2.png"] and "minimap" in result.unwrap().uncroppable["screen_2.png"]
 
 
 # ---- draft_labels and the contact sheets -------------------------------------------------------------------------------
@@ -293,7 +303,7 @@ def _draft_frames() -> list[np.ndarray]:
 def test_16_draft_labels_puts_each_label_where_the_locator_would_report_the_icon(tmp_path):
     folder = _write_recording(tmp_path / "rec", _draft_frames())
     out = tmp_path / "out" / "labels_draft.json"
-    assert draft_labels(folder, out) == Success(7)
+    assert draft_labels(folder, out) == Success((7, {}))
     expected = {f"frame_{i:06d}.png": [x + CENTRE[0], y + CENTRE[1]] for i, (x, y) in enumerate(POSITIONS)}
     expected["frame_000005.png"] = "absent"  # no blob at all
     expected["frame_000006.png"] = None      # two blobs: the draft cannot tell which is the character
@@ -317,7 +327,7 @@ def test_18_the_contact_sheets_hold_50_frames_each_in_a_folder_the_frame_reader_
     frames = [_paste(_background(i, 30, 20), 10 + i % 10, 5) for i in range(51)]
     folder = _write_recording(tmp_path / "rec", frames)
     out = folder / "labels_draft.json"  # as in the plan: the draft is written into the frames folder
-    assert draft_labels(folder, out) == Success(51)
+    assert draft_labels(folder, out) == Success((51, {}))
     sheets = sorted(p.name for p in (folder / "labels_draft_sheets").iterdir())
     assert sheets == ["sheet_00.png", "sheet_01.png"]
     columns, scale, caption = detection_check.SHEET_COLUMNS, detection_check.SCALE, detection_check.CAPTION_H
@@ -325,14 +335,14 @@ def test_18_the_contact_sheets_hold_50_frames_each_in_a_folder_the_frame_reader_
     last = cv2.imread(str(folder / "labels_draft_sheets" / "sheet_01.png"), cv2.IMREAD_COLOR)
     assert first.shape == (10 * (caption + 20 * scale), columns * 30 * scale, 3)  # 50 cells in 5 columns x 10 rows
     assert last.shape == (caption + 20 * scale, 30 * scale, 3)                    # the 51st frame alone
-    assert len(load_frames(folder).unwrap()) == 51                              # the sheets are not read as frames
+    assert len(load_frames(folder).unwrap().crops) == 51                            # the sheets are not read as frames
 
 
 def test_19_a_sheet_cell_is_the_frame_at_8x_with_a_cross_on_the_label_and_a_caption(tmp_path):
     frame = _paste(_background(1, 30, 20), 12, 4)
     folder = _write_recording(tmp_path / "rec", [frame])
     out = tmp_path / "labels_draft.json"
-    assert draft_labels(folder, out) == Success(1)
+    assert draft_labels(folder, out) == Success((1, {}))
     sheet = cv2.cvtColor(cv2.imread(str(tmp_path / "labels_draft_sheets" / "sheet_00.png"), cv2.IMREAD_COLOR),
                          cv2.COLOR_BGR2RGB)
     scale, caption = detection_check.SCALE, detection_check.CAPTION_H
@@ -440,3 +450,228 @@ def test_25_the_drafted_labels_pass_check_on_the_same_frames(tmp_path, monkeypat
     labels.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
     assert json.loads(labels.read_text(encoding="utf-8"))["frame_000008.png"] == "absent"
     assert _check(folder, labels) == 0
+
+
+# ---- score takes a label as JSON gives it (a list), not only a tuple ---------------------------------------------------
+
+def test_26_score_accepts_json_style_list_labels():
+    labels = {"a.png": [20, 20], "b.png": [40, 40], "x.png": "absent", "y.png": None}
+    found = {"a.png": (20, 21), "b.png": (44, 40), "x.png": None, "y.png": (1, 1)}
+    result = score(found, labels)
+    assert result == {"frames": 2, "hits": 1, "misses": 0, "wrong": 1, "hit_rate": 0.5, "max_err_px": 4.0}
+    assert score(found, {name: tuple(label) if isinstance(label, list) else label for name, label in labels.items()}) == result
+
+
+def test_27_a_list_label_the_locator_missed_is_a_counted_miss():
+    result = score({"a.png": None}, {"a.png": [20, 20]})
+    assert result["frames"] == 1 and result["misses"] == 1 and result["hits"] == 0 and result["hit_rate"] == 0.0
+
+
+# ---- the 4-decimal scores in a crop failure ----------------------------------------------------------------------------
+
+def test_28_a_crop_failure_prints_the_corner_scores_with_4_decimals():
+    nothing = np.random.default_rng(0).integers(0, 256, size=(300, 400, 3), dtype=np.uint8)
+    result = crop_minimap(nothing)
+    assert isinstance(result, Failure)
+    assert re.search(r"left_top -?\d+\.\d{4}[,;)]", result.failure()), result.failure()  # 0.9997 is not shown as 1.000
+
+
+# ---- frames that cannot be cropped (B18-D1): skipped, reported, scored as nothing found --------------------------------
+
+SCREEN_MARGIN = 14  # px of the crop left as it is around the panel: the corner borders reach about this far into the region
+SCREEN_ICONS = {"screen_0.png": (30, 20), "screen_1.png": (80, 30), "screen_2.png": (120, 50), "screen_3.png": (50, 60)}
+COVERED = "screen_1_covered.png"  # sorts between screen_1.png and screen_2.png
+
+
+def _screen(seed: int, icon_at: tuple[int, int]) -> np.ndarray:
+    """A full-screen BGR frame whose minimap crop holds a quiet B15-style panel with the icon's top-left at `icon_at`."""
+    frame, (x1, y1, x2, y2) = _full_screen(seed)
+    panel = _paste(_background(seed, x2 - x1, y2 - y1), *icon_at)
+    m = SCREEN_MARGIN
+    frame[y1 + m:y2 - m, x1 + m:x2 - m] = panel[m:-m, m:-m, ::-1]  # RGB to BGR
+    return frame
+
+
+def _covered(seed: int = 9) -> np.ndarray:
+    """A full-screen frame with no minimap on it: another window covers the game."""
+    return np.random.default_rng(seed).integers(0, 256, size=(300, 400, 3), dtype=np.uint8)
+
+
+def _screens(tmp_path: Path, *, covered: bool = True) -> Path:
+    folder = tmp_path / "screens"
+    folder.mkdir(parents=True)
+    for i, (name, at) in enumerate(SCREEN_ICONS.items()):
+        assert cv2.imwrite(str(folder / name), _screen(20 + i, at))
+    if covered:
+        assert cv2.imwrite(str(folder / COVERED), _covered())
+    return folder
+
+
+def _screen_labels() -> dict:
+    return {name: [x + CENTRE[0], y + CENTRE[1]] for name, (x, y) in SCREEN_ICONS.items()}
+
+
+def _screen_crop_size() -> tuple[int, int]:
+    _, (x1, y1, x2, y2) = _full_screen()
+    return x2 - x1, y2 - y1
+
+
+def test_29_load_frames_fails_when_no_frame_in_a_full_screen_folder_can_be_cropped(tmp_path):
+    folder = tmp_path / "covered"
+    folder.mkdir()
+    for i in range(3):
+        assert cv2.imwrite(str(folder / f"shot_{i}.png"), _covered(i))
+    result = load_frames(folder)
+    assert isinstance(result, Failure)
+    assert "3 of 3" in result.failure() and "shot_0.png" in result.failure() and "minimap" in result.failure()
+
+
+def test_30_load_frames_fails_on_missing_corner_images_and_on_an_unreadable_png_in_a_full_screen_folder(tmp_path, monkeypatch):
+    folder = _screens(tmp_path, covered=False)
+    with monkeypatch.context() as patched:
+        patched.setattr(detection_check, "_corner_templates", lambda: Failure("cannot read the left_top border images"))
+        result = load_frames(folder)  # not a frame problem: nothing would crop, so it must not look like 4 skipped frames
+        assert isinstance(result, Failure) and "border images" in result.failure()
+    (folder / "screen_9_broken.png").write_bytes(b"this is not a png")
+    result = load_frames(folder)  # a file defect, not what the screen showed: also a failure of the whole run
+    assert isinstance(result, Failure) and "screen_9_broken.png" in result.failure()
+
+
+def test_31_draft_labels_marks_an_uncroppable_frame_null_and_draws_no_cell_for_it(tmp_path):
+    folder = _screens(tmp_path)
+    out = tmp_path / "labels_draft.json"
+    result = draft_labels(folder, out)
+    assert is_successful(result)
+    count, uncroppable = result.unwrap()
+    assert count == 5 and list(uncroppable) == [COVERED] and "minimap" in uncroppable[COVERED]
+    labels = json.loads(out.read_text(encoding="utf-8"))
+    assert list(labels) == sorted([*SCREEN_ICONS, COVERED])  # every PNG, in name order
+    assert labels == _screen_labels() | {COVERED: None}
+    width, height = _screen_crop_size()
+    scale, caption, columns = detection_check.SCALE, detection_check.CAPTION_H, 4
+    sheet = cv2.imread(str(tmp_path / "labels_draft_sheets" / "sheet_00.png"), cv2.IMREAD_COLOR)
+    assert sheet.shape == (caption + height * scale, columns * width * scale, 3)  # 4 cells in a row, none for the covered frame
+
+
+def test_32_draft_prints_the_uncroppable_count_and_each_frame_with_its_reason(tmp_path, monkeypatch, capsys):
+    folder = _screens(tmp_path)
+    monkeypatch.setattr(detection_check, "_DATA", tmp_path / "data")
+    out = tmp_path / "data" / "labels_draft.json"
+    assert main(["draft", "--frames", str(folder), "--out", str(out)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("5 draft labels in ")
+    assert lines[1] == "uncroppable: 1 of 5 frames, labelled null, not on the sheets"
+    assert lines[2].startswith(f"  {COVERED}: ") and "minimap" in lines[2]
+    assert lines[3].startswith("Next:")
+    other = _screens(tmp_path / "again", covered=False)
+    assert main(["draft", "--frames", str(other), "--out", str(tmp_path / "data" / "b.json")]) == 0
+    assert "uncroppable: 0 of 4 frames" in capsys.readouterr().out
+
+
+def test_33_draft_lists_at_most_20_uncroppable_frames(tmp_path, monkeypatch, capsys):
+    folder = _screens(tmp_path, covered=False)
+    for i in range(23):
+        assert cv2.imwrite(str(folder / f"covered_{i:02d}.png"), _covered(i))
+    monkeypatch.setattr(detection_check, "_DATA", tmp_path / "data")
+    assert main(["draft", "--frames", str(folder), "--out", str(tmp_path / "data" / "labels_draft.json")]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1] == "uncroppable: 23 of 27 frames, labelled null, not on the sheets"
+    assert sum(line.startswith("  covered_") for line in lines) == 20 and "  ... and 3 more" in lines
+
+
+def test_34_draft_fails_and_writes_nothing_when_no_frame_can_be_cropped(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "covered"
+    folder.mkdir()
+    for i in range(2):
+        assert cv2.imwrite(str(folder / f"shot_{i}.png"), _covered(i))
+    monkeypatch.setattr(detection_check, "_DATA", tmp_path / "data")
+    assert main(["draft", "--frames", str(folder), "--out", str(tmp_path / "data" / "labels_draft.json")]) == 2
+    assert "2 of 2" in capsys.readouterr().err
+    assert not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize("label, exit_code", [(None, 0), ("absent", 0), ([40, 40], 1)])
+def test_35_check_scores_an_uncroppable_frame_as_nothing_found(tmp_path, capsys, label, exit_code):
+    folder = _screens(tmp_path)
+    assert _check(folder, _labels_file(tmp_path, _screen_labels() | {COVERED: label})) == exit_code
+    shown = capsys.readouterr().out
+    assert "uncroppable: 1 of 5 frames (scored as nothing found)" in shown
+    if label == [40, 40]:  # a labelled frame the check could not even look at is a miss, with the reason
+        assert f"{COVERED}: label [40, 40], locator uncroppable: " in shown and "(miss)" in shown and "FAIL" in shown
+    else:
+        assert "PASS" in shown and "frames 4, hits 4" in shown
+
+
+def test_36_check_refuses_labels_that_leave_out_an_uncroppable_frame(tmp_path):
+    folder = _screens(tmp_path)
+    assert _check(folder, _labels_file(tmp_path, _screen_labels())) == 2  # a frame without a label, even if it cannot be cropped
+    assert _check(folder, _labels_file(tmp_path, _screen_labels() | {COVERED: None, "other.png": None})) == 2
+
+
+def test_37_the_drafted_labels_pass_check_on_a_folder_with_an_uncroppable_frame(tmp_path, monkeypatch, capsys):
+    folder = _screens(tmp_path)
+    monkeypatch.setattr(detection_check, "_DATA", tmp_path / "data")
+    draft = tmp_path / "data" / "labels_draft.json"
+    assert main(["draft", "--frames", str(folder), "--out", str(draft)]) == 0
+    labels = tmp_path / "labels.json"
+    labels.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
+    capsys.readouterr()
+    assert _check(folder, labels) == 0
+    assert "PASS" in capsys.readouterr().out
+
+
+# ---- the draft's dot colour and rounding -------------------------------------------------------------------------------
+
+def test_38_a_dimmer_capture_of_the_icon_is_still_drafted_at_its_position(tmp_path):
+    frames = []
+    for i, factor in enumerate((1.0, 0.8, 0.7)):  # at 80 % brightness the icon's RGB is far outside the original's per-channel box
+        icon = np.clip(ICON_RGB.astype(float) * factor, 0, 255).astype(np.uint8)
+        frame = _background(i)
+        frame[10:10 + ICON_H, 20:20 + ICON_W][ICON_ON] = icon[ICON_ON]
+        frames.append(frame)
+    folder = _write_recording(tmp_path / "rec", frames)
+    out = tmp_path / "labels_draft.json"
+    assert draft_labels(folder, out) == Success((3, {}))
+    assert json.loads(out.read_text(encoding="utf-8")) == {name: [20 + CENTRE[0], 10 + CENTRE[1]] for name in _names(3)}
+
+
+def test_39_the_dark_outline_alone_and_the_maps_greys_are_not_the_dot(tmp_path):
+    ring = ICON_ON & (ICON_RGB.max(axis=2) < 100)  # the icon's dark outline, none of its yellow
+    assert ring.any()
+    outline_only = _background(0)
+    outline_only[20:20 + ICON_H, 50:50 + ICON_W][ring] = ICON_RGB[ring]
+    folder = _write_recording(tmp_path / "rec", [outline_only, _background(1)])
+    out = tmp_path / "labels_draft.json"
+    assert draft_labels(folder, out) == Success((2, {}))
+    assert json.loads(out.read_text(encoding="utf-8")) == {name: "absent" for name in _names(2)}
+
+
+def test_40_a_label_halfway_between_two_pixels_rounds_up_like_the_locators_integer_centre(tmp_path):
+    dot = ICON_RGB[ICON_H // 2 - 1, ICON_W // 2 - 1]  # a pixel of the dot itself
+    assert dot[0] > 200 and dot[1] > 200 and dot[2] < 60
+    frames = []
+    for centre in ((10, 10), (11, 11)):  # a 5 x 5 patch has its centroid on a pixel; the dot's offset adds 0.5
+        frame = _background(0)
+        frame[centre[1] - 2:centre[1] + 3, centre[0] - 2:centre[0] + 3] = dot
+        frames.append(frame)
+    folder = _write_recording(tmp_path / "rec", frames)
+    out = tmp_path / "labels_draft.json"
+    assert draft_labels(folder, out) == Success((2, {}))
+    assert json.loads(out.read_text(encoding="utf-8")) == {"frame_000000.png": [11, 11], "frame_000001.png": [12, 12]}  # round(): 10
+
+
+# ---- imports -----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_41_importing_the_module_and_cropping_a_frame_never_import_src_vision_vision_or_bettercam():
+    code = (
+        "import sys; sys.path.insert(0, '.')\n"
+        "import numpy as np\n"
+        "import src.route.harness.detection_check as dc\n"
+        "def leaked(): return sorted(m for m in sys.modules if m == 'bettercam' or m.startswith('src.vision'))\n"
+        "assert leaked() == [], leaked()  # at import: nothing\n"
+        "dc.crop_minimap(np.zeros((300, 400, 3), np.uint8))\n"
+        "assert 'src.vision.vision_helper_lib' in sys.modules\n"
+        "assert 'src.vision.vision' not in sys.modules and 'bettercam' not in sys.modules, leaked()\n")
+    done = subprocess.run([sys.executable, "-I", "-c", code], cwd=REPO, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
