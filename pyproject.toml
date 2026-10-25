@@ -1,0 +1,71 @@
+# Tool configuration only: there is no [project] or [build-system] table, and pytest keeps
+# reading pytest.ini (pytest ignores a pyproject.toml with no [tool.pytest] table).
+
+[tool.ruff]
+target-version = "py314"
+extend-exclude = ["src/rune_solver"]   # replaced by the Feature C port
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]   # explicit: ruff 0.17's default set is much wider (185 findings here)
+ignore = ["E741"]                  # ambiguous name `l`: style only
+
+[tool.ruff.lint.per-file-ignores]
+"src/vision/vision_helper_lib.py" = ["F401"]   # unused Enum; removed after the runes port (ruling 1)
+"src/input/harness/listener.py" = ["F821"]     # poll() reads `root`, `del root` at :350; sink tool, not changed here
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+include = ["src"]
+exclude = ["src/rune_solver"]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+
+[tool.importlinter]
+root_package = "src"
+
+[[tool.importlinter.contracts]]
+name = "a input independent"
+type = "forbidden"
+source_modules = ["src.input"]
+forbidden_modules = ["src.controller", "src.gui", "src.vision", "src.route", "src.classes", "src.main"]
+
+[[tool.importlinter.contracts]]
+name = "b classes leaf"
+type = "forbidden"
+source_modules = ["src.classes"]
+forbidden_modules = ["src.controller", "src.gui", "src.vision", "src.route", "src.input", "src.main"]
+
+[[tool.importlinter.contracts]]
+name = "c controller"
+type = "forbidden"
+source_modules = ["src.controller"]
+forbidden_modules = ["src.gui", "src.vision", "src.route", "src.input", "src.main"]
+
+[[tool.importlinter.contracts]]
+name = "d route not gui/main"
+type = "forbidden"
+source_modules = ["src.route"]
+forbidden_modules = ["src.gui", "src.main"]
+
+[[tool.importlinter.contracts]]
+name = "e route not vision"
+type = "forbidden"
+source_modules = ["src.route"]
+forbidden_modules = ["src.vision"]
+ignore_imports = ["src.route.harness.record_minimap -> src.vision.vision"]
+
+[[tool.importlinter.contracts]]
+name = "f route layers"
+type = "layers"
+layers = [
+    "src.route.sim",
+    "src.route.position",
+    "src.route.walker",
+    "src.route.moves",
+    "src.route.planner",
+    "src.route.locate",
+    "src.route.route_graph",
+    "src.route.terrain",
+    "src.route.params | src.route.leg_log | src.route.character",
+]
