@@ -162,7 +162,7 @@ def test_buttons_that_need_the_minimap_say_so_before_it_exists(make_gui, monkeyp
     def must_not_run(*args):
         raise AssertionError("used the minimap before the first frame")
 
-    monkeypatch.setattr(gui.controller, "getCharacterCoords", must_not_run)
+    monkeypatch.setattr(gui, "_findCharacter", must_not_run)
     monkeypatch.setattr(gui_module, "MapEditor", must_not_run)
 
     getattr(gui, button)()
@@ -175,7 +175,7 @@ def test_buttons_that_need_the_minimap_say_so_before_it_exists(make_gui, monkeyp
 def test_draw_and_clear_buttons_work_once_the_first_frame_has_arrived(make_gui, monkeypatch):
     gui, _, _ = make_gui(frame=_frame())
     gui._updateCanvas()
-    monkeypatch.setattr(gui.controller, "getCharacterCoords", lambda: (5, 6))
+    monkeypatch.setattr(gui, "_findCharacter", lambda: (5, 6))  # where the finder works is test_gui_character_buttons.py
 
     gui.drawBlueNodeOnCharacter()
     gui.drawOrangeNodeOnCharacter()

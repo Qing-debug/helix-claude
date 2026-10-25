@@ -1,3 +1,4 @@
+from pathlib import Path
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.filedialog as filedialog
@@ -11,11 +12,23 @@ from src.controller.node import  CharacterNode
 from src.controller.controller import BuildOutcome
 from src.classes.classes import CharacterClass
 from src.gui.map_editor import MapEditor
+from src.route.character import CharacterLocator
 
 # Shown where the minimap will appear, and in the console by the buttons that need it, until the first frame arrives.
 MINIMAP_NOT_FOUND_LABEL = ("Minimap not found yet. Waiting for the game's minimap to be visible on the captured "
                            "monitor; it appears here as soon as it is found.")
 MINIMAP_NOT_FOUND_MESSAGE = "Minimap not found yet: make the game's minimap visible on the captured monitor, then try again."
+
+# The character icon the buttons look for on the minimap (the route walker's finder, decision H20).
+_CHARACTER_ASSETS = Path(__file__).resolve().parent.parent.parent / "assets" / "chr"
+CHARACTER_ICON_PATH = _CHARACTER_ASSETS / "chr.png"
+CHARACTER_MASK_PATH = _CHARACTER_ASSETS / "chr_mask.png"
+# Shown when the finder says no; the reason is its Failure text ("miss", "ambiguous", or "bad frame: ...").
+CHARACTER_NOT_FOUND_MESSAGE = "Character not found on the minimap ({reason})."
+CHARACTER_NOT_FOUND_REASONS = {
+    "miss": "no place on the minimap looks like the character icon",
+    "ambiguous": "two separate places look almost equally like the character icon",
+}
 
 
 class MapleGUI:
@@ -32,6 +45,7 @@ class MapleGUI:
         self.controller = controller
         self.sharedInfo = sharedInfo
         self.map_editor = None  # MapEditor instance when open, None otherwise
+        self._character_locator = None  # built on the first search for the character (_findCharacter)
         self.zoom_factor = 1.0
         self.min_zoom = 0.5
         self.max_zoom = 3.0
@@ -223,10 +237,36 @@ class MapleGUI:
         self._printToGUIConsole(MINIMAP_NOT_FOUND_MESSAGE)
         return False
 
+    def _findCharacter(self):
+        """The character's centre on the minimap as (x, y), or None after saying in the console why not (the finder
+        says "not found" or "not sure" instead of guessing, decision H20). Call after `_minimapReady()`."""
+        if self._character_locator is None:
+            built = CharacterLocator.from_files(CHARACTER_ICON_PATH, CHARACTER_MASK_PATH)
+            if not is_successful(built):
+                self._printToGUIConsole(f"Cannot look for the character: {built.failure()}")
+                return None
+            self._character_locator = built.unwrap()
+        # Read the frame under the lock and match outside it, as _updateCanvas does: the vision thread stores a new
+        # array for every frame (src/vision/vision.py:81), so this array is not mutated while it is searched.
+        shared = self.sharedInfo
+        assert shared is not None  # _minimapReady() passed, so a frame came from it (the default None is for tests)
+        with shared.minimap_frame_lock:
+            frame = shared.minimap_frame
+        found = self._character_locator.locate(frame)
+        if not is_successful(found):
+            reason = found.failure()
+            self._printToGUIConsole(CHARACTER_NOT_FOUND_MESSAGE.format(
+                reason=CHARACTER_NOT_FOUND_REASONS.get(reason, reason)))
+            return None
+        return found.unwrap()
+
     def drawBlueNodeOnCharacter(self):
         if not self._minimapReady():
             return
-        x, y  = self.controller.getCharacterCoords()
+        coords = self._findCharacter()
+        if coords is None:
+            return
+        x, y = coords
         node_type = "Blue Node"
         self.node_count += 1
         self._printToGUIConsole(f"Identifier: {self.node_count}, Type of Node: {node_type} | Character Position: ({x},{y})")
@@ -236,7 +276,10 @@ class MapleGUI:
     def drawOrangeNodeOnCharacter(self):
         if not self._minimapReady():
             return
-        x, y = self.controller.getCharacterCoords()
+        coords = self._findCharacter()
+        if coords is None:
+            return
+        x, y = coords
         node_type = "Orange Node"
         self.node_count += 1
         self._printToGUIConsole(f"Identifier: {self.node_count}, Type of Node: {node_type} | Character Position: ({x},{y})")
@@ -247,8 +290,10 @@ class MapleGUI:
     def showPathToGoalNode(self):
         if not self._minimapReady():
             return
+        character_coords = self._findCharacter()
+        if character_coords is None:
+            return
         print("-----------------------------------------------")
-        character_coords = self.controller.getCharacterCoords()
         char_node = CharacterNode(character_coords)
         goal_node = self.controller.agent.map_rotation_order[0]
         self._drawGraph()
