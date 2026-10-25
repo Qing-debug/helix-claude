@@ -1,4 +1,6 @@
-"""Runtime pieces of the supervised walk (plan task B19): the stop control and the minimap capture.
+"""Runtime pieces of the supervised walk (plan task B19): the stop control, the minimap capture and the cleanup steps.
+
+Shared by the walk CLI (`walk.py`) and the movement measurement tool (`harness/measure_moves.py`).
 
 `StopControl` stops a run from three sources: the F12 key (a low-level keyboard hook on its own thread, G33), Ctrl+C
 (a SIGINT handler) and the walk CLI's `--minutes` timer. `trigger()` only records the first trigger and sets an
@@ -22,10 +24,19 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
+from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
+from src.route.character import CharacterLocator
+from src.route.position import MinimapPositionSource
+from src.route.walker import PositionSource
+
+_REPO = Path(__file__).resolve().parents[2]
+_ICON = _REPO / "assets" / "chr" / "chr.png"
+_MASK = _REPO / "assets" / "chr" / "chr_mask.png"
 _JOIN_S = 5.0          # how long close() waits for the worker and the hook thread
 _HOOK_READY_S = 5.0    # how long _install_hook waits for the hook thread to install the hook
 _FRAME_POLL_S = 0.05   # wait_first_frame's polling period
@@ -215,6 +226,53 @@ def _install_keyboard_hook(vk: int, on_key: Callable[[], None]) -> Callable[[], 
         remove()
         raise OSError(error)
     return remove
+
+
+def check_out(out: Path, names: Iterable[str]) -> Result[None, str]:
+    """B19-D2: refuse an `--out` that is a file or already holds one of `names` (paths relative to `out`).
+
+    Shared by the walk CLI and the movement measurement tool; the first name found is the one reported.
+    """
+    if out.exists() and not out.is_dir():
+        return Failure(f"{out} is not a folder; choose a new --out")
+    for name in names:
+        path = out / name
+        if path.exists():
+            return Failure(f"{path} already exists; choose a new --out")
+    return Success(None)
+
+
+class SharedFrame:
+    """What the capture thread and the position source need of `SharedInfo` (src/main.py may not be imported here)."""
+
+    def __init__(self) -> None:
+        self.minimap_frame_lock = threading.Lock()
+        self.minimap_frame = None
+
+
+def make_positions(shared) -> PositionSource | Failure[str]:
+    """The character's position on `shared`'s minimap frames, or a `Failure` when the character icon does not load."""
+    located = CharacterLocator.from_files(_ICON, _MASK)
+    if not is_successful(located):
+        return Failure(f"character icon: {located.failure()}")
+    return MinimapPositionSource(shared, located.unwrap())
+
+
+def run_cleanup(steps: Iterable[tuple[str, Callable[[], object]]]) -> None:
+    """Run every cleanup step in order (plan B19). A step that raises prints `cleanup failed: <name>: ...` and the
+    next step still runs; a `BaseException` (KeyboardInterrupt, SystemExit) is held and the first one re-raised after
+    every step ran."""
+    held: BaseException | None = None
+    for name, step in steps:
+        try:
+            step()
+        except Exception as exc:
+            print(f"cleanup failed: {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        except BaseException as exc:  # KeyboardInterrupt, SystemExit: hold it, keep going
+            if held is None:
+                held = exc
+    if held is not None:
+        raise held
 
 
 def start_capture(shared) -> threading.Thread:

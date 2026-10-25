@@ -1599,6 +1599,7 @@ def main(argv: list[str] | None = None) -> int
 - [ ] **`summarize`** returns `reach_h_mean`, `reach_h_sd`, `reach_h_n` (|Δx| of horizontal teleports with
   |Δy| ≤ 2), `reach_v_peak_mean` (from `peak_y` when present), `walk_px_per_s` (Σ|Δx| / Σheld s of walks),
   `teleport_settle_s`, `drop_settle_s` (medians).
+  *Amended (B20-D1, rulings B2/B3):* a move of 2 px or less along its axis (a no-op) is left out of `reach_h_*`, `reach_v_peak_mean` and `walk_px_per_s`; `teleport_settle_s` is the median over the flat horizontal teleports only; `direction` is the `Key` name (`"LEFT"`...).
 - [ ] **Tests:** `summarize` on synthetic samples: 10 teleports of Δx ±19 and ±20 alternating → mean 19.5, n 10;
   a teleport with |Δy| 5 is excluded; walks of 16 px over 2000 ms → 8.0 px/s; `main` without `--supervised` → 2.
 - **Run:** `python -m pytest -q tests/route/test_measure_moves.py`
@@ -1623,6 +1624,9 @@ frames.
   default-dependent FF2 numbers in the tests of B2-B7 and B12-B14 in the same commit (the measurement in the body),
   then re-run B14's 1000-lap run.
   Per-map reach is built only if a second map's measurement shows it is needed (specB:L13).
+  *Amended (B20-D4, ruling A):* step 2's recording includes 5 or more hand teleports UP into open space; step 4
+  treats `reach_v_peak_mean` as a lower bound (the tool sees no frame between the blink and the end of the key
+  schedule, so it can miss the true peak) and, before changing Kanna's 23, checks the peak on those frames.
 - [ ] **Step 5: sim realism.** Compare `walk_px_per_s`, `teleport_settle_s`, `drop_settle_s` and the step-2 platform
   positions with `SimParams`, `MovementParams` and `ff2_terrain.json`. Any value off by > 20%, or a platform end off
   by > 3 px: update the default or fixture, re-run the full suite (updating default-dependent numbers in B2-B7 and
