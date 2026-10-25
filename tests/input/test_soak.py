@@ -14,10 +14,9 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Success
 
 from src.input import actions, input_layer
-from src.input.harness import listener, soak
+from src.input.harness import listener, realism, soak
 from src.input.harness.faults import FaultStamps
-from src.input.harness.soak import (COMMAND_FIELDS, FOCUS_LOST, FOCUS_RECHECKS, KS_TYPES, MIN_SAMPLES_PER_TYPE,
-                                    RunWriter, SoakConfig, command_row, fault_indexes, fault_row, focus_lost_row,
+from src.input.harness.soak import (COMMAND_FIELDS, FOCUS_LOST, FOCUS_RECHECKS, RunWriter, SoakConfig, command_row, fault_indexes, fault_row, focus_lost_row,
                                     plan_mix, pong_flags, run_command, run_soak, sample_counts)
 from src.input.input_layer import ActionRecord
 from src.input.link import InputError, SendReport, SessionInfo
@@ -421,12 +420,11 @@ def test_mix_is_seeded():
     assert plan_mix(5, 300)[:100] == plan_mix(5, 100)  # a longer run starts with the same commands
 
 
-def test_10000_commands_give_1000_chosen_samples_per_ks_type_gap_included():
+def test_10000_commands_give_1000_chosen_samples_per_judged_type_gap_included():
     mix = plan_mix(1, 10_000)
     counts = sample_counts(mix)
-    assert set(KS_TYPES) == {TimingType.HOLD, TimingType.GAP, TimingType.CHORD_OFFSET, TimingType.RELEASE_LAG,
-                             TimingType.REACTION, TimingType.WALK}
-    assert all(counts[t] >= MIN_SAMPLES_PER_TYPE == 1000 for t in KS_TYPES), counts
+    assert set(realism.KS_TYPES) == {TimingType.HOLD, TimingType.GAP, TimingType.CHORD_OFFSET, TimingType.REACTION}
+    assert all(counts[t] >= realism.KS_MIN_N == 1000 for t in realism.KS_TYPES), counts
     assert counts[TimingType.REACTION] == 10_000
     # The counts match what the builders actually draw (a clipped sequence hold is still a HOLD draw).
     model = TimingModel(np.random.default_rng(0))
@@ -440,7 +438,7 @@ def test_10000_commands_give_1000_chosen_samples_per_ks_type_gap_included():
         for s in builders[c.action](c).samples:
             built[TimingType.HOLD if s.type == TimingType.HOLD_CLIPPED else s.type] += 1
     built[TimingType.REACTION] = len(mix)
-    assert {t: built[t] for t in KS_TYPES} == {t: counts[t] for t in KS_TYPES}
+    assert {t: built[t] for t in TimingType} == {t: counts[t] for t in TimingType}
 
 
 def test_fault_indexes_are_seeded_distinct_and_never_the_first_command():
@@ -954,8 +952,34 @@ def test_cli_short_runs_200_commands(tmp_path, cli):
     assert cli[0].events.count("play") == 200
 
 
+def _validate(commands: int, *extra: str, seed: int = 1) -> str | None:
+    return soak.validate(soak.config_from_args(soak.parse_args(["--commands", str(commands), "--seed", str(seed),
+                                                                *extra])))
+
+
 def test_cli_accepts_10000_without_short():
-    assert soak.validate(soak.config_from_args(soak.parse_args(["--commands", "10000", "--seed", "1"]))) is None
+    assert _validate(10_000) is None
+
+
+def test_the_sample_check_asks_for_what_the_judge_tests_at_the_judges_minimum():
+    # One source of truth (H21): soak imports the judge's kinds and minimum, it keeps no copy of them.
+    assert soak.KS_TYPES is realism.KS_TYPES and soak.KS_MIN_N is realism.KS_MIN_N
+
+
+def test_a_4000_command_run_the_judge_can_judge_is_accepted():
+    counts = sample_counts(plan_mix(1, 4_000))
+    assert counts[TimingType.WALK] < realism.KS_MIN_N  # the old six-kind rule refused this run for its walks
+    assert all(counts[t] >= realism.KS_MIN_N for t in realism.KS_TYPES), counts
+    assert _validate(4_000) is None
+
+
+def test_a_run_too_short_for_the_judge_is_still_refused_naming_the_short_kinds():
+    counts = sample_counts(plan_mix(1, 2_700))
+    assert counts[TimingType.CHORD_OFFSET] < realism.KS_MIN_N
+    refusal = _validate(2_700)
+    assert refusal is not None and "refused" in refusal and str(TimingType.CHORD_OFFSET) in refusal
+    assert str(TimingType.WALK) not in refusal and str(TimingType.RELEASE_LAG) not in refusal  # not judged
+    assert _validate(2_700, "--short") is None
 
 
 def test_cli_out_writes_the_c5_files_and_one_seed_gives_one_action_sequence(tmp_path, cli):
