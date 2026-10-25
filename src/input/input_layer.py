@@ -8,14 +8,15 @@ flight (PA-adj2-D1). One thread draws from the model at a time (C3 `TimingModel.
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.input import actions
 from src.input.actions import Plan
-from src.input.link import BleLink, InputError, SendReport
-from src.input.protocol import Key
+from src.input.link import InputError, SendReport
+from src.input.protocol import Key, Step
 from src.input.timing import Sample, TimingModel, TimingType
 
 # Seams the tests monkeypatch (A-PF m6); _clock is the stimulus clock callers use (perf_counter_ns).
@@ -27,6 +28,15 @@ _sleep = time.sleep
 _UNCERTAIN = frozenset({InputError.NOTIFY_FAILED, InputError.ACK_TIMEOUT, InputError.WRITE_FAILED})
 
 
+class Link(Protocol):
+    """What InputLayer needs from a link. `BleLink` (src/input/link.py) and the route sim's `SimLink`
+    (src/route/sim/link.py) both satisfy it; the shared test fake is tests/input/input_fakes.py `FakeLink`."""
+
+    def play(self, steps: Sequence[Step]) -> Result[SendReport, InputError]: ...
+
+    def release_all(self) -> Result[SendReport, InputError]: ...
+
+
 @dataclass(frozen=True)
 class ActionRecord:
     plan: Plan
@@ -36,7 +46,7 @@ class ActionRecord:
 
 
 class InputLayer:
-    def __init__(self, link: BleLink, model: TimingModel) -> None:
+    def __init__(self, link: Link, model: TimingModel) -> None:
         self._link = link
         self._model = model
 

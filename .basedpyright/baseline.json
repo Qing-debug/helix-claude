@@ -1348,24 +1348,8 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 23,
-                    "endColumn": 56,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 29,
                     "endColumn": 44,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 23,
-                    "endColumn": 56,
                     "lineCount": 1
                 }
             }
