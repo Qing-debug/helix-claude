@@ -9,7 +9,7 @@ from returns.pipeline import is_successful
 import tkinter.ttk as ttk
 from src.controller.node import  CharacterNode
 from src.controller.controller import BuildOutcome
-from src.classes.classes import CharacterClass, Kanna
+from src.classes.classes import CharacterClass
 from src.gui.map_editor import MapEditor
 
 

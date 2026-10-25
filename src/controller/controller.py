@@ -1,4 +1,3 @@
-import threading
 from pathlib import Path
 import cv2
 from src.controller.csv_parser import CSVParser
@@ -8,9 +7,7 @@ import networkx as nx
 from src.controller.path_graph import PathGraph
 from src.controller.node import Node, CharacterNode
 from src.classes.classes import CharacterClass
-from itertools import cycle
 import math
-from collections import namedtuple
 from enum import Enum
 
 
@@ -33,9 +30,6 @@ class Controller:
     def __init__(self, sharedInfo = None, CSV = None, characterClass = None):
         self.agent = MapleAgent(sharedInfo = sharedInfo, CSV = CSV, characterClass = characterClass)
 
-    # def start(self):
-    #     self.agent.start()
-
     def getCharacterCoords(self) -> (int, int):
         return self.agent.getCharacterCoords()
 
@@ -45,12 +39,6 @@ class Controller:
 
     def getNodeMap(self) -> dict[int, Node]:
         return self.agent.node_map
-
-    # def addRotationNodes(self):
-
-    # def addIntermediaryNodes(self):
-
-    # def resetNodeList(self):
 
     def connectCharacterNode(self, char_node: CharacterNode = None) -> None:
         self.agent.connectCharacterNode(char_node)
@@ -65,12 +53,6 @@ class Controller:
         """Forwards to MapleAgent.loadMap — see there for behavior."""
         return self.agent.loadMap(csv_path)
 
-    # # delete once you don't need a direct way to test this
-    # def buildGraph(self) -> None:
-    #     res_build_graph = self.agent._buildGraph()
-    #     if not is_successful(res_build_graph):
-    #         print(res_build_graph)
-
 
 class MapleAgent:
     def __init__(self, sharedInfo = None, CSV = None, characterClass = None):
@@ -84,7 +66,6 @@ class MapleAgent:
         self.x_visit_radius = 2
         self.edge_y_tolerance_level = 2
         self.edge_x_tolerance_level = 2
-        # self.thread = threading.Thread(target=self.executePathFinding, daemon=True)
         self.project_root = Path(__file__).parent.parent.parent
         self.character_icon_path = str(self.project_root / "assets" / 'chr' / 'chr.png')
         self.character_icon_mask_path = str(self.project_root / "assets" / 'chr' / 'chr_mask.png')
@@ -159,56 +140,6 @@ class MapleAgent:
 
         return Success(None)
 
-
-    # def start(self):
-    #     setup_agent_res = self.setupAgent()
-    #     if not is_successful(setup_agent_res):
-    #         print(setup_agent_res)
-    #         print("terminating setup agent process.")
-    #         return
-    #     print(f"agent state setup successfully. Beginning pathfinding...")
-    #     self.thread.start()
-    #
-    # NOTE: when uncommenting, the references below need a rename:
-    #   tp_max_traversal_dist (tuple) → max_horizontal_traversal_dist (int)
-    #   the .teleport() / .tp_left() method calls are also stale; the
-    #   current CharacterClass ABC exposes movement_type as a string,
-    #   not bound methods. Re-wire to whatever movement API exists at
-    #   that point.
-    # def executePathFinding(self):
-    #     goal_node_reached = False
-    #     map_rotation_order_iter = cycle(self.map_rotation_order)
-    #     goal_node = next(map_rotation_order_iter)
-    #     while True:
-    #         char_pos = self.getCharacterCoords()
-    #         char_node = CharacterNode(char_pos)
-    #         self.connectCharacterNode(char_node) #add character node to graph
-    #         if goal_node_reached:
-    #             goal_node = next(map_rotation_order_iter)
-    #         path = self.pathGraph.getPathToGoalNode(goal_node)
-    #         path_iter = iter(path)
-    #         entire_path_valid = True
-    #         while entire_path_valid:
-    #             target_node = next(path_iter, None) #dooes ite
-    #             # curr_path_final_node = path[-1]
-    #             char_movement_axis = self._computeDirectionOfTravel(char_node, target_node)
-    #             current_target_node_valid = True if target_node is not None else False
-    #             while current_target_node_valid:
-    #                 char_position = self.getCharacterCoords()
-    #                 #check if on the same plane as the target node
-    #                 if not self._isOnSamePlaneAsTargetNode(char_node, target_node, char_movement_axis):
-    #                     current_target_node_valid, entire_path_valid, goal_node_reached = False, False, False
-    #                     continue
-    #                 #within the plane, nothing is wrong
-    #                 if char_movement_axis == "horizontal":
-    #                     dist_to_target = target_node.minimap_position[0] - char_position[0]
-    #                     dist_to_target_after_tp = self._distAfterMovementAbility(self.characterClass.tp_max_traversal_dist, char_node, target_node)[0]
-    #                     if abs(dist_to_target_after_tp) < abs(dist_to_target):
-    #                         if char_position[0] < target_node.minimap_position[0]:
-    #                             self.characterClass.teleport(direction = "right") #will need to pause here until the board sends back a msg that it has inputed the movements
-    #                         elif char_position[0] > target_node.minimap_position[0]:
-    #                             self.characterClass.tp_left(direction = "left")
-    #                         continue
 
     def getCharacterCoords(self) -> (int, int):
         character_icon = cv2.imread(self.character_icon_path, cv2.IMREAD_GRAYSCALE)

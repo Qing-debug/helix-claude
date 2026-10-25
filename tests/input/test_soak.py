@@ -594,7 +594,7 @@ def test_session_connected_ns_is_stamped_right_after_the_first_connect(tmp_path,
     # A-H2-R-D1 → A: H3 starts Delivery's window at the first connect, not at the listener's start
     link, calls = DriverLink(driver_clock), []
     real_connect, returned = link.connect, []
-    link.connect = lambda timeout_s=30.0: (r := real_connect(timeout_s), returned.append(driver_clock.now))[0]
+    link.connect = lambda timeout_s=30.0: (real_connect(timeout_s), returned.append(driver_clock.now))[0]
     monkeypatch.setitem(soak.INJECTORS, "reset_board", _injector(driver_clock, link, calls))
     code, _, _ = _run(tmp_path, driver_clock, link=link, commands=6, faults={"reset_board": 1})
     assert code == 0 and len(returned) == 2  # the first connect and the reconnect after the fault

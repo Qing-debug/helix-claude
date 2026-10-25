@@ -43,7 +43,7 @@ class CSVParser:
                 print(f"succesfully created node for row {row}")
                 row += 1
 
-        print(f"successfully created all nodes in memory, next step: graph creation.")
+        print("successfully created all nodes in memory, next step: graph creation.")
         return Success(None)
 
     def _validateCSV(self) -> Result[None, str]:
