@@ -236,6 +236,22 @@ def test_issue_6_example_s_links_up_to_t_past_the_unreachable_left_end_m():
 
 
 @pytest.mark.parametrize("direction", ["up", "down"])
+@pytest.mark.parametrize("invalid_first", [True, False])
+def test_unreachable_platform_end_does_not_block_the_link_whichever_is_inserted_first(direction, invalid_first):
+    # Source at x 70; the left platform end at x 71 is unreachable from x 70, and the plain node at x 69 is
+    # the same distance away. Before H17 the end, if inserted first, won the tie and then failed the
+    # rule, so no edge at all; now it is skipped and the link goes to the plain node in both insertion orders.
+    sign = _VERTICAL[direction]
+    source = _node(70, 60)
+    invalid = _node(71, 60 + sign * 10, left_edge=True)
+    plain = _node(69, 60 + sign * 10)
+    nodes = (source, invalid, plain) if invalid_first else (source, plain, invalid)
+    pg = _build(*nodes)
+    assert list(pg.graph.out_edges(source)) == [(source, plain)]
+    assert pg.graph[source][plain][0]["weight"] == 10
+
+
+@pytest.mark.parametrize("direction", ["up", "down"])
 def test_valid_nearest_vertical_node_wins_over_a_farther_one(direction):
     sign = _VERTICAL[direction]
     # nearer left-edge node at x 10, source x 11 (>= 10) -> valid, so the edge goes to it and not to `far`.
