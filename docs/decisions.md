@@ -1115,6 +1115,6 @@ Affects: `src/ble/` (removed with `git rm -r`) and the four `src/ble` lines of C
 
 Cost if wrong: the three files are experiments with no callers; nothing is lost that `src/input/` does not do.
 
-Undo: `git revert` the `chore(cleanup): remove src/ble ...` commit on `cleanup/agent-friendly` (or `git checkout <commit>^ -- src/ble`).
+Undo: `git checkout 60f1d7a^ -- src/ble` on `cleanup/agent-friendly` (restores only the folder; `git revert 60f1d7a` would also delete this entry and restore a CLAUDE.md sentence about code that is gone).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:270` (decision), `notes/DRV41.md` (Final executable wave plan, row 1), `notes/AUD40-p5.md` CW-12.
