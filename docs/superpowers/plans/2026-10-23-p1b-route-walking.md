@@ -357,6 +357,9 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node,
   the nearest platform other than g's straight above (UP) or below (DOWN) (ex, ey) is h's platform, L = ex, else
   the edge has no launch point and is **not offered**. A platform's surface at x is the interpolated y of each of
   its segments spanning x (both ends of a same-x segment; a one-node platform only at its own x).
+  Known behaviour (PLF48-R m2, left by ruling): if the character is at the edge's target g by 2 px (`_is_at(g)`) but
+  `attach` anchors it to a different platform, the launch rule does not apply and the move fires from the current x
+  (the pre-fix rule). Never seen on FF2 or its 299 ±2 px variants.
 - **P1** Arrived when the character is at `target`: `Success(Decision(None, 0.0, None))`.
 - **P2** `attach(rg, pos)`; its `Failure` is returned unchanged.
 - **P3 start.** Over the offered moves only: `rg` here is `rg` without its `UP`/`DOWN` edges that have no launch
@@ -726,7 +729,7 @@ numpy and `src.input.protocol.Key`.
      `(79, 22)`, written to a temporary CSV and loaded the same way; pos `(77,25)` (on the slope segment, at the
      `(79,22)` node by the platform test), target `(101,24)` → `TELEPORT` `Key.RIGHT` `toward` the `(101,24)` node
      (g′ advanced over the WALK edges via `(90,24)`, d = 24), never `Failure` or `None`.
-  11. Launch point (B14-inv-D1, PLF48), synthetic graphs built the runtime way:
+  11. Launch point (B14-inv-D1, PLF48), graphs built the runtime way (a-g synthetic, h the FF2 map edited in a temporary CSV):
      a. Case 1, DOWN: nodes `(10,10) (25,10) (40,10) (29,28) (45,28)`, target `(29,28)`: pos `(25,10)` → `WALK`
         `Key.RIGHT` 500 ms `toward` the target; pos `(29,10)` and `(27,10)` (within `arrive_px`) → `TELEPORT DOWN`.
      b. Case 1, UP: nodes `(10,10) (25,10) (20,28) (29,28)`, target `(25,10)`: pos `(29,28)` → `WALK` `Key.LEFT`

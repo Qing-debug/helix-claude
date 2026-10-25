@@ -11,6 +11,7 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 
 - controller: `Node` and `PathGraph` (route_graph.py:15-16, terrain.py:14-15). `terrain.py:163` calls `PathGraph._isVerticalEdgeValid`, so that private name is part of the seam.
 - input: `InputLayer` / `InputError` (moves.py:5-6, walker.py:42-43), `Key` (planner.py:16 and `sim/`). The simulator's `SimLink` (sim/link.py) stands in for `BleLink`.
+- gui: `src/gui/gui.py` imports `CharacterLocator` (`from_files`, `locate`) from `character.py` (decision H20), so a change to those signatures or a move of `character.py` reaches the GUI. Contract d is the reverse direction (route may not import gui).
 - vision: only `harness/record_minimap.py:163`, inside a function. `position.py` reads the shared minimap frame; `character.py` is the character locator.
 
 ## Rules enforced by tests
@@ -19,7 +20,7 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 
 ## Traps
 
-- Frozen until the split-platform planner fix lands: `params`, `terrain`, `route_graph`, `locate`, `planner`, `moves`, `walker` and their tests (`test_params`, `test_terrain`, `test_route_graph`, `test_locate`, `test_planner`, `test_moves`, `test_walker_leg`, `test_walker_run`). Don't refactor or restyle them.
+- Frozen (the split-platform planner fix has landed, B14-inv-D1): `params`, `terrain`, `route_graph`, `locate`, `planner`, `moves`, `walker` and their tests (`test_params`, `test_terrain`, `test_route_graph`, `test_locate`, `test_planner`, `test_moves`, `test_walker_leg`, `test_walker_run`). Don't refactor or restyle them.
 - `SimParams` (sim/world.py:117, what the simulated world does) and `MovementParams` (params.py:10, what the planner believes) share default values by copy. They are deliberately separate so the world can differ from the planner's belief: don't merge them.
 - Stop guard (PB-D4; walker.py:53-54, `stop_now` at :223): after a stop, a guard thread (started at :231) sends `release_all` every 50 ms of wall time until `run` finishes. It is a safety mechanism (no key stays held): don't remove or slow it.
 - Leg-log JSON keys are Feature D's contract: `tests/route/test_leg_log.py:26-29` pins `LEG_KEYS`, `MOVE_KEYS` and `LAP_KEYS`.
