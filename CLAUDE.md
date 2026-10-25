@@ -15,6 +15,7 @@ This repo is a Claude-only parallel of the main Helix repo. Remotes: `origin` = 
 - That MapleStory check (`soak.maple_check`, `soak._process_names`, and `_check_processes` in `probe` and `session_starts`) is patched by name in the tests: never move or rename it (`src/input/CLAUDE.md`).
 - Because the listener logs every key pressed on the machine, `keys.jsonl` is effectively a keylog: it stays in the gitignored `data/` folder and is never committed or shared.
 - Nobody uses the keyboard on the soak PC during a soak; any key pressed there is an extra key event that fails `analyze`'s Delivery check.
+- Hong's standing permission (H15 in `docs/decisions.md`, 2026-10-26): an agent may run `probe`, `soak` or `session_starts`, and may flash or reset the board, without asking him, when all three hold: the work needs it; MapleStory is not running (the tools' own check still applies and is never bypassed); and nobody is using the PC. Check the time since the last keyboard or mouse input, or ask Hong, because the board's keys go to whichever window has focus. Every rule above still holds.
 
 ## Running
 

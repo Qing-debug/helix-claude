@@ -1118,3 +1118,19 @@ Cost if wrong: the three files are experiments with no callers; nothing is lost 
 Undo: `git checkout 60f1d7a^ -- src/ble` on `cleanup/agent-friendly` (restores only the folder; `git revert 60f1d7a` would also delete this entry and restore a CLAUDE.md sentence about code that is gone).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:270` (decision), `notes/DRV41.md` (Final executable wave plan, row 1), `notes/AUD40-p5.md` CW-12.
+
+## H15 (2026-10-26): agents may run the live tools and flash the board when MapleStory is closed and the PC is idle
+
+Question: must an agent ask Hong before each run of the key-sending harness tools (`probe`, `soak`, `session_starts`) or each flash or reset of the board?
+
+Ruling [Hong]: no. Hong's decision (2026-10-26): "you dont nneed my explicit permission though. As long as maplestory isnt running annd if you need it to continue work, you may use the tools". Asked whether flashing or resetting the board falls under it: "Yes, same rule". Asked whether agents must also make sure nobody is using the PC: "Only when idle". An agent may therefore run `probe`, `soak` or `session_starts`, and flash or reset the board, without asking, when all three hold: (1) the work needs it; (2) MapleStory is not running (the tools' own check still applies and is never bypassed); (3) nobody is using the PC (check the time since the last keyboard or mouse input, or ask Hong).
+
+Reason: the board's keys go to whichever window has focus, and a person's typing during a run is an extra key event that fails `analyze`'s Delivery check. Everything else in the safety rules still holds: the "Helix input test sink" window, a real Bluetooth link, `keys.jsonl` stays in the gitignored `data/`, and no push to `upstream`.
+
+Affects: the "Safety rules" list in the root CLAUDE.md, the "Harness tools" section of `src/input/CLAUDE.md` and `firmware/CLAUDE.md`. It narrows H13's per-run unattended ruling into a standing one.
+
+Cost if wrong: a run with stray keys in the focused window, or a run aborted by the MapleStory check; rerun it.
+
+Undo: revert the `docs(safety)` commit that adds H15; agents then ask Hong before each live run again.
+
+Pointer: root CLAUDE.md "Safety rules"; `src/input/CLAUDE.md` "Harness tools"; H13.
