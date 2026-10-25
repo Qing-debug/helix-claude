@@ -1624,6 +1624,9 @@ frames.
   default-dependent FF2 numbers in the tests of B2-B7 and B12-B14 in the same commit (the measurement in the body),
   then re-run B14's 1000-lap run.
   Per-map reach is built only if a second map's measurement shows it is needed (specB:L13).
+  *Amended (B20-D4, ruling A):* step 2's recording includes 5 or more hand teleports UP into open space; step 4
+  treats `reach_v_peak_mean` as a lower bound (the tool sees no frame between the blink and the end of the key
+  schedule, so it can miss the true peak) and, before changing Kanna's 23, checks the peak on those frames.
 - [ ] **Step 5: sim realism.** Compare `walk_px_per_s`, `teleport_settle_s`, `drop_settle_s` and the step-2 platform
   positions with `SimParams`, `MovementParams` and `ff2_terrain.json`. Any value off by > 20%, or a platform end off
   by > 3 px: update the default or fixture, re-run the full suite (updating default-dependent numbers in B2-B7 and
