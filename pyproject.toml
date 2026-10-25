@@ -56,6 +56,7 @@ forbidden_modules = ["src.vision"]
 ignore_imports = [
     "src.route.harness.record_minimap -> src.vision.vision",
     "src.route.harness.detection_check -> src.vision.vision_helper_lib",
+    "src.route.runtime -> src.vision.vision",  # plan hard rule 6: runtime.py may import src.vision (start_capture)
 ]
 
 [[tool.importlinter.contracts]]
