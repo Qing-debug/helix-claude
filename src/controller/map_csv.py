@@ -7,7 +7,8 @@ src.controller.node (Node) so that:
   2. Editor I/O lifecycle stays isolated from the agent's runtime state.
 
 Shares the CSV header format with CSVParser. The duplication is an accepted
-tradeoff per docs/superpowers/map-editor/spec.md section 6.
+tradeoff (the upstream map-editor spec, not present in this repo): when the format changes, edit csv_parser.py
+and this module together.
 """
 
 import ast

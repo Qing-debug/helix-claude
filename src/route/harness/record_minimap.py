@@ -8,8 +8,9 @@ frame that thread shares and saves each new one. It sends no keys.
 `record` polls `frames()` every 1/fps s and saves each new frame object (not `is` the last one saved) as
 `frame_%06d.png` in `out_dir`, converted RGB to BGR for `cv2.imwrite`, plus one line in `index.jsonl`, flushed per line:
 `{"i", "t_ns", "file", "w", "h"}`. It stops when `seconds` have passed or `stop` is set, whichever comes first; the end
-test runs after each poll, so a `stop` that is already set still saves the first frame. `shared_frames` is the one place
-that reads the shared frame under its lock, for `main` and for B19.
+test runs after each poll, so a `stop` that is already set still saves the first frame. `shared_frames` is this tool's
+reader of the shared frame under its lock, for `main` and for B19 (the GUI, the map editor, the controller and
+`src/route/position.py` read it under the same lock).
 
 Where the plan is silent:
 - `i` counts saved frames from 0 and is the number in the file name. `t_ns` is `clock()` read just after `frames()`

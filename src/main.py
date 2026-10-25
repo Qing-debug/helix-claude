@@ -7,7 +7,7 @@ from src.controller.controller import Controller
 class SharedInfo:
     def __init__(self):
         self.minimap_frame_lock = threading.Lock()
-        self.minimap_frame = None #note: numpy array storing data in BGR format.
+        self.minimap_frame = None #note: numpy array storing data in RGB format (vision converts BGR to RGB before storing it, src/vision/vision.py:81).
 
 if __name__ == "__main__":
 

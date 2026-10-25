@@ -68,7 +68,8 @@ class MapEditor:
     def __init__(self, parent_tk, controller, sharedInfo):
         """
         parent_tk:   the main GUI's tk.Tk instance (used as Toplevel parent).
-        controller:  shared Controller, exposes tolerances and getCharacterCoords.
+        controller:  shared Controller; the editor uses controller.agent (buildPathGraphFor, characterClass, the edge
+                     tolerance levels). It never calls getCharacterCoords.
         sharedInfo:  shared minimap-frame buffer + lock.
         """
         self.controller = controller
