@@ -1,5 +1,4 @@
 from pathlib import Path
-import cv2
 from src.controller.csv_parser import CSVParser
 from returns.result import Failure, Success, Result
 from returns.pipeline import is_successful
@@ -29,9 +28,6 @@ class Controller:
 
     def __init__(self, sharedInfo = None, CSV = None, characterClass = None):
         self.agent = MapleAgent(sharedInfo = sharedInfo, CSV = CSV, characterClass = characterClass)
-
-    def getCharacterCoords(self) -> (int, int):
-        return self.agent.getCharacterCoords()
 
     #will throw error if called before setupAgent() method in the agent class is called
     def getGraph(self) -> nx.MultiDiGraph:
@@ -66,9 +62,6 @@ class MapleAgent:
         self.x_visit_radius = 2
         self.edge_y_tolerance_level = 2
         self.edge_x_tolerance_level = 2
-        self.project_root = Path(__file__).parent.parent.parent
-        self.character_icon_path = str(self.project_root / "assets" / 'chr' / 'chr.png')
-        self.character_icon_mask_path = str(self.project_root / "assets" / 'chr' / 'chr_mask.png')
 
     def _clearMapState(self) -> None:
         """Discard the current map's parsed data (node_map, map_rotation_order)
@@ -140,23 +133,6 @@ class MapleAgent:
 
         return Success(None)
 
-
-    def getCharacterCoords(self) -> (int, int):
-        character_icon = cv2.imread(self.character_icon_path, cv2.IMREAD_GRAYSCALE)
-        character_icon_mask = cv2.imread(self.character_icon_mask_path, cv2.IMREAD_GRAYSCALE)
-
-        with self.sharedInfo.minimap_frame_lock:
-            minimap = cv2.cvtColor(self.sharedInfo.minimap_frame, cv2.COLOR_BGR2GRAY)
-            matched_loc = cv2.matchTemplate(minimap, character_icon, cv2.TM_CCORR_NORMED,
-                                              mask=character_icon_mask)
-            #gives top left corner of matched location
-            matched_character_icon_loc = cv2.minMaxLoc(matched_loc)[-1]
-
-        width, height = character_icon.shape[1], character_icon.shape[0]
-
-        #add offset to get pixel location of the center of the character icon on the minimap
-        matched_character_icon_loc = (matched_character_icon_loc[0] + (width//2), matched_character_icon_loc[1] + (height//2))
-        return matched_character_icon_loc
 
     def connectCharacterNode(self, char_node: CharacterNode) -> None:
         self.pathGraph.connectCharacterNode(char_node)

@@ -24,9 +24,9 @@ camelCase package (root CLAUDE.md, "Naming"). Results, not exceptions (root, "Er
 ## Other traps
 
 - `class Path(list)` (path_graph.py:10) shadows the name of `pathlib.Path`; don't import both unqualified into one module.
-- `MapleAgent.getCharacterCoords` (controller.py:144) converts the RGB frame with `cv2.COLOR_BGR2GRAY` (:149). New code finds the character with `src/route/character.py`'s `CharacterLocator`.
+- There is no character lookup in the controller any more: `MapleAgent.getCharacterCoords` (which always returned its best guess, never "not found") was removed in decision H20. The GUI finds the character with `src/route/character.py`'s `CharacterLocator` (`src/gui/CLAUDE.md`); the controller can't import `src.route` (import-linter contract c), so keep any new lookup out of it.
 - Output is `print`, not `logging` (path_graph.py, csv_parser.py).
-- `Controller` (controller.py:28) only forwards to `MapleAgent` (controller.py:57); the GUI also calls `controller.agent` directly (`src/gui/CLAUDE.md`).
+- `Controller` (controller.py:27) only forwards to `MapleAgent` (controller.py:53); the GUI also calls `controller.agent` directly (`src/gui/CLAUDE.md`).
 
 ## Tests
 

@@ -1300,6 +1300,28 @@ Undo: revert the planner-fix commit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:281`; `notes/B14-inv.md`, `notes/explain40/b14.html`.
 
+## H20 (2026-10-26): the "draw node on character" buttons say "Character not found" instead of drawing a guess
+
+Question: should the main window's "draw blue node on character", "draw orange node on character" and the dev get-path button keep the old finder `MapleAgent.getCharacterCoords`, which always answers with its best-scoring spot and never says "not found" (behaviour issue 2: with the character icon missing from the minimap, a dot was still drawn at an arbitrary spot and that spot was printed as "Character Position")?
+
+Ruling [Hong]: fix it, using the route walker's finder (`src/route/character.py`, `CharacterLocator`), which says "not found" or "not sure" instead of guessing. This is the "Fix" option of issue 2 in `notes/CWX48.md`, which recommended it. The brief that dispatched the work relays the decision without Hong's own words, so none are quoted here.
+
+Reason: the on-screen position readout is the only one the user sees, so it should tell the truth, and the buttons and the route walker then agree on where the character is.
+
+As built: `MapleGUI._findCharacter` (`src/gui/gui.py`) builds the locator from `assets/chr/chr.png` and `chr_mask.png` on the first press and keeps it, reads the minimap frame under `minimap_frame_lock`, and searches outside the lock. When the finder says "miss", "ambiguous" or rejects the frame, the console shows "Character not found on the minimap (<reason>)." and nothing else happens: no dot, `node_count` does not move, and the get-path button adds no character node and computes no path. If the icon files cannot be read, the console shows "Cannot look for the character: <why>" and the next press tries again. `MapleAgent.getCharacterCoords`, `Controller.getCharacterCoords` and the agent's icon-path attributes are removed: grep found no other caller. `src/route/character.py` is unchanged. Tests: `tests/controller/test_gui_character_buttons.py` (found, missing and two look-alikes for both draw buttons; found and missing for get-path; one locator build; matching outside the lock; unreadable icon; rejected frame).
+
+Import edge: `src/gui/gui.py` now imports `src.route.character`, a new gui-to-route edge. No import-linter contract forbids it (contract c bars controller to route, contract d bars route to gui); the controller cannot host the lookup because of contract c. The unit that built it raised this as a module-boundary choice and made it provisionally; moving the finder to a shared module would be the alternative.
+
+Not verified: the walker's finder is strict (the best match must score at least 0.95 and no other separate spot may score within 0.02 of it), and it has only been run on synthetic frames, so on a busy real minimap the buttons may say "not found" where the old finder drew a dot. That needs the game.
+
+Affects: `src/gui/gui.py`, `src/controller/controller.py`, `src/gui/CLAUDE.md`, `src/controller/CLAUDE.md`, `tests/CLAUDE.md` (baseline count), `tests/controller/test_gui_startup.py` (two tests now stub `_findCharacter`), the basedpyright baseline (157 to 146 entries, the removed method's errors).
+
+Cost if wrong: a true character position can be reported as "not found" (strict finder), which blocks the draw buttons until the icon is clearer; no map data is written either way.
+
+Undo: revert the commits of branch `iss2-character-finder`; the old always-guessing finder comes back.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CWX48.md` issue 2; `notes/ISS2-fix.md`.
+
 ## H21 (2026-10-26): soak's pre-run sample check asks only for the timing kinds the realism judge tests
 
 Question: should the soak tool's pre-run sample check stay stricter than the realism judge (CW-EXPL issue 5: it required 1,000 samples of six timing kinds, including walk and release lag, which the judge does not KS-test, so a 4,000-command run the judge could judge was refused for too few walking samples)?
