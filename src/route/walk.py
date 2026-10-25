@@ -173,13 +173,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _check_out(out: Path) -> Result[None, str]:
     """B19-D2: refuse an --out that is a file or already holds one of walk's files."""
-    if out.exists() and not out.is_dir():
-        return Failure(f"{out} is not a folder; choose a new --out")
-    for name in _OUT_FILES:
-        path = out / name
-        if path.exists():
-            return Failure(f"{path} already exists; choose a new --out")
-    return Success(None)
+    return runtime.check_out(out, _OUT_FILES)
 
 
 def _load_route(map_csv: Path, character: CharacterClass) -> Result[tuple[RouteGraph, tuple], str]:

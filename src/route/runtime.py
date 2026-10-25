@@ -22,7 +22,8 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from returns.result import Failure, Result, Success
 
@@ -215,6 +216,20 @@ def _install_keyboard_hook(vk: int, on_key: Callable[[], None]) -> Callable[[], 
         remove()
         raise OSError(error)
     return remove
+
+
+def check_out(out: Path, names: Iterable[str]) -> Result[None, str]:
+    """B19-D2: refuse an `--out` that is a file or already holds one of `names` (paths relative to `out`).
+
+    Shared by the walk CLI and the movement measurement tool; the first name found is the one reported.
+    """
+    if out.exists() and not out.is_dir():
+        return Failure(f"{out} is not a folder; choose a new --out")
+    for name in names:
+        path = out / name
+        if path.exists():
+            return Failure(f"{path} already exists; choose a new --out")
+    return Success(None)
 
 
 def start_capture(shared) -> threading.Thread:
