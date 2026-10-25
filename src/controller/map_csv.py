@@ -26,6 +26,7 @@ from src.controller.map_format import (
     HEADER,
     bool_to_cell,
     is_comment,
+    no_nodes_message,
     not_found_message,
     ordered_local_ids,
     pos_to_cell,
@@ -87,6 +88,8 @@ def read_editor_nodes(
     rows, problems = read_rows(all_lines)
     if problems:
         return Failure(problems_message(path, problems))
+    if not rows:
+        return Failure(no_nodes_message(path))  # a header (and #/blank lines) but no node rows (H19)
     nodes = [
         EditorNode(i, row.nodetype, row.pos, row.can_fall, row.fall_dist_exceeds_vertical_tp,
                    row.is_left_platform_edge, row.is_right_platform_edge)

@@ -157,10 +157,28 @@ def test_no_header(tmp_path, text):
                        f"line must be:\n    {EXPECTED_HEADER_LINE}")
 
 
-def test_header_only_file_is_accepted(tmp_path):
-    path = _csv(tmp_path, HEADER)
-    assert _runtime(path) == (Success(None), [], {})
-    assert _editor(path) == Success(([], [], {}))
+@pytest.mark.parametrize("text", [
+    HEADER,
+    HEADER.rstrip("\n"),  # no line ending after the header
+    "# minimap_size=162,82\n" + HEADER + "# a note\n\n   \n",  # metadata, comments and blank lines, still no node row
+])
+def test_header_only_file_is_refused(tmp_path, text):
+    """Decision H19: a header with no node rows is refused by both readers, with its own message and no Node."""
+    path = _csv(tmp_path, text)
+    message = Failure(f"The map file {path} has no nodes, so it was not loaded. Place nodes in the map editor and "
+                      "save the map, then load it again.")
+    before = Node.node_id_counter
+    result, rotation, node_map = _runtime(path)
+    assert result == message
+    assert rotation == [] and node_map == {}
+    assert Node.node_id_counter == before
+    assert _editor(path) == message
+
+
+def test_header_with_only_bad_rows_reports_the_rows_not_a_missing_node(tmp_path):
+    """The no-nodes message is for a file with nothing wrong; a bad row is still reported as a bad row."""
+    _both_refuse(_csv(tmp_path, HEADER + 'green_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n'),
+                 "line 2: nodetype is 'green_node'; it must be blue_node or orange_node.")
 
 
 def test_missing_file(tmp_path):

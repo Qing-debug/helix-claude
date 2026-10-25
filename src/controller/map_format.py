@@ -2,11 +2,11 @@
 
 Shared by the runtime parser (`csv_parser.CSVParser`) and the editor's reader and writer (`map_csv`). It holds what
 both sides do identically: the header, the node types, the boolean cells, the `(x, y)` position cell, the check of a
-whole file against them with the messages the user sees (`read_rows`, `problems_message`; decision H16) and the
-order the editor writes rows in (which the editor's edge preview must copy, because edge ties go to the
-first-inserted node). What still differs between the readers (the editor's strict `# minimap_size=` line, the
-runtime's message for a `None` path) stays in their own modules; tests/controller/test_map_csv_characterization.py
-pins both.
+whole file against them with the messages the user sees (`read_rows`, `problems_message`, `no_nodes_message`;
+decisions H16 and H19) and the order the editor writes rows in (which the editor's edge preview must copy,
+because edge ties go to the first-inserted node). What still differs between the readers (the editor's strict
+`# minimap_size=` line, the runtime's message for a `None` path) stays in their own modules;
+tests/controller/test_map_csv_characterization.py pins both.
 
 Pure: it builds no `Node` or `EditorNode`, so importing or calling it never touches `Node.node_id_counter`.
 """
@@ -191,6 +191,13 @@ def problems_message(path: object, problems: list[str]) -> str:
 
 def not_found_message(path: object) -> str:
     return f"The map file {path} does not exist, so it was not loaded. Pick another file."
+
+
+def no_nodes_message(path: object) -> str:
+    """The message for a file `read_rows` accepted that has no node rows (decision H19). Readers return it when
+    `read_rows` gives no problems and no rows; it is not a problem line, because it gives its own fix."""
+    return (f"The map file {path} has no nodes, so it was not loaded. Place nodes in the map editor and save the map, "
+            "then load it again.")
 
 
 def unreadable_message(path: object, error: Exception) -> str:

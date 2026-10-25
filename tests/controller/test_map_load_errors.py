@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from returns.pipeline import is_successful
-from returns.result import Success
+from returns.result import Failure, Success
 
 import src.gui.gui as gui_module
 from src.classes.classes import Kanna
@@ -20,6 +20,17 @@ def _bad_map(tmp_path: Path) -> Path:
     path = tmp_path / "bad.csv"
     path.write_text(HEADER + BAD_ROW, newline="")
     return path
+
+
+def _header_only_map(tmp_path: Path) -> Path:
+    path = tmp_path / "empty.csv"
+    path.write_text("# minimap_size=162,82\n" + HEADER, newline="")
+    return path
+
+
+def _no_nodes_message(path: Path) -> str:
+    return (f"The map file {path} has no nodes, so it was not loaded. Place nodes in the map editor and save the map, "
+            "then load it again.")
 
 
 def test_bad_file_after_good_one_leaves_no_map_loaded(tmp_path):
@@ -38,6 +49,24 @@ def test_bad_file_after_good_one_leaves_no_map_loaded(tmp_path):
 def test_after_bad_file_picking_a_character_waits_for_a_map(tmp_path):
     agent = MapleAgent()
     assert not is_successful(agent.loadMap(_bad_map(tmp_path)))
+    assert agent.setCharacterClass(Kanna()) == Success(BuildOutcome.PENDING_CSV)
+
+
+def test_header_only_file_after_good_one_leaves_no_map_loaded(tmp_path):
+    """Decision H19: refused at load, not later at graph build (no "Node_dict is empty" message)."""
+    agent = MapleAgent(characterClass=Kanna())
+    assert agent.loadMap(FIXTURE) == Success(BuildOutcome.BUILT)
+
+    path = _header_only_map(tmp_path)
+    assert agent.loadMap(path) == Failure(_no_nodes_message(path))
+    assert agent.CSVParser.CSV_file is None
+    assert agent.node_map == {} and agent.map_rotation_order == [] and agent.pathGraph is None
+
+
+def test_header_only_file_without_a_character_is_not_left_marked_as_loaded(tmp_path):
+    agent = MapleAgent()
+    assert not is_successful(agent.loadMap(_header_only_map(tmp_path)))
+    assert agent.CSVParser.CSV_file is None
     assert agent.setCharacterClass(Kanna()) == Success(BuildOutcome.PENDING_CSV)
 
 
@@ -60,6 +89,17 @@ def test_gui_shows_bad_file_message_in_a_message_box(monkeypatch, tmp_path):
     message = (f"The map file {path} is not in the expected format, so it was not loaded. Fix the problem below in a "
                "text editor, then load it again.\n\n"
                "line 2: 7 cells, expected 6. Remove the extra comma(s) at the end of the line.")
+    assert shown == [("Could not load map", message)]
+    assert console == [f"Failed to load map {path}: {message}"]
+    assert agent.CSVParser.CSV_file is None
+
+
+def test_gui_shows_no_nodes_message_in_a_message_box(monkeypatch, tmp_path):
+    path = _header_only_map(tmp_path)
+    agent = MapleAgent(characterClass=Kanna())
+    shown, console = _gui(monkeypatch, path, agent)
+
+    message = _no_nodes_message(path)
     assert shown == [("Could not load map", message)]
     assert console == [f"Failed to load map {path}: {message}"]
     assert agent.CSVParser.CSV_file is None
