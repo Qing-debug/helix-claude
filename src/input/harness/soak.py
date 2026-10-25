@@ -56,6 +56,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.input.harness import faults, listener
+from src.input.harness.realism import KS_MIN_N, KS_TYPES
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import BleLink, InputError, SessionInfo
 from src.input.protocol import Key, Pong, encode_play
@@ -383,9 +384,9 @@ MIX = (("tap", 0.25), ("walk", 0.20), ("teleport", 0.25), ("drop", 0.10), ("jump
 WALK_T_MS = (300.0, 3000.0)  # T ~ U(300, 3000) ms
 SEQUENCE_LEN = (2, 5)  # inclusive, uniform, keys drawn with repeats
 
-KS_TYPES = (TimingType.HOLD, TimingType.GAP, TimingType.CHORD_OFFSET, TimingType.RELEASE_LAG, TimingType.REACTION,
-            TimingType.WALK)
-MIN_SAMPLES_PER_TYPE = 1000  # per KS type, for a run H4 judges (A-PF I6)
+# The pre-run sample check asks for the timing kinds `realism` judges (realism.KS_TYPES) at its own minimum
+# (realism.KS_MIN_N), imported above so the two cannot drift apart (H21). RELEASE_LAG and WALK are drawn and logged
+# but not KS-judged, so they are not required.
 
 
 @dataclass(frozen=True)
@@ -692,7 +693,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None, help="mix, timing and fault seed (default: a fresh one, logged)")
     p.add_argument("--out", default=None, help="run directory (default data/soak/<YYYYmmdd-HHMMSS>)")
     p.add_argument("--short", action="store_true",
-                   help=f"allow a run with fewer than {MIN_SAMPLES_PER_TYPE} samples per KS type (dry run, fault "
+                   help=f"allow a run with fewer than {KS_MIN_N} samples per judged timing type (dry run, fault "
                         "soak; H4 does not judge it)")
     p.add_argument("--faults", type=_faults_arg, default={},
                    help="e.g. reset_board=5,bluetooth_off_on=5: injected before seeded random command indexes")
@@ -712,9 +713,9 @@ def validate(cfg: SoakConfig) -> str | None:
         return f"--commands must be at least 1, got {cfg.commands}"
     if not cfg.short:
         counts = sample_counts(plan_mix(cfg.seed, cfg.commands))
-        low = {str(t): counts[t] for t in KS_TYPES if counts[t] < MIN_SAMPLES_PER_TYPE}
+        low = {str(t): counts[t] for t in KS_TYPES if counts[t] < KS_MIN_N}
         if low:
-            return (f"refused: --commands {cfg.commands} gives fewer than {MIN_SAMPLES_PER_TYPE} chosen samples for "
+            return (f"refused: --commands {cfg.commands} gives fewer than {KS_MIN_N} chosen samples for "
                     f"{low}; pass --short for a dry run or fault soak (H4 does not judge it)")
     n_faults = sum(cfg.faults.values())
     if n_faults > cfg.commands - 1:

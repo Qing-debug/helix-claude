@@ -1299,3 +1299,19 @@ Cost if wrong: contract C7 changes; until the fix lands the livelock stays in th
 Undo: revert the planner-fix commit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:281`; `notes/B14-inv.md`, `notes/explain40/b14.html`.
+
+## H21 (2026-10-26): soak's pre-run sample check asks only for the timing kinds the realism judge tests
+
+Question: should the soak tool's pre-run sample check stay stricter than the realism judge (CW-EXPL issue 5: it required 1,000 samples of six timing kinds, including walk and release lag, which the judge does not KS-test, so a 4,000-command run the judge could judge was refused for too few walking samples)?
+
+Ruling [Hong]: fix it. Hong's words (2026-10-26): "so it's only as strict as it needs to be". The check now requires only the four kinds `realism` tests (hold, gap, chord offset, reaction), at the judge's own minimum of 1,000.
+
+As built: `soak.py` imports `KS_TYPES` and `KS_MIN_N` from `realism.py` and uses them in `validate`; it keeps no copy of the numbers, and its own `KS_TYPES` and `MIN_SAMPLES_PER_TYPE` are gone. Runs of about 2,900 to 4,700 commands that were refused for walk samples are now accepted; a run too short for the judge is still refused, naming the short kind; the planned 10,000-command run still passes. `realism.py`'s judging rules are unchanged.
+
+Affects: `src/input/harness/soak.py` (`validate`, `--short` help), `tests/input/test_soak.py`, `src/input/CLAUDE.md` (Harness tools, `soak`).
+
+Cost if wrong: a soak that the judge accepts may carry fewer walk samples than before; nothing judges them.
+
+Undo: revert the `fix(input)` commit.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CWX48.md` issue 5, `notes/ISS5-fix.md`.
