@@ -11,7 +11,7 @@ This repo is a Claude-only parallel of the main Helix repo. Remotes: `origin` = 
 ## Safety rules
 
 - Never push to `upstream` (its push URL is `DISABLED`).
-- The harness tools that send keys (`probe`, `soak`, `session_starts` in `src/input/harness/`) need the board, a real Bluetooth link and a person at the PC. Never run them with MapleStory open: each checks for a MapleStory process before sending a key and aborts if one is running, and `soak` and `probe` re-check every 60 s. An agent does not run them at all, and does not flash or reset the board (`src/input/CLAUDE.md`, `firmware/CLAUDE.md`).
+- The harness tools that send keys (`probe`, `soak`, `session_starts` in `src/input/harness/`) need the board, a real Bluetooth link and the "Helix input test sink" window. Never run them with MapleStory open: each checks for a MapleStory process before sending a key and aborts if one is running, and `soak` and `probe` re-check every 60 s. Details are in `src/input/CLAUDE.md`.
 - That MapleStory check (`soak.maple_check`, `soak._process_names`, and `_check_processes` in `probe` and `session_starts`) is patched by name in the tests: never move or rename it (`src/input/CLAUDE.md`).
 - Because the listener logs every key pressed on the machine, `keys.jsonl` is effectively a keylog: it stays in the gitignored `data/` folder and is never committed or shared.
 - Nobody uses the keyboard on the soak PC during a soak; any key pressed there is an extra key event that fails `analyze`'s Delivery check.
@@ -87,7 +87,7 @@ Reaction time is waited on the PC, from the stimulus to the send: with a `stimul
 
 ## Per-directory notes
 
-`src/input/CLAUDE.md`, `src/route/CLAUDE.md`, `src/controller/CLAUDE.md`, `src/gui/CLAUDE.md`, `src/vision/CLAUDE.md`, `tests/CLAUDE.md` and `firmware/CLAUDE.md` hold each package's seams, traps (with `file:line`) and commands. A fact lives in one file; the others point to it.
+`src/input/CLAUDE.md`, `src/route/CLAUDE.md`, `src/controller/CLAUDE.md`, `src/gui/CLAUDE.md`, `src/vision/CLAUDE.md`, `tests/CLAUDE.md` and `firmware/CLAUDE.md` hold each package's seams, traps (with `file:line`) and commands. A fact lives in one file; the others point to it. The exception is the safety rules, which are deliberately repeated where an agent will act on them.
 
 ## Incomplete / experimental code
 

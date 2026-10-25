@@ -13,7 +13,7 @@
 ## Traps
 
 - Patch the module where the code under test looks the name up. `_clock` and `_sleep` are separate globals in several modules, so the probe tests patch each one: the `clock` fixture (test_probe.py:221-228) sets them on `soak`, `input_layer` and `probe`, and patches `soak._process_names`. A move that leaves a re-export behind makes such a patch miss without any error; `tests/input/test_guard_targets.py` pins the harness names that are patched and the module each must be defined in.
-- The 10 skips are the wire-only rejects in `tests/input/test_protocol.py` (marked at :71, reason at :112): the PC never builds such a frame. They do run, in `firmware/test/test_protocol.cpp`, which `tests/input/test_firmware_host.py` builds and runs with g++ (slow; skipped if g++ is not on PATH).
+- The 10 skips are the wire-only rejects in `tests/input/test_protocol.py` (marked at :71, reason at :45): the PC never builds such a frame. They do run, in `firmware/test/test_protocol.cpp`, which `tests/input/test_firmware_host.py` builds and runs with g++ (slow; skipped if g++ is not on PATH).
 - `tests/input/test_guard_targets.py` is skipped off Windows; `tests/route/test_import_rules.py` reads the `src/route` sources as text (AST) and imports no `src` module.
 
 ## basedpyright baseline
