@@ -6,10 +6,11 @@ src.controller.node (Node) so that:
   1. Editor loads don't bump Node.node_id_counter.
   2. Editor I/O lifecycle stays isolated from the agent's runtime state.
 
-The format itself (header, node types, cell encodings, row order) lives in
+The format itself (header, node types, cell encodings, row order) and the
+check of a file against it, with its messages, live in
 src.controller.map_format, which CSVParser uses too: change the format there.
-This module keeps the editor's own accept/reject rules and error texts, which
-differ from CSVParser's (tests/controller/test_map_csv_characterization.py).
+This module keeps only the editor's own strict `# minimap_size=` check
+(tests/controller/test_map_csv_characterization.py pins both readers).
 """
 
 import csv
@@ -22,21 +23,19 @@ from returns.pipeline import is_successful
 
 from src.controller.map_format import (
     BLUE_NODE,
-    BOOL_CELLS,
-    BOOL_FIELDS,
     HEADER,
-    NODETYPES,
-    bool_from_cell,
     bool_to_cell,
-    is_pos,
+    is_comment,
+    not_found_message,
     ordered_local_ids,
-    pos_from_cell,
     pos_to_cell,
+    problems_message,
+    read_rows,
+    unreadable_message,
 )
 
-# A list, not map_format's tuple: read_editor_nodes compares it with DictReader.fieldnames, a list.
+# The header row write_editor_nodes writes, as a list for csv.writer.
 CSV_HEADER = list(HEADER)
-VALID_NODETYPES = set(NODETYPES)
 
 
 @dataclass
@@ -70,67 +69,30 @@ def read_editor_nodes(
     """
     p = Path(path)
     if not p.exists():
-        return Failure(f"File not found: {path}")
+        return Failure(not_found_message(path))
     try:
         with open(p, "r", newline="") as f:
             all_lines = f.readlines()
+    except (OSError, UnicodeDecodeError) as e:
+        return Failure(unreadable_message(path, e))
 
-        metadata_lines = [l for l in all_lines if l.lstrip().startswith('#')]
-        data_lines = [l for l in all_lines if not l.lstrip().startswith('#')]
+    metadata_lines = [l for l in all_lines if is_comment(l)]
+    meta_result = _parse_metadata_lines(metadata_lines)
+    if not is_successful(meta_result):
+        return Failure(meta_result.failure())
+    metadata = meta_result.unwrap()
 
-        meta_result = _parse_metadata_lines(metadata_lines)
-        if not is_successful(meta_result):
-            return Failure(meta_result.failure())
-        metadata = meta_result.unwrap()
-
-        reader = csv.DictReader(data_lines, delimiter=",")
-        if reader.fieldnames != CSV_HEADER:
-            return Failure(
-                f"CSV header mismatch. Expected {CSV_HEADER}, got {reader.fieldnames}"
-            )
-        nodes: List[EditorNode] = []
-        rotation_order: List[int] = []
-        for i, row in enumerate(reader, start=1):
-            # Validate nodetype.
-            nodetype = row["nodetype"]
-            if nodetype not in VALID_NODETYPES:
-                return Failure(
-                    f"Row {i + 1}: invalid nodetype {nodetype!r}, "
-                    f"expected one of {sorted(VALID_NODETYPES)}"
-                )
-            # Parse position.
-            pos_raw = row["pos_in_minimap"]
-            try:
-                pos = pos_from_cell(pos_raw)
-            except (ValueError, SyntaxError) as e:
-                return Failure(
-                    f"Row {i + 1}: pos_in_minimap {pos_raw!r} not a valid literal: {e}"
-                )
-            if not is_pos(pos):
-                return Failure(
-                    f"Row {i + 1}: pos_in_minimap {pos_raw!r} must be a 2-tuple of ints"
-                )
-            # Parse booleans.
-            bool_values: Dict[str, bool] = {}
-            for field in BOOL_FIELDS:
-                cell = row[field]
-                if cell not in BOOL_CELLS:
-                    return Failure(
-                        f"Row {i + 1}: {field} must be TRUE or FALSE, got {cell!r}"
-                    )
-                bool_values[field] = bool_from_cell(cell)
-            node = EditorNode(
-                local_id=i,
-                nodetype=nodetype,
-                pos=pos,
-                **bool_values,
-            )
-            nodes.append(node)
-            if nodetype == BLUE_NODE:
-                rotation_order.append(i)
-        return Success((nodes, rotation_order, metadata))
-    except OSError as e:
-        return Failure(f"OS error reading {path}: {e}")
+    # The same check and messages as the runtime parser (decision H16).
+    rows, problems = read_rows(all_lines)
+    if problems:
+        return Failure(problems_message(path, problems))
+    nodes = [
+        EditorNode(i, row.nodetype, row.pos, row.can_fall, row.fall_dist_exceeds_vertical_tp,
+                   row.is_left_platform_edge, row.is_right_platform_edge)
+        for i, row in enumerate(rows, start=1)
+    ]
+    rotation_order = [node.local_id for node in nodes if node.nodetype == BLUE_NODE]
+    return Success((nodes, rotation_order, metadata))
 
 
 def write_editor_nodes(

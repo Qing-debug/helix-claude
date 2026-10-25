@@ -58,7 +58,7 @@ def test_both_readers_use_the_shared_header():
     assert tuple(CSVParser().CSV_fields) == HEADER
     assert all(key == value for key, value in CSVParser().CSV_fields.items())
     assert map_csv.CSV_HEADER == list(HEADER)
-    assert map_csv.BOOL_FIELDS == BOOL_FIELDS == HEADER[2:]
+    assert BOOL_FIELDS == HEADER[2:]
 
 
 def test_cell_encodings():

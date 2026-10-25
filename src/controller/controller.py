@@ -123,7 +123,7 @@ class MapleAgent:
         calling setupAgent() afterward to rebuild the graph.
 
         csv_path may be a str or a pathlib.Path. Stored as a Path so
-        CSVParser._validateCSV's .exists() check works.
+        CSVParser._readRows's .exists() check works.
         """
         self.CSVParser.CSV_file = Path(csv_path) if csv_path is not None else None
 

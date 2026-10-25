@@ -1,15 +1,15 @@
 """Characterization tests: what the two map-CSV readers accept and reject today, the bytes the editor writes, and the
 node insertion order of the runtime parser, the editor reader and the editor's edge preview.
 
-The runtime parser (`csv_parser.CSVParser`) and the editor reader (`map_csv.read_editor_nodes`) diverge on purpose or
-by drift; these tests pin each one's current behaviour, divergences included, so a refactor of the shared format code
-cannot change either. Unifying them is a behaviour change, not a refactor.
+The runtime parser (`csv_parser.CSVParser`) and the editor reader (`map_csv.read_editor_nodes`) share one file check
+and its messages since decision H16 (`map_format.read_rows`). The differences left (the editor's strict
+`# minimap_size=` line, the runtime's message for a `None` path) are pinned here too, so a refactor cannot change
+either reader. Changing what they accept or the words they show is a behaviour change, not a refactor.
 """
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from returns.pipeline import is_successful
 from returns.result import Failure, Success
 
 from src.classes.classes import Kanna
@@ -21,7 +21,9 @@ from src.controller.node import Node
 HEADER = "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge\n"
 HEADER_LIST = ["nodetype", "pos_in_minimap", "can_fall", "fall_dist_exceeds_vertical_tp", "is_left_platform_edge",
                "is_right_platform_edge"]
+EXPECTED_HEADER_LINE = HEADER.rstrip("\n")
 OK_ROW = 'blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n'
+POS_FIX = 'it must be two whole numbers in quotes, like "(12, 34)".'
 
 
 def _csv(tmp_path: Path, text: str) -> Path:
@@ -37,6 +39,23 @@ def _runtime(path: Path):
 
 def _editor(path: Path):
     return read_editor_nodes(str(path))
+
+
+def _refused(path: Path, *problems: str) -> Failure:
+    """The message both readers return for a file with these problems, pinned word for word (deliberately not built
+    with map_format.problems_message)."""
+    count = "the problem" if len(problems) == 1 else f"the {len(problems)} problems"
+    return Failure(f"The map file {path} is not in the expected format, so it was not loaded. Fix {count} below in a "
+                   "text editor, then load it again.\n\n" + "\n".join(problems))
+
+
+def _both_refuse(path: Path, *problems: str) -> None:
+    before = Node.node_id_counter
+    result, rotation, node_map = _runtime(path)
+    assert result == _refused(path, *problems)
+    assert rotation == [] and node_map == {}
+    assert Node.node_id_counter == before  # no Node was built, not even for the good rows
+    assert _editor(path) == _refused(path, *problems)
 
 
 # --- metadata lines -------------------------------------------------------------------------------------------------
@@ -64,112 +83,114 @@ def test_no_metadata_gives_empty_dict(tmp_path):
     assert _editor(_csv(tmp_path, HEADER + OK_ROW)).unwrap()[2] == {}
 
 
-# --- several bad rows: runtime reports all, editor stops at the first -----------------------------------------------
+# --- several bad rows: both readers report every problem ------------------------------------------------------------
 
 def test_several_bad_rows(tmp_path):
     path = _csv(tmp_path, HEADER
                 + 'green_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n'
                 + OK_ROW
                 + 'blue_node,"(1.5, 2)",true,FALSE,FALSE,FALSE\n')
-    result, rotation, node_map = _runtime(path)
-    assert result == Failure(
-        "\nRow 2: Invalid node type 'green_node' in column 'nodetype'. Expected 'blue_node' or 'orange_node'."
-        "\n\nRow 4: the tuple '(1.5, 2)' should only contain ints."
-        "\nRow 4: Invalid value 'true' in column 'can_fall'. Expected TRUE or FALSE.")
-    assert rotation == [] and node_map == {}
-    assert _editor(path) == Failure("Row 2: invalid nodetype 'green_node', expected one of ['blue_node', 'orange_node']")
+    _both_refuse(path,
+                 "line 2: nodetype is 'green_node'; it must be blue_node or orange_node.",
+                 f"line 4: pos_in_minimap is '(1.5, 2)'; {POS_FIX}",
+                 "line 4: can_fall is 'true'; it must be TRUE or FALSE (capitals, no spaces).")
 
 
-# --- header variants ------------------------------------------------------------------------------------------------
+def test_line_numbers_count_comment_and_blank_lines(tmp_path):
+    path = _csv(tmp_path, "# minimap_size=10,10\n\n" + HEADER + "\n   \n# note\n"
+                + 'red_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n')
+    _both_refuse(path, "line 7: nodetype is 'red_node'; it must be blue_node or orange_node.")
+
+
+def test_more_than_twenty_problems_are_cut_short(tmp_path):
+    path = _csv(tmp_path, HEADER + 'x,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n' * 25)
+    shown = [f"line {n}: nodetype is 'x'; it must be blue_node or orange_node." for n in range(2, 22)]
+    expected = _refused(path, *shown, "... and 5 more.").failure().replace("Fix the 21 problems", "Fix the 25 problems")
+    assert _runtime(path)[0] == Failure(expected)
+    assert _editor(path) == Failure(expected)
+
+
+# --- header variants: a bad header is the only problem reported -----------------------------------------------------
+
+def _header_problem(number: int, found: str) -> str:
+    return (f"line {number}: the header row is not the expected one. Replace the line with the expected one.\n"
+            f"    expected: {EXPECTED_HEADER_LINE}\n"
+            f"    found:    {found}")
+
 
 def test_header_columns_swapped(tmp_path):
     swapped = "pos_in_minimap,nodetype," + HEADER.split(",", 2)[2]
     path = _csv(tmp_path, swapped + OK_ROW)
-    assert _runtime(path)[0] == Failure(
-        "Invalid CSV header column name detected. Here is what we received as opposed to what we expected:\n"
-        "Expected: nodetype, Received: pos_in_minimap\n"
-        "Expected: pos_in_minimap, Received: nodetype")
-    got = ["pos_in_minimap", "nodetype"] + HEADER_LIST[2:]
-    assert _editor(path) == Failure(f"CSV header mismatch. Expected {HEADER_LIST}, got {got}")
+    _both_refuse(path, _header_problem(1, swapped.rstrip("\n")))
 
 
 def test_header_missing_column(tmp_path):
-    path = _csv(tmp_path, ",".join(HEADER_LIST[:5]) + "\n" + 'blue_node,"(1, 2)",FALSE,FALSE,FALSE\n')
-    assert _runtime(path)[0] == Failure(
-        "number of expected CSV field names do not match actual number of CSV field names")
-    assert _editor(path) == Failure(f"CSV header mismatch. Expected {HEADER_LIST}, got {HEADER_LIST[:5]}")
+    header = ",".join(HEADER_LIST[:5])
+    path = _csv(tmp_path, "# minimap_size=10,10\n" + header + "\n" + 'blue_node,"(1, 2)",FALSE,FALSE,FALSE\n')
+    _both_refuse(path, _header_problem(2, header))
 
 
-@pytest.mark.parametrize("text", ["", "# minimap_size=10,10\n"])
-def test_no_header_runtime_raises_editor_refuses(tmp_path, text):
+def test_header_trailing_comma(tmp_path):
+    path = _csv(tmp_path, HEADER.rstrip("\n") + ",\n" + OK_ROW)
+    _both_refuse(path, _header_problem(1, EXPECTED_HEADER_LINE + ","))
+
+
+@pytest.mark.parametrize("text", ["", "# minimap_size=10,10\n", "\n\n# note\n"])
+def test_no_header(tmp_path, text):
     path = _csv(tmp_path, text)
-    with pytest.raises(TypeError):
-        _runtime(path)
-    assert _editor(path) == Failure(f"CSV header mismatch. Expected {HEADER_LIST}, got None")
+    _both_refuse(path, "The file has no header row (it is empty or has only # lines). Its first line that is not a # "
+                       f"line must be:\n    {EXPECTED_HEADER_LINE}")
+
+
+def test_header_only_file_is_accepted(tmp_path):
+    path = _csv(tmp_path, HEADER)
+    assert _runtime(path) == (Success(None), [], {})
+    assert _editor(path) == Success(([], [], {}))
 
 
 def test_missing_file(tmp_path):
     path = tmp_path / "absent.csv"
-    assert _runtime(path)[0] == Failure("CSV file points to an invalid path, failed to load CSV file.")
-    assert _editor(path) == Failure(f"File not found: {path}")
+    message = Failure(f"The map file {path} does not exist, so it was not loaded. Pick another file.")
+    assert _runtime(path)[0] == message
+    assert _editor(path) == message
     assert CSVParser().parseCSV([], {}) == Failure("CSV file is a None object, failed to load CSV file.")
 
 
 # --- row shape ------------------------------------------------------------------------------------------------------
 
-def test_extra_cell_runtime_raises_editor_accepts(tmp_path):
-    path = _csv(tmp_path, HEADER + 'blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,EXTRA\n')
-    with pytest.raises(TypeError):
-        _runtime(path)
-    assert _editor(path) == Success(([EditorNode(1, "blue_node", (1, 2))], [1], {}))
+WRONG_COUNT = ("cells, expected 6 (nodetype, pos_in_minimap, can_fall, fall_dist_exceeds_vertical_tp, "
+               "is_left_platform_edge, is_right_platform_edge). Look for a missing or extra comma; pos_in_minimap "
+               'needs its quotes, like "(12, 34)".')
+TRAILING = "cells, expected 6. Remove the extra comma(s) at the end of the line."
 
 
-def test_short_row(tmp_path):
-    path = _csv(tmp_path, HEADER + 'blue_node,"(1, 2)",FALSE\n')
-    assert _runtime(path)[0] == Failure(
-        "\nRow 2: Invalid value 'None' in column 'fall_dist_exceeds_vertical_tp'. Expected TRUE or FALSE."
-        "\nRow 2: Invalid value 'None' in column 'is_left_platform_edge'. Expected TRUE or FALSE."
-        "\nRow 2: Invalid value 'None' in column 'is_right_platform_edge'. Expected TRUE or FALSE.")
-    assert _editor(path) == Failure("Row 2: fall_dist_exceeds_vertical_tp must be TRUE or FALSE, got None")
+@pytest.mark.parametrize("row, problem", [
+    ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,EXTRA', f"line 2: 7 {WRONG_COUNT}"),
+    ('blue_node,"(1, 2)",FALSE', f"line 2: 3 {WRONG_COUNT}"),
+    ("blue_node,(1, 2),FALSE,FALSE,FALSE,FALSE", f"line 2: 7 {WRONG_COUNT}"),
+    ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,', f"line 2: 7 {TRAILING}"),
+    ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,, ', f"line 2: 8 {TRAILING}"),
+    (",,,,,", "line 2: the row is empty (only commas). Delete the line."),
+    (",,,,,,,", "line 2: the row is empty (only commas). Delete the line."),
+])
+def test_wrong_cell_count(tmp_path, row, problem):
+    _both_refuse(_csv(tmp_path, HEADER + row + "\n"), problem)
 
 
 # --- position cell --------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("cell, runtime_msg, editor_msg", [
-    ('"[1, 2]"', "Row 2: Value '[1, 2]' is not a tuple.",
-     "Row 2: pos_in_minimap '[1, 2]' must be a 2-tuple of ints"),
-    ('"(1, 2, 3)"', "Row 2: Value '(1, 2, 3)' should contain exactly 2 elements.",
-     "Row 2: pos_in_minimap '(1, 2, 3)' must be a 2-tuple of ints"),
-    ('"(1.5, 2)"', "Row 2: the tuple '(1.5, 2)' should only contain ints.",
-     "Row 2: pos_in_minimap '(1.5, 2)' must be a 2-tuple of ints"),
-    ("abc", "Row 2: Value 'abc' failed to be evaluated as a tuple. Ensure it is a valid 2-element tuple. Here is the "
-            "exception error: malformed node or string on line 1: Name(id='abc', ctx=Load())",
-     "Row 2: pos_in_minimap 'abc' not a valid literal: malformed node or string on line 1: Name(id='abc', ctx=Load())"),
+@pytest.mark.parametrize("cell, shown", [
+    ('"[1, 2]"', "[1, 2]"),
+    ('"(1, 2, 3)"', "(1, 2, 3)"),
+    ('"(1.5, 2)"', "(1.5, 2)"),
+    ("abc", "abc"),
+    ('"(1,"', "(1,"),            # SyntaxError
+    ('"{[1]: 2}"', "{[1]: 2}"),  # TypeError: the editor raised it before H16
+    ('""', ""),
 ])
-def test_bad_position(tmp_path, cell, runtime_msg, editor_msg):
+def test_bad_position(tmp_path, cell, shown):
     path = _csv(tmp_path, HEADER + f"blue_node,{cell},FALSE,FALSE,FALSE,FALSE\n")
-    assert _runtime(path)[0] == Failure("\n" + runtime_msg)
-    assert _editor(path) == Failure(editor_msg)
-
-
-def test_position_syntax_error_both_refuse(tmp_path):
-    path = _csv(tmp_path, HEADER + 'blue_node,"(1,",FALSE,FALSE,FALSE,FALSE\n')
-    runtime = _runtime(path)[0]
-    assert not is_successful(runtime)
-    assert runtime.failure().startswith("\nRow 2: Value '(1,' failed to be evaluated as a tuple.")
-    editor = _editor(path)
-    assert not is_successful(editor)
-    assert editor.failure().startswith("Row 2: pos_in_minimap '(1,' not a valid literal: ")
-
-
-def test_position_type_error_runtime_refuses_editor_raises(tmp_path):
-    path = _csv(tmp_path, HEADER + 'blue_node,"{[1]: 2}",FALSE,FALSE,FALSE,FALSE\n')
-    runtime = _runtime(path)[0]
-    assert not is_successful(runtime)
-    assert runtime.failure().startswith("\nRow 2: Value '{[1]: 2}' failed to be evaluated as a tuple. Ensure it is a "
-                                        "valid 2-element tuple. Here is the exception error: ")
-    with pytest.raises(TypeError):
-        _editor(path)
+    _both_refuse(path, f"line 2: pos_in_minimap is {shown!r}; {POS_FIX}")
 
 
 def test_bool_tuple_position_accepted_by_both(tmp_path):
@@ -182,12 +203,16 @@ def test_bool_tuple_position_accepted_by_both(tmp_path):
 
 # --- boolean and nodetype cells -------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("cell", ["true", " TRUE", "1", ""])
+@pytest.mark.parametrize("cell", ["true", " TRUE", "TRUE ", "1", ""])
 def test_bad_boolean(tmp_path, cell):
     path = _csv(tmp_path, HEADER + f'blue_node,"(1, 2)",{cell},FALSE,FALSE,FALSE\n')
-    assert _runtime(path)[0] == Failure(
-        f"\nRow 2: Invalid value '{cell}' in column 'can_fall'. Expected TRUE or FALSE.")
-    assert _editor(path) == Failure(f"Row 2: can_fall must be TRUE or FALSE, got {cell!r}")
+    _both_refuse(path, f"line 2: can_fall is {cell!r}; it must be TRUE or FALSE (capitals, no spaces).")
+
+
+@pytest.mark.parametrize("cell", ["Blue_node", "blue", " blue_node", ""])
+def test_bad_nodetype(tmp_path, cell):
+    path = _csv(tmp_path, HEADER + f'{cell},"(1, 2)",FALSE,FALSE,FALSE,FALSE\n')
+    _both_refuse(path, f"line 2: nodetype is {cell!r}; it must be blue_node or orange_node.")
 
 
 def test_flags_decode(tmp_path):

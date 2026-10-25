@@ -739,13 +739,8 @@ class MapEditor:
             messagebox.showerror(
                 "Could not load map",
                 f'Could not load "{Path(path).name}".\n\n'
-                "The file is not a valid Helix map CSV. It may be:\n"
-                "  • Not a Helix map file\n"
-                "  • Corrupted, or edited externally with invalid values\n"
-                "  • Missing required columns\n"
-                "  • Have a malformed `# minimap_size=W,H` metadata line\n\n"
-                "Your current editor state has not been changed.\n\n"
-                f"Details: {reason}",
+                f"{reason}\n\n"
+                "Your current editor state has not been changed.",
                 parent=self.window,
             )
             return

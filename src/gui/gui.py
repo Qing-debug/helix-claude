@@ -1,6 +1,7 @@
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.filedialog as filedialog
+import tkinter.messagebox as messagebox
 from PIL import Image, ImageTk
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -281,7 +282,9 @@ class MapleGUI:
                     "pick one from the Character dropdown to build the graph."
                 )
         else:
+            # A message box, not only the console: a bad map file must be obvious to the user (decision H16).
             self._printToGUIConsole(f"Failed to load map {path}: {result.failure()}")
+            messagebox.showerror("Could not load map", result.failure(), parent=self.gui)
 
     def _onCharacterPickerChange(self, event=None):
         """Handle character-picker selection. Sets the chosen class on the
