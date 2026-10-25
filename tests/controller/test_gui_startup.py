@@ -46,8 +46,15 @@ def _open_window(shared):
 
 @pytest.fixture
 def make_gui(monkeypatch):
-    """A set-up window (its `_setupGUI` run) with no minimap frame yet; `after` only records, so nothing is re-run."""
+    """A set-up window (its `_setupGUI` run) with no minimap frame yet; `after` only records, so nothing is re-run.
+    `time.sleep` raises for the whole test: the old startup wait (sleep 5 s, then retry every 10 s) must make a test
+    fail at once, not hang it."""
     made = []
+
+    def no_sleep(seconds):
+        raise AssertionError(f"the main window slept {seconds} s")
+
+    monkeypatch.setattr(time, "sleep", no_sleep)
 
     def make(frame=None):
         shared = _shared(frame)
@@ -68,11 +75,7 @@ def _console(gui) -> str:
     return gui.gui_console.get("1.0", "end")
 
 
-def test_setup_returns_at_once_without_a_minimap(make_gui, monkeypatch):
-    def no_sleep(seconds):
-        raise AssertionError(f"the main window slept {seconds} s")
-
-    monkeypatch.setattr(time, "sleep", no_sleep)
+def test_setup_returns_at_once_without_a_minimap(make_gui):
     started = time.perf_counter()
     gui, shared, _ = make_gui()
     assert time.perf_counter() - started < 5
@@ -128,20 +131,45 @@ def test_later_frames_update_the_same_canvas_and_image(make_gui):
     assert canvas.image is not first_image
 
 
+def test_drawing_happens_outside_the_frame_lock(make_gui, monkeypatch):
+    """The lock is held only to read the frame reference, never across PIL or Tk work (it starves the vision thread)."""
+    gui, shared, _ = make_gui(frame=_frame())
+    checked = []
+
+    def lock_free_then(real):
+        def wrapper(*args, **kwargs):
+            checked.append(_lock_is_free(shared))
+            return real(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(gui, "_createMinimapCanvas", lock_free_then(gui._createMinimapCanvas))
+    monkeypatch.setattr(gui_module, "Image", SimpleNamespace(fromarray=lock_free_then(gui_module.Image.fromarray)))
+    monkeypatch.setattr(gui_module, "ImageTk", SimpleNamespace(PhotoImage=lock_free_then(gui_module.ImageTk.PhotoImage)))
+
+    gui._updateCanvas()  # first frame: canvas, PIL image, PhotoImage, create_image
+    shared.minimap_frame = _frame(200)
+    gui._updateCanvas()  # later frame: PIL image, PhotoImage, itemconfig
+
+    assert len(checked) == 5  # create canvas once; PIL image and PhotoImage twice each
+    assert all(checked)
+
+
 @pytest.mark.parametrize("button", ["drawBlueNodeOnCharacter", "drawOrangeNodeOnCharacter", "showPathToGoalNode",
-                                    "_clearDrawnNodesOnGUIMinimap"])
+                                    "_clearDrawnNodesOnGUIMinimap", "_openMapEditor"])
 def test_buttons_that_need_the_minimap_say_so_before_it_exists(make_gui, monkeypatch, button):
     gui, _, _ = make_gui()
 
-    def must_not_run():
-        raise AssertionError("read the character's position with no minimap frame")
+    def must_not_run(*args):
+        raise AssertionError("used the minimap before the first frame")
 
     monkeypatch.setattr(gui.controller, "getCharacterCoords", must_not_run)
+    monkeypatch.setattr(gui_module, "MapEditor", must_not_run)
 
     getattr(gui, button)()
 
     assert gui_module.MINIMAP_NOT_FOUND_MESSAGE in _console(gui)
     assert gui.node_count == 0
+    assert gui.map_editor is None
 
 
 def test_draw_and_clear_buttons_work_once_the_first_frame_has_arrived(make_gui, monkeypatch):
@@ -162,3 +190,20 @@ def test_draw_and_clear_buttons_work_once_the_first_frame_has_arrived(make_gui, 
 
     assert gui.minimap_canvas.find_withtag("node") == () and gui.minimap_canvas.find_withtag("node_tag") == ()
     assert len(gui.minimap_canvas.find_all()) == 1  # the minimap image stays
+
+
+def test_map_editor_opens_once_the_first_frame_has_arrived(make_gui, monkeypatch):
+    gui, _, _ = make_gui(frame=_frame())
+    gui._updateCanvas()
+    opened = []
+
+    def fake_editor(root, controller, shared):
+        opened.append((root, controller, shared))
+        return SimpleNamespace(window=SimpleNamespace(protocol=lambda *args: None))
+
+    monkeypatch.setattr(gui_module, "MapEditor", fake_editor)
+
+    gui._openMapEditor()
+
+    assert len(opened) == 1 and gui.map_editor is not None
+    assert gui_module.MINIMAP_NOT_FOUND_MESSAGE not in _console(gui)
