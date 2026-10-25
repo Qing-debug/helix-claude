@@ -1150,3 +1150,33 @@ Cost if wrong: a file the editor used to accept is now refused (a row with an ex
 Undo: revert the `feat(controller)` commit that adds `read_rows`. To undo only the editor part (ISS7-D1), restore `read_editor_nodes`'s own checks from 20e57bf and drop the editor assertion in the test helper `_both_refuse`.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ISS7.md` (every message, verbatim), `notes/CW-EXPL.md` issue 7, `ledger-cleanup.md:78`.
+
+## H17 (2026-10-26): an up/down link skips a node Kanna can't teleport to and goes to the next one she can
+
+Question: when the nearest node above or below fails the platform-edge rule (behaviour issue 6: the node is the end of a platform that starts beside the character, not above her), should the path graph give up on that direction, as it did, or link to the next aligned node within reach that passes the rule?
+
+Ruling [Hong]: link to the next one that passes (option B on the issue-6 page). Hong's words (2026-10-26): "Kanna has to be exactly in line with that platform for the to bring it there. If there is no pixel above/below kanna to teleport to, then the teleport will fail. It makes sense to only draw links between nodes that can actually be connected, so with your example, it would make sense to have S(70,60) connect to T(70,40) instead of it not connecting to M(72,50) and stopping there when T(70,40) is allowed."
+
+As built: `_findClosestNodeAbove` and `_findClosestNodeBelow` (`src/controller/path_graph.py`) skip every candidate that fails `_isVerticalEdgeValid`, then take the nearest of the rest; `_createUpEdges` / `_createDownEdges` no longer check the rule a second time. The rule itself is unchanged (a target flagged left platform end is reachable from x at or right of it, flagged right end from x at or left of it, flagged both or neither from anywhere in the 2 px column), and so are the one-edge-per-direction rule, the reach limits and the first-inserted tie-break. In the page's example S(70,60) now links up to T(70,40) and T links down to S, past M(72,50), the left end of the middle platform. A node carries only its position and the two platform-end flags, so "a pixel of the target platform exactly above or below" is decided from those flags; an unflagged node is taken to have platform under the whole column.
+
+Affects: `src/controller/path_graph.py` (the two vertical finders and their callers); `tests/controller/test_path_graph_characterization.py` (the no-fallback pin, up and down, now expects the farther node; new test for the S/M/T example); `src/controller/CLAUDE.md` "Edge choice". Every user of the graph sees the new links: the runtime, the map editor's preview and route walking (`RouteGraph.build` copies every `PathGraph` edge). Not changed: route walking's own terrain finder (`src/route/terrain.py`, frozen until the split-platform fix), which still keeps the nearest node only. The FF2 map builds the same 40 edges as before (no node in it is flagged as a platform end).
+
+Cost if wrong: on a map with platform ends flagged, a node can get an up/down link to a farther platform where it had none; if the game can't make that teleport (for example it can't pass through the nearer platform), route walking tries it, misses and re-plans from where Kanna lands.
+
+Undo: revert the `feat(controller)` commit that adds the filter (restores the no-fallback pin too).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ISS6-PAGE.md` (the example and its probe), `notes/ISS6-R.md` (which tests flip), `notes/ISS6-B.md` (as built).
+
+## H18 (2026-10-26): the main window appears at once instead of sleeping until the minimap is found
+
+Question: may the startup wait be removed (behaviour issue 1: before showing the main window, `_setupGUI` slept 5 s and then polled for the first minimap frame every 10 s, holding the frame lock while it slept, so the window could take up to one extra 10 s to appear)?
+
+Ruling [Hong]: yes. Hong's words (2026-10-26): "Fix sounds fine". The main window no longer sleeps and polls for the minimap before it is shown: it appears at once, and the minimap area appears on the first frame.
+
+Affects: `src/gui/gui.py` startup. Another unit implements it on its own branch; this entry records only the decision.
+
+Cost if wrong: the window shows before there is a minimap to draw; the minimap area stays empty until the first frame arrives.
+
+Undo: revert that unit's commit.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CW-EXPL.md` issue 1, `notes/ISS1-ANS.md`.
