@@ -61,7 +61,7 @@ def _key_times(steps: Sequence[Step]) -> tuple[dict[Key, tuple[int, int]], dict[
 
 
 class SimLink:
-    """Duck-types `BleLink.play` / `release_all` for `InputLayer` (G16)."""
+    """Satisfies the `Link` protocol in `src/input/input_layer.py` (`play` / `release_all`) for `InputLayer` (G16)."""
 
     def __init__(self, world: SimWorld, clock: SimClock, params: SimParams) -> None:
         self.world = world
