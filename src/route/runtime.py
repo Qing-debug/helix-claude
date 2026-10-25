@@ -13,6 +13,9 @@ Where the plan is silent:
   still alive, as Feature A's listener does (`src/input/harness/listener.py:384-387`); it never waits for ever.
 - The hook swallows both the key-down and the key-up of the hotkey (PB-D2); only a key-down triggers.
 - A `trigger()` before `start()` is kept: the worker that `start()` launches then calls `on_stop` at once.
+- The lock is an `RLock` so a Ctrl+C on the main thread while it holds the lock cannot deadlock. If that Ctrl+C lands
+  inside another `trigger()` before it marks the stop as triggered, both record and the outer call's source and time
+  are the ones kept; either way the stop happens once.
 """
 
 import signal
@@ -33,7 +36,10 @@ class StopControl:
     def __init__(self, on_stop: Callable[[], None], hotkey_vk: int = 0x7B) -> None:  # 0x7B = F12 (PB-D2)
         self._on_stop = on_stop
         self._hotkey_vk = hotkey_vk
-        self._lock = threading.Lock()  # makes the first trigger() and the first close() one step each
+        # Makes the first trigger() and the first close() one step each. Reentrant because Python runs the SIGINT
+        # handler on the main thread between bytecodes, also while the main thread holds this lock (in trigger() from
+        # walk's lost-leg sink, or in close()): a plain Lock would deadlock there (B19-R M1).
+        self._lock = threading.RLock()
         self._wake = threading.Event()  # set by the first trigger() and by close(); the worker waits on it
         self._triggered = False
         self._closed = False

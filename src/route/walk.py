@@ -3,9 +3,9 @@
     python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised [--class kanna] [--laps N] [--minutes M]
                              [--seed S] [--out data/route/<UTC stamp>] [--record]
 
-Exit codes: 0 done · 1 run ended link_down · 2 usage, no --supervised, or an --out that already holds a run (B19-D2)
-· 3 no first frame or no character found · 4 connect failed · 5 map, route graph or character icon failed to load
-· 6 run() returned a Failure · 7 run() raised an exception · 9 the stop control failed to start · 10 the character
+Exit codes: 0 done · 1 run ended link_down · 2 usage (a bad --minutes or --seed), no --supervised, an --out that
+already holds a run (B19-D2), or a leg log that cannot be opened · 3 no first frame or no character found · 4 connect
+failed · 5 map, route graph or character icon failed to load · 6 run() returned a Failure · 7 run() raised an exception · 9 the stop control failed to start · 10 the character
 was lost: a leg timed out with no move (B19-D1). 8 is the live link check's own code, never `main`'s.
 
 `main` starts the minimap capture, checks that the character is found, connects the link, builds the walker and the
@@ -28,7 +28,8 @@ Rulings this builds on top of the plan text:
 Where the plan is silent:
 - `_make_positions` returns the position source, or a `Failure` (exit 5) when the character icon does not load.
 - Without `--seed` a seed is drawn from the OS (`secrets.randbits(64)`) and written into `session.json`;
-  the timing and planner generators are `SeedSequence(seed).spawn(2)`.
+  the timing and planner generators are `SeedSequence(seed).spawn(2)`. A seed numpy rejects (a negative one)
+  returns 2 before anything starts.
 - The default `--out` is `data/route/<UTC stamp>` under the repo root, so it does not depend on the working directory.
 - An argparse error returns its exit code (2) rather than raising `SystemExit`, so `main` always returns an int.
 - A leg log that cannot be opened (a permission error, say) returns 2, like the other bad-`--out` cases.
@@ -237,6 +238,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: --minutes must be finite, above 0 and at most {threading.TIMEOUT_MAX / 60:g}, got {minutes!r}",
               file=sys.stderr)
         return 2
+    seed = args.seed if args.seed is not None else secrets.randbits(64)
+    try:
+        seeds = np.random.SeedSequence(seed)
+    except (ValueError, TypeError) as exc:  # numpy rejects a negative seed
+        print(f"error: --seed must be a non-negative integer, got {seed!r} ({exc})", file=sys.stderr)
+        return 2
     out: Path = args.out if args.out is not None else (
         _REPO / "data" / "route" / datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ"))
     checked = _check_out(out)
@@ -250,14 +257,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {route.failure()}", file=sys.stderr)
         return 5
     rg, rotation = route.unwrap()
+    rng_timing, rng_planner = (np.random.default_rng(s) for s in seeds.spawn(2))
     shared = _Shared()
     positions = _make_positions(shared)
     if isinstance(positions, Failure):
         print(f"error: {positions.failure()}", file=sys.stderr)
         return 5
-
-    seed = args.seed if args.seed is not None else secrets.randbits(64)
-    rng_timing, rng_planner = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2))
 
     code = 0
     link = layer = log = stop = walker = timer = rec_thread = rec_stop = None

@@ -127,6 +127,23 @@ def test_sigint_handler_triggers_on_stop_once(hook, saved_sigint):
     assert calls == [1]
 
 
+def test_ctrl_c_while_the_main_thread_holds_the_lock_does_not_deadlock(hook, saved_sigint):
+    """B19-R M1: the SIGINT handler runs on the main thread, also while main holds the lock (walk's lost-leg sink calls
+    trigger() on main; close() runs on main). The non-blocking acquire fails fast on a plain Lock instead of hanging."""
+    ran = threading.Event()
+    stop = StopControl(ran.set)
+    assert is_successful(stop.start())
+    try:
+        with stop._lock:  # pyright: ignore[reportPrivateUsage]
+            assert stop._lock.acquire(blocking=False)  # pyright: ignore[reportPrivateUsage]
+            stop._lock.release()  # pyright: ignore[reportPrivateUsage]
+            signal.raise_signal(signal.SIGINT)  # the handler runs here, on this thread, inside the lock
+            assert stop.trigger_source == "sigint"
+        assert ran.wait(1.0)
+    finally:
+        stop.close()
+
+
 def test_close_without_trigger_undoes_start(hook, saved_sigint):
     calls: list[int] = []
     stop = StopControl(lambda: calls.append(1))
@@ -806,3 +823,51 @@ def test_out_naming_a_file_is_refused(sim, capsys):
     assert sim.main("--laps", "1") == 2
     assert "is not a folder" in capsys.readouterr().err
     assert sim.capture_calls == 0
+
+
+def test_lost_leg_with_the_stop_controls_own_stop_also_firing_exits_10(sim, monkeypatch):
+    """B19-R M4(b): the stop control's on_stop (walker.stop_now) fires inside trigger, then the sink's own stop_now."""
+    sim.stop_calls_on_stop = True
+    positions = LostAfter(sim.positions, OFF_GRAPH)
+    sim.positions = positions
+
+    def before(lap: int, leg: int) -> None:
+        if (lap, leg) == (1, 2):
+            positions.lost = True
+
+    _patch_walk_leg(monkeypatch, before)
+    assert sim.main("--laps", "1") == 10
+    stop = sim.stops[0]
+    assert stop.triggers == ["off_graph"] and sim.link.plays == stop.plays_at_trigger
+    legs = _lines(sim.out / "legs.jsonl")
+    assert legs[-2]["outcome"] == "timed_out" and legs[-2]["moves"] == []
+    assert legs[-1]["outcome"] == "stopped" and legs[-1]["moves"] == []
+    assert _json(sim.out / "stop.json")["reason"] == "off_graph"
+    assert sim.link.release_calls >= 1 and sim.link.close_calls == 1 and stop.close_calls == 1
+
+
+# B19-R M2: a seed numpy rejects
+
+def test_negative_seed_exits_2_before_capture(sim, capsys):
+    assert sim.main("--laps", "1", "--seed", "-1") == 2
+    assert "--seed must be a non-negative integer, got -1" in capsys.readouterr().err
+    assert sim.capture_calls == 0 and sim.link_calls == 0
+    assert not sim.out.exists()
+
+
+def test_a_seed_above_64_bits_is_accepted(sim):
+    assert sim.main("--laps", "1", "--seed", str(2**70)) == 0
+    assert _json(sim.out / "session.json")["seed"] == 2**70
+
+
+# B19-R M4(a): the leg log cannot be opened after connect
+
+def test_leg_log_open_failure_exits_2_with_keys_released_and_link_closed(sim, monkeypatch, capsys):
+    monkeypatch.setattr(walk.JsonlLegLog, "open", classmethod(lambda cls, directory: Failure("cannot open")))
+    assert sim.main("--laps", "1") == 2
+    assert "error: cannot open" in capsys.readouterr().err
+    assert sim.link.plays == 0
+    assert sim.link.release_calls >= 1 and sim.link.close_calls == 1
+    assert sim.stops == []  # the stop control is never built
+    assert sim.log[-2:] == ["release_all", "link.close"]
+    assert not (sim.out / "stop.json").exists() and not (sim.out / "session.json").exists()
