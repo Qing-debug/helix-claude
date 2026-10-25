@@ -393,6 +393,29 @@ def test_case_2_the_move_is_not_offered_when_another_platform_is_below_the_end()
     assert _decide(rg, (10, 10), nodes[2]).move == DROP
 
 
+def test_case_2_walks_to_the_platform_end_when_the_piece_above_it_is_the_target_platform():
+    nodes, rg = _synthetic([(10, 28), (25, 28), (20, 10), (29, 10)])  # the lower platform ends at x 25, before x 29
+    assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.UP
+    target = nodes[3]
+    first = _decide(rg, (21, 28), target)
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)  # to the end at x 25, not to x 29
+    assert first.toward is target
+    assert _decide(rg, (25, 28), target).move == Move(MoveKind.TELEPORT, Key.UP, None)  # (20,10)-(29,10) is above
+
+
+def test_case_2_the_up_move_is_not_offered_when_another_platform_is_above_the_end():
+    # the lower platform ends at x 25; above x 25 is the (6,38)-(30,38) platform, not (29,50)-(45,50), so UP
+    # (25,60) -> (29,50) is not offered and the route goes round: teleport up at the left end x 10, whose piece above
+    # is (6,38)-(30,38), along it, and down at x 29
+    points = [(10, 60), (25, 60), (29, 50), (45, 50), (6, 38), (18, 38), (30, 38)]
+    nodes, rg = _synthetic(points)
+    assert rg.graph.edges[nodes[1], nodes[2]]["kind"] == EdgeKind.UP  # in the route graph, but not offered
+    decision = _decide(rg, (25, 60), nodes[2])
+    assert decision.move == Move(MoveKind.TELEPORT, Key.LEFT, None)  # run to the launch x 10, d = 15
+    assert decision.toward is nodes[4]
+    assert _decide(rg, (10, 60), nodes[2]).move == Move(MoveKind.TELEPORT, Key.UP, None)
+
+
 def test_case_2_with_no_other_route_is_no_path():
     nodes, rg = _synthetic([(10, 10), (25, 10), (29, 28), (45, 28)])
     assert rg.graph.has_edge(nodes[1], nodes[2])
