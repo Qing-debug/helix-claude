@@ -60,15 +60,30 @@ def _both_refuse(path: Path, *problems: str) -> None:
 
 # --- metadata lines -------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("line, reason", [
-    ("# minimap_size=abc", "(expected `# minimap_size=W,H`)"),
-    ("# minimap_size=a,b", "(W and H must be integers)"),
-    ("# minimap_size=0,5", "(W and H must be positive integers)"),
+META_FIX = 'it must be two whole numbers above 0, like "# minimap_size=162,82". Fix it, or delete the line.'
+
+
+@pytest.mark.parametrize("line", [
+    "# minimap_size=abc",
+    "# minimap_size=a,b",
+    "# minimap_size=0,5",
+    "# minimap_size=162,82,,,,,",  # what Excel may make of a saved map
 ])
-def test_bad_minimap_size_runtime_accepts_editor_refuses(tmp_path, line, reason):
+def test_bad_minimap_size_runtime_accepts_editor_refuses(tmp_path, line):
     path = _csv(tmp_path, f"{line}\n{HEADER}{OK_ROW}")
     assert _runtime(path)[0] == Success(None)
-    assert _editor(path) == Failure(f"Malformed metadata line: '{line}' {reason}")
+    assert _editor(path) == _refused(path, f'line 1: the "# minimap_size=" line is \'{line}\'; {META_FIX}')
+
+
+def test_bad_minimap_size_message_gives_its_file_line(tmp_path):
+    path = _csv(tmp_path, f"# note\n\n  # minimap_size=x  \n{HEADER}{OK_ROW}")
+    assert _editor(path) == _refused(path, f'line 3: the "# minimap_size=" line is \'  # minimap_size=x\'; {META_FIX}')
+
+
+def test_bad_minimap_size_hides_the_row_problems_in_the_editor(tmp_path):
+    path = _csv(tmp_path, "# minimap_size=abc\n" + HEADER + 'green_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE\n')
+    assert _runtime(path)[0] == _refused(path, "line 3: nodetype is 'green_node'; it must be blue_node or orange_node.")
+    assert _editor(path) == _refused(path, f'line 1: the "# minimap_size=" line is \'# minimap_size=abc\'; {META_FIX}')
 
 
 def test_metadata_first_minimap_size_wins_and_other_comments_ignored(tmp_path):
@@ -159,8 +174,8 @@ def test_missing_file(tmp_path):
 # --- row shape ------------------------------------------------------------------------------------------------------
 
 WRONG_COUNT = ("cells, expected 6 (nodetype, pos_in_minimap, can_fall, fall_dist_exceeds_vertical_tp, "
-               "is_left_platform_edge, is_right_platform_edge). Look for a missing or extra comma; pos_in_minimap "
-               'needs its quotes, like "(12, 34)".')
+               "is_left_platform_edge, is_right_platform_edge). Look for a missing or extra comma, or a quote that is "
+               'not closed; pos_in_minimap needs its quotes, like "(12, 34)".')
 TRAILING = "cells, expected 6. Remove the extra comma(s) at the end of the line."
 
 
@@ -168,6 +183,7 @@ TRAILING = "cells, expected 6. Remove the extra comma(s) at the end of the line.
     ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,EXTRA', f"line 2: 7 {WRONG_COUNT}"),
     ('blue_node,"(1, 2)",FALSE', f"line 2: 3 {WRONG_COUNT}"),
     ("blue_node,(1, 2),FALSE,FALSE,FALSE,FALSE", f"line 2: 7 {WRONG_COUNT}"),
+    ('blue_node,"(1, 2),FALSE,FALSE,FALSE,FALSE', f"line 2: 2 {WRONG_COUNT}"),  # the quote is never closed
     ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,', f"line 2: 7 {TRAILING}"),
     ('blue_node,"(1, 2)",FALSE,FALSE,FALSE,FALSE,, ', f"line 2: 8 {TRAILING}"),
     (",,,,,", "line 2: the row is empty (only commas). Delete the line."),

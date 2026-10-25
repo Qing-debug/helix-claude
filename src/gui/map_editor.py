@@ -738,7 +738,6 @@ class MapEditor:
             print(f"[MapEditor] Load failed for {path}: {reason}")  # dev log
             messagebox.showerror(
                 "Could not load map",
-                f'Could not load "{Path(path).name}".\n\n'
                 f"{reason}\n\n"
                 "Your current editor state has not been changed.",
                 parent=self.window,

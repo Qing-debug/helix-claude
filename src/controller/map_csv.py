@@ -76,10 +76,11 @@ def read_editor_nodes(
     except (OSError, UnicodeDecodeError) as e:
         return Failure(unreadable_message(path, e))
 
-    metadata_lines = [l for l in all_lines if is_comment(l)]
+    # Runs before the row check, so a bad metadata line is reported alone (src/controller/CLAUDE.md).
+    metadata_lines = [(number, line) for number, line in enumerate(all_lines, start=1) if is_comment(line)]
     meta_result = _parse_metadata_lines(metadata_lines)
     if not is_successful(meta_result):
-        return Failure(meta_result.failure())
+        return Failure(problems_message(path, [meta_result.failure()]))
     metadata = meta_result.unwrap()
 
     # The same check and messages as the runtime parser (decision H16).
@@ -141,9 +142,9 @@ def _row_from_node(node: EditorNode) -> List[str]:
     ]
 
 
-def _parse_metadata_lines(lines: List[str]) -> Result[Dict[str, Any], str]:
+def _parse_metadata_lines(lines: List[Tuple[int, str]]) -> Result[Dict[str, Any], str]:
     """
-    Parse `#`-prefixed metadata lines into a dict.
+    Parse `#`-prefixed metadata lines, given as (file line number, line) pairs, into a dict.
 
     Recognized keys:
       - `minimap_size`: value is "W,H" -> parsed as `Tuple[int, int]`.
@@ -153,14 +154,15 @@ def _parse_metadata_lines(lines: List[str]) -> Result[Dict[str, Any], str]:
     malformed metadata.
 
     A `#` line whose key IS recognized but whose value is unparseable returns
-    Failure (strict-metadata design decision, Task 19 Q3). Caller (read_editor_nodes)
-    propagates the Failure so the editor's _load shows a showerror.
+    Failure (strict-metadata design decision, Task 19 Q3): one problem line, "line N: ...",
+    that says what the line must be. Caller (read_editor_nodes) puts it in the same
+    message as the row problems (problems_message) so the editor's _load shows a showerror.
 
     If `minimap_size` appears on multiple lines, the FIRST one wins (subsequent
     duplicates are ignored - same forgiving stance as unknown keys).
     """
     metadata: Dict[str, Any] = {}
-    for raw in lines:
+    for number, raw in lines:
         body = raw.lstrip().lstrip('#').strip()
         if '=' not in body:
             continue  # plain comment, not key=value
@@ -170,24 +172,19 @@ def _parse_metadata_lines(lines: List[str]) -> Result[Dict[str, Any], str]:
         if key == 'minimap_size':
             if 'minimap_size' in metadata:
                 continue  # first one wins
+            bad = Failure(
+                f"line {number}: the \"# minimap_size=\" line is '{raw.rstrip()}'; it must be two whole numbers "
+                "above 0, like \"# minimap_size=162,82\". Fix it, or delete the line."
+            )
             parts = value.split(',')
             if len(parts) != 2:
-                return Failure(
-                    f"Malformed metadata line: '{raw.rstrip()}' "
-                    f"(expected `# minimap_size=W,H`)"
-                )
+                return bad
             try:
                 w, h = int(parts[0].strip()), int(parts[1].strip())
             except ValueError:
-                return Failure(
-                    f"Malformed metadata line: '{raw.rstrip()}' "
-                    f"(W and H must be integers)"
-                )
+                return bad
             if w < 1 or h < 1:
-                return Failure(
-                    f"Malformed metadata line: '{raw.rstrip()}' "
-                    f"(W and H must be positive integers)"
-                )
+                return bad
             metadata['minimap_size'] = (w, h)
         # Unknown keys: silently ignore (treated as plain comments).
     return Success(metadata)

@@ -4,8 +4,9 @@ Shared by the runtime parser (`csv_parser.CSVParser`) and the editor's reader an
 both sides do identically: the header, the node types, the boolean cells, the `(x, y)` position cell, the check of a
 whole file against them with the messages the user sees (`read_rows`, `problems_message`; decision H16) and the
 order the editor writes rows in (which the editor's edge preview must copy, because edge ties go to the
-first-inserted node). What still differs between the readers (file errors, the editor's strict `# minimap_size=`
-line) stays in their own modules; tests/controller/test_map_csv_characterization.py pins both.
+first-inserted node). What still differs between the readers (the editor's strict `# minimap_size=` line, the
+runtime's message for a `None` path) stays in their own modules; tests/controller/test_map_csv_characterization.py
+pins both.
 
 Pure: it builds no `Node` or `EditorNode`, so importing or calling it never touches `Node.node_id_counter`.
 """
@@ -36,7 +37,7 @@ BOOL_CELLS = (TRUE, FALSE)
 
 
 def bool_from_cell(cell: str) -> bool:
-    """`TRUE` is True; any other cell is False (both readers reject other cells first, each its own way)."""
+    """`TRUE` is True; any other cell is False (`read_rows` rejects other cells before this is called)."""
     return cell == TRUE
 
 
@@ -153,7 +154,8 @@ def _read_row(number: int, cells: list[str], problems: list[str]) -> MapRow | No
                             "the end of the line.")
         else:
             problems.append(f"line {number}: {len(cells)} cells, expected {len(HEADER)} ({', '.join(HEADER)}). Look "
-                            f"for a missing or extra comma; pos_in_minimap needs its quotes, like {_POS_EXAMPLE}.")
+                            "for a missing or extra comma, or a quote that is not closed; pos_in_minimap needs its "
+                            f"quotes, like {_POS_EXAMPLE}.")
         return None
     nodetype, pos_cell, *bool_cells = cells
     found: list[str] = []
