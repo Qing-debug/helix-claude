@@ -3,7 +3,7 @@
 **Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
 Amended after approval: B19 (PB-amend, 2026-10-23); B15 score scrub (B15-D1, 2026-10-26); B19 lost character and
-used `--out` (B19-D1, B19-D2, 2026-10-26)
+used `--out` (B19-D1, B19-D2, 2026-10-26); B20 summary and B21 steps 4 and 5 (B20-D1, B20-D4, FDOC54, 2026-10-26)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -1627,10 +1627,33 @@ frames.
   *Amended (B20-D4, ruling A):* step 2's recording includes 5 or more hand teleports UP into open space; step 4
   treats `reach_v_peak_mean` as a lower bound (the tool sees no frame between the blink and the end of the key
   schedule, so it can miss the true peak) and, before changing Kanna's 23, checks the peak on those frames.
+  *Amended (final Feature B review FDOC54, from B20-fix-R m-a):* to check the peak on those frames, run
+  `detection_check draft` on the step-2 recording (it labels every frame with the character's position by the dot's
+  colour, independent of the locator: `detection_check.py:10`). For each hand teleport UP take the rise (the start y
+  minus the smallest y over its frames) and use it instead of the tool's value if it is higher. A measured rise above 24
+  is already conclusive, whether the tool's or the frames', because it is a lower bound and 24 is more than 1 px over 23.
 - [ ] **Step 5: sim realism.** Compare `walk_px_per_s`, `teleport_settle_s`, `drop_settle_s` and the step-2 platform
   positions with `SimParams`, `MovementParams` and `ff2_terrain.json`. Any value off by > 20%, or a platform end off
   by > 3 px: update the default or fixture, re-run the full suite (updating default-dependent numbers in B2-B7 and
   B12-B14 tests), re-run B14 (1000 laps) and paste the result.
+  *Amended (final Feature B review FDOC54, from P1-F2, P1-fyi3, B20-D1 and B20-D2/D3 adjudicator notes, B20-fix-R):*
+  the measured values are not all the same quantity as the defaults.
+  - `drop_settle_s` runs from the layer call's return to the settled position, so it includes the fall. Compare it
+    with base + height ÷ fall speed for the same drops (height = `after` y − `before` y, from `measure.jsonl`):
+    `SimParams.drop_settle_s + height / fall_px_per_s` (plan :848, `sim/world.py:291`). The planner's
+    `MovementParams.drop_base_s + height / fall_px_per_s` (`route_graph.py:53`) has the same fall term, but its base
+    also counts the keys (`params.py:18`), so the sim's is the closer comparison. Never copy the measured
+    `drop_settle_s` into `SimParams.drop_settle_s` as it is: the sim adds the fall itself, so it would count it twice
+    (a 20 px drop: about 0.25 + 20/60 = 0.58 s measured against a base of 0.25). Update the base only after taking the
+    fall out.
+  - `teleport_settle_s` comes from flat sideways teleports, which do not fall. It is expected to be tens of
+    milliseconds against 0.35 in `SimParams.teleport_settle_s` (the blink happens during the key schedule, before the
+    layer call returns), and 20% of such a value is smaller than the measurement's resolution (about one frame plus
+    a poll). Judge it with an absolute tolerance, not 20%. In the sim this value shapes only teleports that fall
+    (`sim/world.py:249`).
+  - `MovementParams.teleport_s` (0.55: keys + animation, `params.py:17`) is a different quantity from
+    `teleport_settle_s`, which starts when the layer call returns. The tool does not measure it, so compare
+    `teleport_settle_s` with `SimParams` only.
 - [ ] **Step 6: detection on moving frames.** B18 `draft` + Hong's check + `check` on step 2's frames → PASS.
 - [ ] **Step 7: short runs.** `python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised --laps 1`
   twice, then the same with `--laps 10 --record`. Hong watches; F12 aborts
