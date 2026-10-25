@@ -41,16 +41,20 @@ Where the plan is silent:
 - `--reps` must be at least 2, so every phase (including the `reps // 2` teleport-downs and drops) has a sample.
 - The default `--out` is `data/route/measure/<UTC stamp>` under the repo root; a used `--out` is refused as the
   walk CLI refuses one (decision B19-D2, `runtime.check_out`).
-- Settle (B20-D2): after a move's layer call returns, poll every `_POLL_S` (10 ms) until successful reads have shown
-  one position for `_STABLE_S`; that position is `after`, and `settle_s` runs from the layer call's return to the
-  first read of it. A failed read (a miss, or no new frame) is skipped. A move that has not settled within
-  `_SETTLE_TIMEOUT_S` gives no sample (a line is printed) and the next move's `before` is settled afresh.
+- Settle (B20-D2): after a move's layer call returns, poll every `_POLL_S` (10 ms) until a successful read shows the
+  position first read at least `_STABLE_S` earlier, with no other position read in between; that position is
+  `after`, and `settle_s` runs from the layer call's return to the first read of it. A failed read (a miss, or no new
+  frame) neither confirms nor resets it, so a gap in the frame feed never settles a move. A move that has not
+  settled within `_SETTLE_TIMEOUT_S` gives no sample (a line is printed) and the next move's `before` is settled
+  afresh.
 - `before` is the previous move's `after`; the first move of a phase, and a move after a skipped one, settles first.
 - `held_ms` is the hold the timing model drew for the walk (the plan's `WALK` sample), not the intended 2000 ms.
 - Moves are sent without a stimulus (no reaction wait); the timing model's generator is seeded from the OS.
 - A stop sets an event that every prompt, countdown, move and settle poll checks, and starts a guard thread that
   sends `release_all` every `_GUARD_S` until the cleanup, so no key stays held when a move was in flight (as the
   walker's stop guard, PB-D4).
+- An Enter read within `_stray_s` of a prompt was typed before it (a stray second Enter, buffered by the console):
+  it is dropped with a line saying so, and the prompt waits for the next one (B20 review m2).
 """
 
 import argparse
@@ -58,6 +62,7 @@ import json
 import statistics
 import sys
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -95,6 +100,7 @@ _LINK_DOWN = frozenset({InputError.LINK_LOST, InputError.NOT_CONNECTED})
 _NS_PER_S = 1_000_000_000
 
 _countdown_s = 5.0
+_stray_s = 0.3  # an Enter read sooner than this after a prompt was typed before it; no one places Kanna this fast
 
 _FLOOR = ("Put Kanna on the floor near x 80, with open floor on both sides. Measuring horizontal teleports, then "
           "walks.")
@@ -240,25 +246,44 @@ class _Settle:
 def _ask(text: str, stopped: threading.Event) -> bool:
     """Print `text` and wait for Enter. False when a stop comes first or stdin is closed.
 
-    The line is read on a daemon thread so that F12 or Ctrl+C ends the wait at once."""
+    The line is read on a daemon thread so that F12 or Ctrl+C ends the wait at once. A line read within `_stray_s`
+    of the prompt was typed before it and does not answer it."""
     print(f"\n{text}\nPress Enter when she is there (F12 stops).", flush=True)
+    shown = time.monotonic()
+    while True:
+        line = _wait_line(stopped)
+        if line is None:
+            return False
+        closed, read_at = line
+        if closed or stopped.is_set() or read_at - shown >= _stray_s:
+            break
+        print("An Enter pressed before this prompt was ignored. Press Enter when she is there.", flush=True)
+        shown = time.monotonic()
+    if closed and not stopped.is_set():
+        print("stdin closed: stopping", file=sys.stderr)
+    return not closed and not stopped.is_set()
+
+
+def _wait_line(stopped: threading.Event) -> tuple[bool, float] | None:
+    """Read one line on a daemon thread: (stdin closed, `time.monotonic()` when the read ended), or None when a stop
+    comes first."""
     answered = threading.Event()
-    closed: list[bool] = []
+    result: list[tuple[bool, float]] = []
 
     def read() -> None:
+        closed = False
         try:
             _read_line()
         except (EOFError, OSError):
-            closed.append(True)
+            closed = True
+        result.append((closed, time.monotonic()))
         answered.set()
 
     threading.Thread(target=read, name="measure-prompt", daemon=True).start()
     while not answered.wait(_PROMPT_POLL_S):
         if stopped.is_set():
-            return False
-    if closed and not stopped.is_set():
-        print("stdin closed: stopping", file=sys.stderr)
-    return not closed and not stopped.is_set()
+            return None
+    return result[0]
 
 
 def _countdown(stopped: threading.Event) -> bool:
@@ -382,11 +407,10 @@ class _Session:
                     peak_y = pos[1]
                 if pos != last:
                     last, since_ns = pos, now_ns
-            settle_s = (since_ns - start_ns) / _NS_PER_S
-            if last is not None and now_ns - since_ns >= _STABLE_S * _NS_PER_S:
-                return _Settle(last, True, settle_s, peak_y)
+                elif now_ns - since_ns >= _STABLE_S * _NS_PER_S:  # only a fresh read confirms a settle
+                    return _Settle(last, True, (since_ns - start_ns) / _NS_PER_S, peak_y)
             if now_ns - start_ns >= _SETTLE_TIMEOUT_S * _NS_PER_S:
-                return _Settle(last, False, settle_s, peak_y)
+                return _Settle(last, False, (since_ns - start_ns) / _NS_PER_S, peak_y)
             clock.sleep(_POLL_S)
 
 

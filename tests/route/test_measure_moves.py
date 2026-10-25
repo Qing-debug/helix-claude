@@ -7,6 +7,7 @@ All synthetic: no board, no game, no screen capture, no keyboard hook.
 
 import json
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from src.route.harness import measure_moves
 from src.route.harness.measure_moves import MEASURE_FILE, MoveSample, append_sample, main, summarize
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
 from src.route.sim.world import NoiseConfig, SimParams, SimWorld, load_terrain
+from src.route.walker import STALE
 
 SUMMARY_KEYS = {"reach_h_mean", "reach_h_sd", "reach_h_n", "reach_v_peak_mean", "walk_px_per_s",
                 "teleport_settle_s", "drop_settle_s"}
@@ -354,6 +356,7 @@ def rig(monkeypatch, tmp_path):
     monkeypatch.setattr(measure_moves, "_make_stop_control", make_stop)
     monkeypatch.setattr(measure_moves, "_read_line", read_line)
     monkeypatch.setattr(measure_moves, "_countdown_s", 0)
+    monkeypatch.setattr(measure_moves, "_stray_s", 0)
 
     def run(reps: int = 2) -> int:
         code = main(["--supervised", "--out", str(env.out), "--reps", str(reps)])
@@ -433,6 +436,48 @@ def test_character_lost_after_a_move_exits_10_after_cleanup(rig, capsys):
     assert len(rig.link.plays) == 1
     assert _cleanup_order(rig.log) == ["release_all", "link.close", "stop.close"]
     assert json.loads((rig.out / "summary.json").read_text(encoding="utf-8"))["reach_h_n"] == 0
+
+
+def test_a_capture_stall_does_not_settle_a_move(rig):
+    rig.use_script([[(0.0, (80, 100)), (0.01, Failure(STALE)), (0.7, (99, 100))]])
+    assert rig.run(2) == 0
+    lines = _lines(rig.out / MEASURE_FILE)
+    assert lines[0]["after"] == [99, 100]
+    assert lines[0]["settle_s"] == pytest.approx(0.7)
+
+
+def test_misses_after_a_position_do_not_settle_a_move(rig, capsys):
+    rig.use_script([[(0.0, (99, 100)), (0.1, Failure("miss"))]])
+    assert rig.run(2) == 10
+    assert not (rig.out / MEASURE_FILE).exists()
+    assert len(rig.link.plays) == 1
+    assert "character lost" in capsys.readouterr().err
+
+
+def test_a_feed_pause_after_a_teleport_up_does_not_end_its_settle_on_a_partial_peak(rig):
+    up = [(0.0, (79, 90)), (0.01, Failure(STALE)), (0.6, (79, 77)), (0.7, (79, 100))]
+    rig.use_script([None, None, None, None, up], start=(79, 100))
+    assert rig.run(2) == 0
+    lines = _lines(rig.out / MEASURE_FILE)
+    assert lines[4]["direction"] == "UP"
+    assert (lines[4]["after"], lines[4]["peak_y"]) == ([79, 100], 77)
+    assert lines[4]["settle_s"] == pytest.approx(0.7)
+
+
+def test_an_enter_typed_before_a_prompt_does_not_answer_it(monkeypatch, capsys):
+    reads: list[float] = []
+
+    def read_line() -> str:  # the first line was buffered before the prompt; the second is typed after 0.5 s
+        reads.append(time.monotonic())
+        if len(reads) > 1:
+            time.sleep(0.5)
+        return ""
+
+    monkeypatch.setattr(measure_moves, "_read_line", read_line)
+    monkeypatch.setattr(measure_moves, "_stray_s", 0.25)
+    assert measure_moves._ask("Put Kanna somewhere.", threading.Event())  # noqa: SLF001
+    assert len(reads) == 2
+    assert "was ignored" in capsys.readouterr().out
 
 
 def test_f12_at_a_prompt_stops_without_sending_a_key(rig, capsys):
