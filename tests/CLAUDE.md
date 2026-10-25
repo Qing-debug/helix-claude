@@ -18,6 +18,6 @@
 
 ## basedpyright baseline
 
-- `basedpyright` (a `tools/check.py` step) reports only errors that are not in `.basedpyright/baseline.json` (159 entries when this was written). Its `include` in `pyproject.toml` is `src` plus `tests/input/input_fakes.py`.
+- `basedpyright` (a `tools/check.py` step) reports only errors that are not in `.basedpyright/baseline.json` (157 entries when this was written). Its `include` in `pyproject.toml` is `src` plus `tests/input/input_fakes.py`.
 - When you fix a baselined error, a plain `basedpyright` run rewrites the baseline smaller: commit the rewritten file with your change (`tools/check.py` warns while it is uncommitted).
 - When code with a baselined error moves to another file, run `basedpyright --writebaseline` (it exits 1 even though it wrote) and check that the entry count did not rise. Don't use `--writebaseline` to hide a new error.
