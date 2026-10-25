@@ -351,31 +351,41 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node,
 - **"At" a node.** The character is *at* node n when |px − nx| ≤ `arrive_px` and either |py − ny| ≤ `arrive_px` or
   `attach(rg, pos)` succeeds with `platform == rg.terrain.platform_index(n)`. (Hand-placed nodes may sit a few px
   above or below the surface the character stands on; the platform test accepts that.)
+- **Launch point** (B14-inv-D1, Hong; PLF48). An `UP` or `DOWN` edge (g, h) is made from x = L(g, h): (1) if g's
+  platform (`rg.terrain.platforms[platform_index(g)]`, its x extent from its first to its last node) spans hx, L = hx;
+  (2) otherwise take the platform's end node e nearest h (its last node if hx is to the right, else its first): if
+  the nearest platform other than g's straight above (UP) or below (DOWN) (ex, ey) is h's platform, L = ex, else
+  the edge has no launch point and is **not offered**. A platform's surface at x is the interpolated y of each of
+  its segments spanning x (both ends of a same-x segment; a one-node platform only at its own x).
 - **P1** Arrived when the character is at `target`: `Success(Decision(None, 0.0, None))`.
 - **P2** `attach(rg, pos)`; its `Failure` is returned unchanged.
-- **P3 start.** With `anchor.node`: starts = [(node, 0.0)]. Otherwise starts = each of `left`, `right` that is not
+- **P3 start.** Over the offered moves only: `rg` here is `rg` without its `UP`/`DOWN` edges that have no launch
+  point, so a path never takes one (another route, or `Failure("no path ...")`). With `anchor.node`: starts = [(node, 0.0)]. Otherwise starts = each of `left`, `right` that is not
   None with its approach cost: |px − ex|/V if left and right are joined by a SLOPE edge (either direction), else
   `horizontal_cost_s(|px − ex|)`. For each start, total = approach + `rg.cost_to(start, target)` (skip Failures).
   None left → `Failure("no path from (x, y) to (tx, ty)")`. Pick the smallest total, ties left before right.
   `cost_to_go_s` = that total.
 - **P4 horizontal run.** Let `path = rg.path(start, target)`. If the anchor is on a slope segment (`left` and
   `right` joined by a SLOPE edge in either direction), the goal node g is the start itself. Otherwise g = start, then
-  g advances along the path while the next edge is `WALK`. If the character is not at g, move toward g with d = |gx − px|, direction `Key.RIGHT` if gx > px else `Key.LEFT`:
+  g advances along the path while the next edge is `WALK`. If the next path edge (g, h) is `UP` or `DOWN` and the
+  anchor's platform is g's platform, the goal is L(g, h) instead: if |px − L| > `arrive_px`, move toward L by the
+  rules below (with L for gx), else go to P5 (the character is lined up). Otherwise, if the character is not at g, move toward g with d = |gx − px|, direction `Key.RIGHT` if gx > px else `Key.LEFT`:
   - on a slope segment: `WALK`, `walk_ms = min(1000·d/V, max_walk_ms)`;
   - else `TELEPORT` if T + |d − reach_h|/V < d/V (strict), else `WALK` with `walk_ms = min(1000·d/V, max_walk_ms)`.
     With defaults: d = 13 → TELEPORT, d = 11 → WALK, d = 4 → WALK, d = 30 → TELEPORT. Known behaviour: the teleport
     rule ignores platform ends, so a teleport toward an end node can overshoot it by up to `reach_h − d` px (≤ 7 with
     defaults) and fall off; the walker then re-plans from where the character lands (goal 4). B14's `laps`, `stalls` and
     `recovery` checks cover it; it is not special-cased or counted separately.
-- **P5 at g** (and g ≠ target, else P1 applied). The next path edge (g, h): `SLOPE` → `WALK` toward h, `walk_ms = min(1000·|hx − px|/V, max_walk_ms)`;
+- **P5 at g, or lined up on L(g, h)** (and g ≠ target, else P1 applied). The next path edge (g, h): `SLOPE` → `WALK` toward h, `walk_ms = min(1000·|hx − px|/V, max_walk_ms)`;
   `WALK` (reached only when P4 kept g at the start of a slope segment and the character counts as at g) → let g′ = h,
   then g′ advances along the path while the next edge is `WALK`; move toward g′ by P4's off-slope rule (`TELEPORT` if
   T + |d − reach_h|/V < d/V, else `WALK` with `walk_ms = min(1000·d/V, max_walk_ms)`, d = |g′x − px|);
-  `UP` → `TELEPORT` `Key.UP`; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, rg.reach_v, rg.params)`: one option → that
+  `UP` → `TELEPORT` `Key.UP` from where the character stands; `DOWN` → options = `down_options(|hy − gy|, g.can_fall, rg.reach_v, rg.params)`: one option → that
   one; two → let c_lo ≤ c_hi; if c_hi ≤ c_lo·(1 + `ability_mix_band`), `DROP` iff `rng.random() < 0.5`, else
   `TELEPORT` `Key.DOWN`; otherwise the cheaper (ties `TELEPORT`). `TELEPORT DOWN` is `Move(TELEPORT, Key.DOWN, None)`;
   `DROP` is `Move(DROP, None, None)`. `rng` is used only in this two-option, in-band case.
-- `toward` = g for a P4 move, h for a P5 move, g′ for a P5 `WALK` move.
+- `toward` = g for a P4 move toward g, h for a P4 move toward a launch point, h for a P5 move, g′ for a P5 `WALK`
+  move.
 
 ### C8. Executing a move (`src/route/moves.py`)
 
@@ -690,8 +700,9 @@ numpy and `src.input.protocol.Key`.
   `ability_mix_band=0` or `max_walk_ms=1000`, rebuilds `rg` with `RouteGraph.build(agent.pathGraph,
   MovementParams(<that parameter>)).unwrap()`, because `next_move` takes no params argument and reads `rg.params`):
   1. Arrived: pos `(104,43)`, target `(105,42)` → `Decision(None, 0.0, None)`.
-  2. Known case 2: pos `(101,24)`, target `(105,42)`, `ability_mix_band=0` → `Move(TELEPORT, Key.DOWN, None)`,
-     `toward` the `(105,42)` node, `cost_to_go_s == approx(1.05)`. Then pos `(101,42)` (landed) → `WALK`, `Key.RIGHT`,
+  2. Known case 2: pos `(101,24)`, target `(105,42)`, `ability_mix_band=0` → `WALK` `Key.RIGHT` 500 ms (to the
+     launch x 105), `toward` the `(105,42)` node, `cost_to_go_s == approx(1.05)`; pos `(105,23)` →
+     `Move(TELEPORT, Key.DOWN, None)`, `cost_to_go_s == approx(1.55)`. Then pos `(101,42)` (landed) → `WALK`, `Key.RIGHT`,
      `walk_ms == approx(500.0)`.
   3. Known case 1: pos `(49,28)`, target `(101,24)` → `TELEPORT` `Key.RIGHT` (run 49→66, d = 17). Pos `(66,28)` →
      `WALK` `Key.RIGHT`, `walk_ms == approx(1625.0)` (SLOPE 13 px at 8 px/s). Pos `(72,26)` → `WALK` `Key.RIGHT`
@@ -699,7 +710,7 @@ numpy and `src.input.protocol.Key`.
   4. P4 formula: on platform 0 from `(82,60)`, target `(99,60)` (d = 17) → TELEPORT; from `(88,60)` (d = 11) → WALK
      `walk_ms == approx(1375.0)`; from `(86,60)` (d = 13) → TELEPORT; from `(95,60)` (d = 4) → WALK 500.
   5. UP: pos `(48,61)`, target `(58,46)` → `Move(TELEPORT, Key.UP, None)`.
-  6. Mix band: pos `(101,24)`, target `(105,42)` with default band 0.3 (teleport 0.55, drop 0.65, 0.65 ≤ 0.715): over
+  6. Mix band: pos `(105,23)`, target `(105,42)` with default band 0.3 (teleport 0.55, drop 0.65, 0.65 ≤ 0.715): over
      2000 calls with one `default_rng(1)`, the DROP share is within [0.45, 0.55] and every other move is
      `TELEPORT DOWN`. With band 0 → never DROP. In a synthetic two-node graph whose upper node has `can_fall=False`
      and a node 18 px straight below, only `TELEPORT DOWN` is chosen.
@@ -1070,8 +1081,10 @@ def main(argv: list[str] | None = None) -> int
   node's y in the loaded map (a copy of the CSV rows, written to a temporary CSV that `loadMap` then reads, since
   `loadMap` takes a path), so the planner sees hand-placed nodes off
   the surface while `SimWorld` uses the unchanged terrain (review round 1, I8). Offsets can change which links are
-  inferred (with ±2 the FF2 slope link survives in about 2 of 3 draws, measured by review round 2), so test (3b)
-  checks only that legs complete, not which route they take. Node offsets never move the world's start (above), and
+  inferred (with ±2 the FF2 slope link survives in about 2 of 3 draws, measured by review round 2) and can split a
+  platform in two, so test (3b) checks that legs complete with no stalls, not which route they take. The no-stall
+  claim rests on C7's launch point (B14-inv-D1): before it, a vertical move made from the character's x could land
+  on a split-off piece that sent it back, a livelock (seeds 34, 36, 50 of 1-60 stalled). Node offsets never move the world's start (above), and
   `known_cases` entries are matched against each leg's **unshifted** CSV positions (run_sim matches by rotation index: leg i of a lap
   is rotation[i] → rotation[(i+1) mod n], and rotation[i] has the unshifted position of the i-th blue CSV row), so a known case is found whatever the offset.
 - [ ] **Tests** (all pass `known_cases=[((49, 28), (101, 24)), ((101, 24), (105, 42))]`): (1) 30 laps, seed 1,

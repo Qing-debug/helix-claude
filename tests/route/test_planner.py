@@ -71,14 +71,19 @@ def test_arrived_within_arrive_px_of_the_target_p1(ff2):
     assert _decide(rg, (104, 43), _node(agent, (105, 42))) == Decision(None, 0.0, None)
 
 
-def test_known_case_2_teleports_down_then_walks_right(ff2):
+def test_known_case_2_walks_level_with_the_target_teleports_down_then_walks_right(ff2):
     agent, _ = ff2
     rg = _rebuild(agent, ability_mix_band=0)
     target = _node(agent, (105, 42))
+    # B14-inv-D1 case 1: the top platform spans x 105, so the DOWN edge (101,24) -> (105,42) is made from x 105
     first = _decide(rg, (101, 24), target)
-    assert first.move == TELEPORT_DOWN
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)
     assert first.toward is target
     assert first.cost_to_go_s == pytest.approx(1.05)
+    lined_up = _decide(rg, (105, 23), target)
+    assert lined_up.move == TELEPORT_DOWN
+    assert lined_up.toward is target
+    assert lined_up.cost_to_go_s == pytest.approx(0.5 + 1.05)  # approach from x 105 back to the start (101,24)
     landed = _decide(rg, (101, 42), target)
     assert landed.move.kind == MoveKind.WALK
     assert landed.move.direction == Key.RIGHT
@@ -171,7 +176,7 @@ def test_mix_band_splits_teleport_and_drop_evenly_and_never_else(ff2):
     agent, rg = ff2
     target = _node(agent, (105, 42))
     rng = np.random.default_rng(1)
-    moves = [_decide(rg, (101, 24), target, rng).move for _ in range(2000)]  # teleport 0.55, drop 0.65 <= 0.715
+    moves = [_decide(rg, (105, 23), target, rng).move for _ in range(2000)]  # teleport 0.55, drop 0.65 <= 0.715
     assert set(moves) == {TELEPORT_DOWN, DROP}
     assert 0.45 <= moves.count(DROP) / len(moves) <= 0.55
 
@@ -181,7 +186,7 @@ def test_band_zero_never_drops(ff2):
     rg = _rebuild(agent, ability_mix_band=0)
     target = _node(agent, (105, 42))
     rng = np.random.default_rng(1)
-    assert all(_decide(rg, (101, 24), target, rng).move == TELEPORT_DOWN for _ in range(200))
+    assert all(_decide(rg, (105, 23), target, rng).move == TELEPORT_DOWN for _ in range(200))
 
 
 def test_cheaper_drop_outside_the_band_is_chosen_every_time(ff2):
@@ -189,7 +194,7 @@ def test_cheaper_drop_outside_the_band_is_chosen_every_time(ff2):
     rg = _rebuild(agent, ability_mix_band=0, teleport_s=0.9)  # teleport 0.9 > drop 0.65 by more than the band
     target = _node(agent, (105, 42))
     rng = np.random.default_rng(1)
-    assert all(_decide(rg, (101, 24), target, rng).move == DROP for _ in range(50))
+    assert all(_decide(rg, (105, 23), target, rng).move == DROP for _ in range(50))
 
 
 def test_a_node_that_cannot_fall_always_teleports_down():
@@ -282,7 +287,8 @@ def test_no_path_to_the_target_is_a_failure():
     "pos, target_xy, params",
     [
         ((104, 43), (105, 42), {}),
-        ((101, 24), (105, 42), {"ability_mix_band": 0}),  # two options, outside the band: the cheaper one
+        ((105, 23), (105, 42), {"ability_mix_band": 0}),  # two options, outside the band: the cheaper one
+        ((101, 24), (105, 42), {}),  # the walk to the launch x of the DOWN edge
         ((101, 42), (105, 42), {"ability_mix_band": 0}),
         ((49, 28), (101, 24), {}),
         ((66, 28), (101, 24), {}),
@@ -311,7 +317,7 @@ def test_rng_is_untouched_outside_the_in_band_down_choice(ff2, pos, target_xy, p
 def test_rng_is_used_for_the_in_band_down_choice(ff2):
     agent, rg = ff2
     rng = np.random.default_rng(0)
-    next_move(rg, (101, 24), _node(agent, (105, 42)), rng)
+    next_move(rg, (105, 23), _node(agent, (105, 42)), rng)
     assert not _rng_untouched(rng)
 
 
@@ -341,3 +347,71 @@ def test_p5_walk_edge_after_a_slope_segment_start_advances_over_the_walk_edges(t
     decision = _decide(rg, (77, 25), target)
     assert decision.move == Move(MoveKind.TELEPORT, Key.RIGHT, None)  # d = 24
     assert decision.toward is target
+
+
+# ---- UP/DOWN moves line up before they are made (B14-inv-D1, PLF48) ----
+
+def test_case_1_walks_until_level_with_the_target_x_then_teleports_down():
+    nodes, rg = _synthetic([(10, 10), (25, 10), (40, 10), (29, 28), (45, 28)])  # the top spans x 29
+    assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.DOWN
+    target = nodes[3]
+    first = _decide(rg, (25, 10), target)  # at (25,10), the old rule fired from here
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)
+    assert first.toward is target
+    assert _decide(rg, (29, 10), target).move == TELEPORT_DOWN
+    assert _decide(rg, (27, 10), target).move == TELEPORT_DOWN  # within arrive_px of x 29: the walk rule is unchanged
+
+
+def test_case_1_walks_until_level_with_the_target_x_then_teleports_up():
+    nodes, rg = _synthetic([(10, 10), (25, 10), (20, 28), (29, 28)])  # the lower platform spans x 25
+    target = nodes[1]
+    first = _decide(rg, (29, 28), target)
+    assert first.move == Move(MoveKind.WALK, Key.LEFT, 500.0)
+    assert first.toward is target
+    assert _decide(rg, (25, 28), target).move == Move(MoveKind.TELEPORT, Key.UP, None)
+
+
+def test_case_2_walks_to_the_platform_end_when_the_floor_below_it_is_the_target_platform():
+    nodes, rg = _synthetic([(10, 10), (25, 10), (20, 28), (29, 28)])  # the top ends at x 25, before x 29
+    assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.DOWN
+    target = nodes[3]
+    first = _decide(rg, (21, 10), target)
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)  # to the end at x 25, not to x 29
+    assert first.toward is target
+    assert _decide(rg, (25, 10), target).move == TELEPORT_DOWN  # (20,28)-(29,28) is straight below x 25
+
+
+def test_case_2_the_move_is_not_offered_when_another_platform_is_below_the_end():
+    # the top ends at x 25; below x 25 is the floor, not the (29,28)-(45,28) platform, so DOWN (25,10) -> (29,28) is
+    # not offered and the route goes round: drop at (10,10), along the floor, teleport up at x 45
+    points = [(10, 10), (25, 10), (29, 28), (45, 28), (5, 45), (20, 45), (35, 45), (50, 45)]
+    nodes, rg = _synthetic(points, can_fall=True)
+    assert rg.graph.edges[nodes[1], nodes[2]]["kind"] == EdgeKind.DOWN  # in the route graph, but not offered
+    decision = _decide(rg, (25, 10), nodes[2])
+    assert decision.move == Move(MoveKind.TELEPORT, Key.LEFT, None)  # run to (10,10), d = 15
+    assert decision.toward is nodes[4]
+    assert _decide(rg, (10, 10), nodes[2]).move == DROP
+
+
+def test_case_2_with_no_other_route_is_no_path():
+    nodes, rg = _synthetic([(10, 10), (25, 10), (29, 28), (45, 28)])
+    assert rg.graph.has_edge(nodes[1], nodes[2])
+    result = next_move(rg, (25, 10), nodes[2], np.random.default_rng(0))
+    assert not is_successful(result)
+    assert result.failure() == "no path from (25, 10) to (29, 28)"
+
+
+def test_split_mid_platform_no_longer_sends_the_character_down_from_the_wrong_x(tmp_path):
+    # seed 34 of plan test 3b: offsets (97,43)->(97,45) and (105,42)->(105,40) split the mid-right platform, and the
+    # old rule dropped from x 99 onto the lone (97,45) piece, which sent the character back up, forever
+    text = FIXTURE.read_text()
+    moved = tmp_path / "ff2_split.csv"
+    moved.write_text(text.replace('"(97, 43)"', '"(97, 45)"').replace('"(105, 42)"', '"(105, 40)"'), newline="\n")
+    agent = MapleAgent(characterClass=Kanna())
+    assert is_successful(agent.loadMap(moved))
+    rg = RouteGraph.build(agent.pathGraph, MovementParams(ability_mix_band=0)).unwrap()
+    lone, target = _node(agent, (97, 45)), _node(agent, (105, 40))
+    assert (lone,) in rg.terrain.platforms  # the split
+    first = _decide(rg, (99, 24), target)
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 750.0)  # to x 105
+    assert _decide(rg, (105, 23), target).move == TELEPORT_DOWN
