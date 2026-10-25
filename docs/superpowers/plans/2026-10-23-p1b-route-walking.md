@@ -2,7 +2,8 @@
 
 **Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
-Amended after approval: B19 (PB-amend, 2026-10-23); B15 score scrub (B15-D1, 2026-10-26)
+Amended after approval: B19 (PB-amend, 2026-10-23); B15 score scrub (B15-D1, 2026-10-26); B19 lost character and
+used `--out` (B19-D1, B19-D2, 2026-10-26)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -1304,10 +1305,12 @@ def wait_first_frame(shared, timeout_s: float) -> Result[None, str]
 def main(argv: list[str] | None = None) -> int
 # python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised [--class kanna] [--laps N] [--minutes M]
 #                          [--seed S] [--out data/route/<UTC stamp>] [--record]
-# exit codes: 0 done · 1 run ended link_down · 2 usage / no --supervised · 3 no first frame or no character found
+# exit codes: 0 done · 1 run ended link_down · 2 usage / no --supervised / a used --out (B19-D2) / a leg log that
+#             cannot be opened · 3 no first frame or no character found
 #             · 4 connect failed · 5 map, route graph or character icon failed to load
 #             · 6 run() returned a Failure · 7 run() raised an exception (PB-B19)
 #             · 9 the stop control failed to start: F12 hook or SIGINT handler (PB-amend2c-D2)
+#             · 10 the character was lost: a leg timed out with no move (B19-D1)
 #             (8 is not a `main` code: it is the live check's own exit code, below)
 ```
 
@@ -1417,6 +1420,18 @@ def main(argv: list[str] | None = None) -> int
   the prefix (the `Failure` value, or `<ExceptionType>: <message>`) and the last two are as on the other paths. `main` then prints `stopped: error` (and ` (<source>)` when a source is set), as for
   any other reason. A `RunSummary` with reason `"link_down"` is not a `Failure` and still returns 1; `"max_laps"` and
   `"stopped"` return 0.
+  **Lost character and a used `--out` (B19-D1, B19-D2, amended 2026-10-26 after the build).** (1) Exit 10: every
+  leg has a 60 s timeout (`_LEG_TIMEOUT_S` in `walk.py`, written into `session.json` as `leg_timeout_s`). A leg that
+  times out with no move ends the run: the leg-log wrapper calls `trigger("off_graph")` if the leg's `off_graph` count
+  is above 0, else `trigger("no_position")`, then calls `walker.stop_now()` itself on the walker thread, so no move
+  follows the lost leg. `stop.json` then has `"reason"` `off_graph` or `no_position` (the trigger source) and `main`
+  returns 10, also when the lost leg is the last leg of the last lap (not 0). Exit order: 6/7, then 1 (`link_down`),
+  then 10, then 0. A leg that sent moves and then timed out does not end the run. (2) Exit 2 for `--out`: before
+  capture starts or any file is written, `main` refuses an `--out` that names an existing file, or that holds any of
+  `session.json`, `stop.json`, `legs.jsonl`, `laps.jsonl`, `frames/index.jsonl`. (3) Exit 2 when the leg log cannot be
+  opened after connect (`JsonlLegLog.open` returns a `Failure`): the error is printed, cleanup runs `release_all` and
+  `link.close()`, and no `stop.json` or `session.json` is written. (4) A `--seed` numpy rejects (a negative one) is a
+  usage error: exit 2 before anything starts (B19 review, M2).
 - [ ] **Tests** (fakes for capture, link and hook; the module imports collect on Linux, hard rule 9): no `--supervised` → 2;
   `trigger()` returns in < 10 ms while `on_stop` blocks for 1 s; connect `Failure` → 4 and
   `release_all` not attempted on a link that never connected; `StopControl.trigger()` twice → `on_stop` once; end to end:

@@ -1337,3 +1337,39 @@ Cost if wrong: a soak that the judge accepts may carry fewer walk samples than b
 Undo: revert the `fix(input)` commit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CWX48.md` issue 5, `notes/ISS5-fix.md`.
+
+## B19-D1 (2026-10-26): the walk ends with exit 10 when a leg times out with no move (the character is lost)
+
+Question: when the character is lost during `python -m src.route.walk` (off the graph, or not found on the minimap), the walker's planner sends no move and the leg would wait for ever, so the run idles until someone presses F12. Should the walk give each leg a timeout and end the run with its own reason and exit code when a leg times out without a move (A), or keep idling until F12 (B)?
+
+Ruling [as Hong]: option A, widened (ruled as Hong while away, 2026-10-26). The ledger line: "B19-D1 → A widened: any leg that times out with 0 moves ends the run, reason `off_graph` if off_graph > 0 else `no_position`, exit 10; leg timeout 60 s as a walk.py constant written into session.json; the sink wrapper calls `walker.stop_now()` itself on the walker thread as well as `trigger()`; lost last leg of last lap → exit 10, not 0." The B19 reviewer agreed (`notes/B19-R.md`, verdict question 1).
+
+Reason: the spec leaves leg timeouts to the builder, no key is sent in these cases, and the ruling only replaces idling until F12 with an end reason. The simulator's longest leg over 20 laps was 6.55 s and a 28,200-leg sweep had no 60 s timeout (`notes/B19-D-adjudicator.md`).
+
+As built: `_LEG_TIMEOUT_S = 60.0` (`src/route/walk.py:77`) is passed to `WalkerConfig` (:295) and written into `session.json` as `leg_timeout_s` (:308). `_LostLegSink.write_leg` (:144-154) writes the record, then on a `TIMED_OUT` leg with no move calls the stop control's `trigger("off_graph")` or `trigger("no_position")` and `walker.stop_now()` on the walker thread. `main` returns 10 with `stop.json` reason equal to that source (:353-355), after errors (6/7) and `link_down` (1). The walker's `off_graph` counter also counts "no path to the target" (`src/route/planner.py:211-213`). Tests: the lost-leg tests in `tests/route/test_walk_cli.py` (approach leg, mid-lap off-graph with no move after the trigger, last leg of the last lap, a leg with moves that times out does not end the run, and a run where the stop control's own stop also fires). The stop control's lock is reentrant so a Ctrl+C on the main thread during that trigger cannot deadlock (B19 review M1).
+
+Affects: the walk CLI's exit codes and `stop.json` reasons (new: 10, `off_graph`, `no_position`), `session.json` (`leg_timeout_s`), the plan's Task B19 (amendment note and exit-code list).
+
+Cost if wrong: a real leg longer than 60 s is cut and the run ends.
+
+Undo: remove `_LEG_TIMEOUT_S`'s use and `_LostLegSink` in `src/route/walk.py` (the walker then gets no leg timeout) and the exit-10 branch.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:337`; `notes/B19-D-adjudicator.md`, `notes/B19.md`, `notes/B19-R.md`.
+
+## B19-D2 (2026-10-26): the walk refuses an `--out` that already holds a run, or that names a file, with exit 2
+
+Question: `walk` appends to `legs.jsonl` and `laps.jsonl` and overwrites `session.json` and `stop.json`, and the recorder refuses an existing `frames/index.jsonl` only mid-run. Should `walk` refuse a used `--out` up front with exit 2 (A), or write into it as it is (B)?
+
+Ruling [as Hong]: option A, widened (ruled as Hong while away, 2026-10-26). The ledger line: "B19-D2 → A widened: walk refuses with exit 2 before capture if `--out` holds any of session.json, stop.json, legs.jsonl, laps.jsonl, frames/index.jsonl; also if `--out` names an existing file (exit 2)." The B19 reviewer agreed (`notes/B19-R.md`, verdict question 2).
+
+Reason: it is Hong's B17-D1 rule (the recorder refuses a folder that already holds a recording) applied to the walk's files; the live runs use a fresh default `--out`.
+
+As built: `_check_out` (`src/route/walk.py:174-182`) is called before the map is loaded and before capture (:249). It returns "<out> is not a folder; choose a new --out" for an existing non-folder, else "<path> already exists; choose a new --out" for the first of the five files found, and `main` prints it and returns 2. Tests: `test_out_holding_a_walk_file_is_refused` (each of the five files; nothing is written and capture never starts) and `test_out_naming_a_file_is_refused`. Leftover files from an attempt that ended with exit 9 or 2 also refuse a re-run; the message says to choose a new `--out`.
+
+Affects: the walk CLI's exit 2 cases, the plan's Task B19 (amendment note and exit-code list).
+
+Cost if wrong: a re-run needs a new folder name.
+
+Undo: remove the `_check_out` call in `main` (`src/route/walk.py:249`).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:338`; `notes/B19.md`, `notes/B19-R.md`.
