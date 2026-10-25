@@ -13,25 +13,15 @@ from src.input.harness import faults, listener, session_starts, soak
 from src.input.harness.session_starts import (BT_OFF_SECONDS, PLAN, STARTS_FIELDS, STARTS_FILE, TAP_NOT_SEEN,
                                               conditions, run_starts, tap_seen)
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Key, Pong
+from src.input.protocol import Accepted, Done, Key
+
+from input_fakes import FakeClock, pong  # tests/input/input_fakes.py
 
 S = 1_000_000_000
 VK_E = listener.VK_BY_KEY[Key.E]
 
 
 # ---- fakes ---------------------------------------------------------------------------------
-
-class FakeClock:
-    def __init__(self, start_ns=S):
-        self.now = start_ns
-
-    def clock(self):
-        self.now += 1_000  # strictly increasing stamps
-        return self.now
-
-    def sleep(self, s):
-        self.now += int(s * 1e9)
-
 
 @pytest.fixture
 def clock(monkeypatch):
@@ -41,11 +31,6 @@ def clock(monkeypatch):
         monkeypatch.setattr(mod, "_sleep", fc.sleep)
     monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
     return fc
-
-
-def _pong():
-    return Pong(seq=1, itvl_units=12, latency=0, timeout_units=100, mtu=247, bonded=True, encrypted=True,
-                authenticated=False, subscribed=True, board_us=1)
 
 
 class FakeLink:
@@ -69,13 +54,13 @@ class FakeLink:
         self.clock.now += 2 * S
         if self.attempt in self.connect_fail:
             return Failure("device 'Guiness' not found in scan")
-        return Success(SessionInfo("AA:BB", 247, _pong()))
+        return Success(SessionInfo("AA:BB", 247, pong()))
 
     def ping(self):
         self.events.append("ping")
         if self.attempt in self.ping_fail:
             return Failure(InputError.ACK_TIMEOUT)
-        return Success(_pong())
+        return Success(pong())
 
     def play(self, steps):
         self.events.append("play")

@@ -13,9 +13,11 @@ from returns.result import Failure, Success
 
 from src.input import actions, input_layer
 from src.input.input_layer import ActionRecord, InputLayer
-from src.input.link import InputError, SendReport
-from src.input.protocol import Done, Key
+from src.input.link import InputError
+from src.input.protocol import Key
 from src.input.timing import Sample, TimingType
+
+from input_fakes import FakeLink, report  # tests/input/input_fakes.py
 
 STIMULUS_NS = 1_000_000_000
 
@@ -51,32 +53,6 @@ class StubModel:
     def walk(self, intended_ms):
         self.draws += 1
         return float(intended_ms) if self._walk is None else self._walk
-
-
-def _report(seq=7):
-    return SendReport(seq=seq, sent_ns=1, written_ns=2, accepted_ns=3, done_ns=4, accepted=None,
-                      done=Done(seq=seq, status=0, fail_step=None, rc=0, t0_us=0, late_us=()))
-
-
-class FakeLink:
-    """Records calls in order into `events` (shared with the clock fixture's sleeps)."""
-
-    def __init__(self, events=None):
-        self.events = [] if events is None else events
-        self.play_result = Success(_report(7))
-        self.release_result = Success(_report(8))
-
-    @property
-    def calls(self):
-        return [e for e in self.events if e[0] in ("play", "release_all")]
-
-    def play(self, steps):
-        self.events.append(("play", tuple(steps)))
-        return self.play_result
-
-    def release_all(self):
-        self.events.append(("release_all",))
-        return self.release_result
 
 
 class Clock:
@@ -279,7 +255,7 @@ def test_the_two_error_lists_cover_every_input_error():
     assert sorted(UNCERTAIN + NO_RELEASE) == sorted(InputError)
 
 
-@pytest.mark.parametrize("release_result", [Success(_report(8)), Failure(InputError.ACK_TIMEOUT)],
+@pytest.mark.parametrize("release_result", [Success(report(8)), Failure(InputError.ACK_TIMEOUT)],
                          ids=["release_ok", "release_ack_timeout"])
 @pytest.mark.parametrize("error", UNCERTAIN, ids=[e.name for e in UNCERTAIN])
 @pytest.mark.parametrize("name, call, build", METHODS, ids=METHOD_IDS)
@@ -326,13 +302,13 @@ class BlockingLink:
         self.play_calls += 1
         self.play_started.set()
         if not self._released.wait(5.0):  # safety bound so a broken layer cannot hang the suite
-            return Success(_report(7))
+            return Success(report(7))
         return Failure(InputError.ABORTED)
 
     def release_all(self):
         self.release_calls += 1
         self._released.set()
-        return Success(_report(8))
+        return Success(report(8))
 
 
 def test_feedback_release_from_another_thread_aborts_the_walk_without_waiting():

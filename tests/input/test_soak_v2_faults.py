@@ -12,27 +12,12 @@ from returns.result import Failure, Success
 from src.input import input_layer
 from src.input.harness import faults, soak
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Pong
+from src.input.protocol import Accepted, Done
+
+from input_fakes import FakeClock, pong  # tests/input/input_fakes.py
 
 S = 1_000_000_000
 ARGV = ["--commands", "1000", "--short", "--seed", "42", "--faults", "reset_board=5,bluetooth_off_on=5"]
-
-
-class Clock:
-    def __init__(self):
-        self.now = S
-
-    def clock(self):
-        self.now += 1_000
-        return self.now
-
-    def sleep(self, s):
-        self.now += int(s * 1e9)
-
-
-def _pong():
-    return Pong(seq=1, itvl_units=12, latency=0, timeout_units=100, mtu=247, bonded=True, encrypted=True,
-                authenticated=False, subscribed=True, board_us=1)
 
 
 class Link:
@@ -50,7 +35,7 @@ class Link:
             return Failure("already connected")
         self.events.append("connect")
         self.connected = True
-        return Success(SessionInfo("AA:BB", 247, _pong()))
+        return Success(SessionInfo("AA:BB", 247, pong()))
 
     def close(self):
         self.events.append("close")
@@ -94,7 +79,7 @@ class Sink:
 
 
 def _setup(monkeypatch, tmp_path):
-    clock = Clock()
+    clock = FakeClock()
     link = Link(clock)
     calls = []
     for mod in (soak, input_layer):
