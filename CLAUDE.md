@@ -50,7 +50,7 @@ Run the app from the repo root as a module, since all imports are rooted at `src
 python -m src.main
 ```
 
-`main.py` starts the minimap capture thread and then blocks in the Tk mainloop. The GUI waits until a minimap frame exists, so the game must be visible on the captured monitor (`output_idx = 1` in `src/vision/vision.py`, i.e. the second monitor).
+`main.py` starts the minimap capture thread and then blocks in the Tk mainloop. The main window opens at once; its minimap area appears when the first frame arrives (the buttons that need it say "Minimap not found yet" until then), so the game must be visible on the captured monitor (`output_idx = 1` in `src/vision/vision.py`, i.e. the second monitor).
 
 ## Architecture
 

@@ -13,7 +13,7 @@ if __name__ == "__main__":
 
     sharedInfo = SharedInfo()
 
-    # uncomment this when you actually need info from maplestory - uncomment the other block of code in GUI that has the exact same comment
+    # the capture thread: the main window does not wait for it, it shows the minimap once the first frame arrives
     minimap_capture_worker = threading.Thread(target=capture_and_process_minimap,args= (sharedInfo,) ,daemon=True)
     minimap_capture_worker.start()
 
