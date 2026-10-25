@@ -12,7 +12,7 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 - controller: `Node` and `PathGraph` (route_graph.py:15-16, terrain.py:14-15). `terrain.py:163` calls `PathGraph._isVerticalEdgeValid`, so that private name is part of the seam.
 - input: `InputLayer` / `InputError` (moves.py:5-6, walker.py:42-43), `Key` (planner.py:16 and `sim/`). The simulator's `SimLink` (sim/link.py) stands in for `BleLink`.
 - gui: `src/gui/gui.py` imports `CharacterLocator` (`from_files`, `locate`) from `character.py` (decision H20), so a change to those signatures or a move of `character.py` reaches the GUI. Contract d is the reverse direction (route may not import gui).
-- vision: only `harness/record_minimap.py:163`, inside a function. `position.py` reads the shared minimap frame; `character.py` is the character locator.
+- vision: `harness/record_minimap.py:163` imports `src.vision.vision` inside `main`; `harness/detection_check.py` imports `src.vision.vision_helper_lib` (cv2/numpy/enum only, not bettercam) inside `crop_minimap` (:128); `pyproject.toml` contract e has an `ignore_imports` entry for each (:57-58). `position.py` reads the shared minimap frame; `character.py` is the character locator.
 
 ## Rules enforced by tests
 
@@ -25,7 +25,8 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 - Stop guard (PB-D4; walker.py:53-54, `stop_now` at :223): after a stop, a guard thread (started at :231) sends `release_all` every 50 ms of wall time until `run` finishes. It is a safety mechanism (no key stays held): don't remove or slow it.
 - Leg-log JSON keys are Feature D's contract: `tests/route/test_leg_log.py:26-29` pins `LEG_KEYS`, `MOVE_KEYS` and `LAP_KEYS`.
 - `sim/run.py` `_write_offset_csv` (:141-160) is a third map-CSV reader and writer (`csv.DictReader` + `ast.literal_eval`, column name from `CSVParser().CSV_fields`); a map-format change must update it too.
-- Files the plan names that don't exist yet: `runtime.py` and `walk.py` (B19), `harness/detection_check.py` (B18), `harness/measure_moves.py` (B20); plan lines 198-200.
+- Files the plan names that don't exist yet: `runtime.py` and `walk.py` (B19), `harness/measure_moves.py` (B20); plan lines 198-200.
+- Detection check (`harness/detection_check.py`, B18): `draft` and `check` read frames only through `load_frames` (:164), which returns `LoadedFrames(crops, uncroppable)` (:159). A full-screen frame that cannot be cropped is skipped, reported, drafted `null` and scored by `check` as nothing found (decision B18-D1). An unreadable PNG, unreadable corner images or no croppable frame at all exit 2. `draft` writes only inside `data/` and refuses to overwrite. `labels.json` is Hong's file: Claude never writes it. Tests: `tests/route/test_detection_check.py` (all synthetic; test 41 is the slow `python -I` import proof).
 
 ## Commands and fixtures
 

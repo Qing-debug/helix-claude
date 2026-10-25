@@ -1337,3 +1337,19 @@ Cost if wrong: a soak that the judge accepts may carry fewer walk samples than b
 Undo: revert the `fix(input)` commit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/CWX48.md` issue 5, `notes/ISS5-fix.md`.
+
+## B18-D1 (2026-10-26): the detection check skips and reports frames it cannot crop, drafts them as null and scores them as nothing found
+
+Question: how should `draft` and `load_frames` (`src/route/harness/detection_check.py`, plan task B18) treat a full-screen frame that cannot be cropped to a minimap? A: skip and report it. B: stop the run, and Hong moves such frames out of the recording folder by hand.
+
+Ruling [Hong]: option A, refined; ruled as Hong while away, 2026-10-26 (maximum autonomy). Uncroppable frames are skipped and reported, and scored as "nothing found": a frame labelled `[x, y]` is a miss, so skipping can only lower the hit rate. The draft prefills them `null` and draws no sheet cell for them. Exit 2 only when no frame crops; an unreadable PNG and unreadable corner images still stop the run.
+
+As built: `load_frames` returns `LoadedFrames(crops, uncroppable)`, `draft_labels` returns `(count, uncroppable)`, `draft` prints `uncroppable: k of N ...` and one line per frame, `check` prints `uncroppable: k of N frames (scored as nothing found)`, and the crop failure message shows scores with 4 decimals. Why: the real folder `data/recordings/ff2_2026-10-21/` has 3 of 307 frames (0046.100, 0046.365, 0046.676) with another application window over the game; that is not a crop bug. On the other 304 frames the draft and the locator agree at (106, 51).
+
+Affects: `src/route/harness/detection_check.py`, `tests/route/test_detection_check.py`, `src/route/CLAUDE.md`, `docs/HANDOFF.md`.
+
+Cost if wrong: a covered frame in a real folder no longer stops the run, so the user must read the `uncroppable:` line.
+
+Undo: revert the `fix(route)` commit `1065b4f` on branch `b18-fix`.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/B18-D1-adjudicator.md`; `ledger-B.md:347`; `notes/B18-fix.md`.
