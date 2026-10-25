@@ -1599,6 +1599,7 @@ def main(argv: list[str] | None = None) -> int
 - [ ] **`summarize`** returns `reach_h_mean`, `reach_h_sd`, `reach_h_n` (|Δx| of horizontal teleports with
   |Δy| ≤ 2), `reach_v_peak_mean` (from `peak_y` when present), `walk_px_per_s` (Σ|Δx| / Σheld s of walks),
   `teleport_settle_s`, `drop_settle_s` (medians).
+  *Amended (B20-D1, rulings B2/B3):* a move of 2 px or less along its axis (a no-op) is left out of `reach_h_*`, `reach_v_peak_mean` and `walk_px_per_s`; `teleport_settle_s` is the median over the flat horizontal teleports only; `direction` is the `Key` name (`"LEFT"`...).
 - [ ] **Tests:** `summarize` on synthetic samples: 10 teleports of Δx ±19 and ±20 alternating → mean 19.5, n 10;
   a teleport with |Δy| 5 is excluded; walks of 16 px over 2000 ms → 8.0 px/s; `main` without `--supervised` → 2.
 - **Run:** `python -m pytest -q tests/route/test_measure_moves.py`

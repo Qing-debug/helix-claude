@@ -62,17 +62,13 @@ from src.input.input_layer import InputLayer
 from src.input.link import BleLink
 from src.input.timing import TimingModel
 from src.route import runtime
-from src.route.character import CharacterLocator
 from src.route.harness.record_minimap import INDEX_NAME, record, shared_frames
 from src.route.leg_log import LAPS_FILE, LEGS_FILE, JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink
 from src.route.params import MovementParams
-from src.route.position import MinimapPositionSource
 from src.route.route_graph import RouteGraph
 from src.route.walker import Clock, PositionSource, RealClock, RouteWalker, RunSummary, WalkerConfig
 
 _REPO = Path(__file__).resolve().parents[2]
-_ICON = _REPO / "assets" / "chr" / "chr.png"
-_MASK = _REPO / "assets" / "chr" / "chr_mask.png"
 _CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}
 _LEG_TIMEOUT_S = 60.0      # B19-D1; the same as the simulator's (sim/run.py:63)
 _FIRST_FRAME_S = 30.0
@@ -99,10 +95,7 @@ def _wait_first_frame(shared, timeout_s: float) -> Result[None, str]:
 
 
 def _make_positions(shared) -> PositionSource | Failure[str]:
-    located = CharacterLocator.from_files(_ICON, _MASK)
-    if not is_successful(located):
-        return Failure(f"character icon: {located.failure()}")
-    return MinimapPositionSource(shared, located.unwrap())
+    return runtime.make_positions(shared)
 
 
 def _make_link():
@@ -118,14 +111,6 @@ def _make_stop_control(on_stop: Callable[[], None]):
 
 
 # ---- helpers ----------------------------------------------------------------------------------------------------------
-
-class _Shared:
-    """What the capture thread and the position source need of `SharedInfo` (src/main.py may not be imported here)."""
-
-    def __init__(self) -> None:
-        self.minimap_frame_lock = threading.Lock()
-        self.minimap_frame = None
-
 
 class _LostLegSink:
     """Passes every record to `inner`. A leg that timed out with no move ends the run (B19-D1): after the record is
@@ -252,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         return 5
     rg, rotation = route.unwrap()
     rng_timing, rng_planner = (np.random.default_rng(s) for s in seeds.spawn(2))
-    shared = _Shared()
+    shared = runtime.SharedFrame()
     positions = _make_positions(shared)
     if isinstance(positions, Failure):
         print(f"error: {positions.failure()}", file=sys.stderr)
@@ -376,18 +361,7 @@ def main(argv: list[str] | None = None) -> int:
             steps.append(("link.close", link.close))
         if stop_started and stop is not None:
             steps.append(("stop.close", stop.close))
-
-        held: BaseException | None = None
-        for name, step in steps:
-            try:
-                step()
-            except Exception as exc:
-                print(f"cleanup failed: {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            except BaseException as exc:  # KeyboardInterrupt, SystemExit: hold it, keep going
-                if held is None:
-                    held = exc
-        if held is not None:
-            raise held  # re-raised after every step ran (plan B19 cleanup)
+        runtime.run_cleanup(steps)  # re-raises a held KeyboardInterrupt after every step ran (plan B19 cleanup)
     return code
 
 
