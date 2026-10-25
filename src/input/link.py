@@ -18,18 +18,21 @@ from bleak.exc import BleakGATTProtocolError
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
-from src.input.protocol import (MAX_STEP_DELTA, MAX_STEPS, MAX_TOTAL_DELTA, Accepted, Done, Pong, Rejected, Step,
-                                decode_notification, encode_ping, encode_play, encode_release_all)
+from src.input.protocol import (MAX_STEP_DELTA, MAX_STEPS, MAX_TOTAL_DELTA, Accepted, Done, DoneStatus, Pong, Rejected,
+                                Step, decode_notification, encode_ping, encode_play, encode_release_all, play_len)
 
 log = logging.getLogger("src.input.link")
 
+# The board's advertised name and its two characteristics (Helix_BLE.ino setName and the *CHARACTERISTIC_UUID defines;
+# tests/input/test_firmware_constants.py checks they match).
+DEVICE_NAME = "Guiness"
 CMD_UUID = "61adcd67-20e9-4c38-b1d0-879445c5b732"
 NOTIFY_UUID = "89f7c2ca-89b5-4234-905c-d4a931feaa3b"
 
 SCAN_TIMEOUT_S = 10.0
 READY_TIMEOUT_S = 5.0  # a choice, not measured (F5 step 5: Windows subscribes right after it connects)
 READY_PING_PERIOD_S = 0.1
-MIN_PONG_MTU = 56  # longest command 53 bytes + 3 (C1 size limits)
+MIN_PONG_MTU = play_len(MAX_STEPS) + 3  # 56: longest command 53 bytes + 3 (C1 size limits)
 KEEPALIVE_PERIOD_S = 0.25
 PING_TIMEOUT_S = 0.5  # write + PONG
 KEEPALIVE_SOFT_MISS_LIMIT = 3  # soft keepalive misses in a row that end the session (A-FCdbg-D1)
@@ -114,7 +117,7 @@ def _unmet(pong: Pong) -> list[str]:
 
 
 class BleLink:
-    def __init__(self, name: str = "Guiness", client_factory=BleakClient, scanner=BleakScanner) -> None:
+    def __init__(self, name: str = DEVICE_NAME, client_factory=BleakClient, scanner=BleakScanner) -> None:
         self._name = name
         self._client_factory = client_factory
         self._scanner = scanner
@@ -228,16 +231,16 @@ class BleLink:
     def _on_done(self, entry: _Pending, done: Done, now: int) -> None:
         if entry.kind == _RELEASE:
             # The board answers every earlier command before this DONE: PLAYs it covered that are still pending
-            # (their DONE status 3 was lost) are aborted now. One that already has its DONE OK is left alone.
+            # (their DONE status ABORTED was lost) are aborted now. One that already has its DONE OK is left alone.
             for play in entry.covers:
                 if play.done is None:
                     self._resolve(play, Failure(InputError.ABORTED))
-        if done.status == 0:
+        if done.status == DoneStatus.OK:
             entry.done, entry.done_ns = done, now
             entry.done_evt.set()
-        elif done.status == 1:
+        elif done.status == DoneStatus.NOTIFY_FAILED:
             self._resolve(entry, Failure(InputError.NOTIFY_FAILED))
-        elif done.status == 3 and entry.kind == _PLAY:
+        elif done.status == DoneStatus.ABORTED and entry.kind == _PLAY:
             self._resolve(entry, Failure(InputError.ABORTED))
         else:
             log.warning("seq=%d %s DONE with unexpected status %d: treated as ACK_TIMEOUT", done.seq, entry.kind,
@@ -509,7 +512,7 @@ class BleLink:
                 return Failure(InputError.NOT_CONNECTED)
             deltas = [s.delta_100us for s in steps]
             if (len(steps) > MAX_STEPS or sum(deltas) > MAX_TOTAL_DELTA or any(d > MAX_STEP_DELTA for d in deltas)
-                    or 5 + 3 * len(steps) > session.mtu - 3):
+                    or play_len(len(steps)) > session.mtu - 3):
                 return Failure(InputError.TOO_LONG)
             seq = self._next_seq()
             encoded = encode_play(seq, steps)

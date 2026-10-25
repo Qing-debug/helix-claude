@@ -5,7 +5,7 @@ All multi-byte fields are little-endian. Shared golden vectors: firmware/test/ve
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import IntFlag
+from enum import IntEnum, IntFlag
 
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
@@ -25,6 +25,30 @@ _ACCEPTED = struct.Struct("<BBHI")
 _DONE_HEAD = struct.Struct("<BBHBBhIB")  # ... status, fail_step, rc, t0_us, n
 _REJECTED = struct.Struct("<BBHB")
 _PONG = struct.Struct("<BBHHHHHBI")
+
+
+def play_len(n_steps: int) -> int:
+    """Bytes in a PLAY command of `n_steps` steps: header, step count byte, steps. play_len(MAX_STEPS) is protocol.h MAX_CMD."""
+    return _HEADER.size + 1 + _STEP.size * n_steps
+
+
+class DoneStatus(IntEnum):
+    """DONE `status` (protocol.h `DoneStatus`). `Done.status` stays the raw int, so an unknown status still decodes."""
+    OK = 0
+    NOTIFY_FAILED = 1
+    DISCONNECTED = 2
+    ABORTED = 3
+
+
+class RejectReason(IntEnum):
+    """REJECTED `reason` (protocol.h `Reject`). `Rejected.reason` stays the raw int. QUEUE_FULL and HID_NOT_SUBSCRIBED
+    come from the board's write handler and executor, never from its parser."""
+    BAD_VERSION = 1
+    BAD_LENGTH = 2
+    BAD_SCHEDULE = 3
+    QUEUE_FULL = 4
+    UNKNOWN_OP = 5
+    HID_NOT_SUBSCRIBED = 6
 
 
 class Key(IntFlag):

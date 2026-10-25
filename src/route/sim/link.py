@@ -17,7 +17,7 @@ import numpy as np
 from returns.result import Failure, Result, Success
 
 from src.input.link import InputError, SendReport
-from src.input.protocol import Accepted, Done, Key, Step
+from src.input.protocol import Accepted, Done, DoneStatus, Key, Step
 from src.route.sim.world import SimParams, SimWorld
 
 _ARROWS = frozenset({Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN})
@@ -88,7 +88,7 @@ class SimLink:
         t_end = self.clock.now_ns()
         self._apply(first_down, last_up, total_100us, t_end)
         return Success(SendReport(seq, sent_ns, written_ns, written_ns, t_end, Accepted(seq, 0),
-                                  Done(seq, 0, None, 0, 0, ())))
+                                  Done(seq, DoneStatus.OK, None, 0, 0, ())))
 
     def _apply(self, first_down: dict[Key, tuple[int, int]], last_up: dict[Key, int], total_100us: int,
                t_end: int) -> None:
@@ -114,7 +114,7 @@ class SimLink:
     def release_all(self) -> Result[SendReport, InputError]:
         seq = self._next_seq()
         now = self.clock.now_ns()
-        return Success(SendReport(seq, now, now, None, now, None, Done(seq, 0, None, 0, 0, ())))
+        return Success(SendReport(seq, now, now, None, now, None, Done(seq, DoneStatus.OK, None, 0, 0, ())))
 
 
 class SimPositionSource:
