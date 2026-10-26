@@ -598,6 +598,21 @@ def test_f_timer_is_cancelled_and_joined_when_the_laps_end_first(sim):
     assert _alive_idents() <= before
 
 
+# --laps below 1 (B19-R M3)
+
+@pytest.mark.parametrize("laps", ["0", "-1", "-5"])
+def test_laps_below_one_exits_2_before_anything_starts(sim, laps, capsys):
+    assert sim.main("--laps", laps) == 2
+    assert "--laps must be at least 1" in capsys.readouterr().err
+    assert sim.capture_calls == 0 and sim.link_calls == 0 and sim.stops == []
+    assert sim.log == []
+    assert not sim.out.exists()
+
+
+def test_one_lap_is_accepted(sim):
+    assert sim.main("--laps", "1") == 0
+
+
 # (h) the --minutes range
 
 @pytest.mark.parametrize("minutes", ["0", "-1", "nan", "inf", "1e6"])

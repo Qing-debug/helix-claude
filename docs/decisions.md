@@ -1477,3 +1477,21 @@ Cost if wrong: a few extra teleports for Hong in B21; a peak missed inside a fee
 Undo: delete the two amendment paragraphs in step 4 of task B21 in the plan (`6a397b5` and the FDOC54 docs commit).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:384` and `:386`; `notes/B20-D2D3-adjudicator.md`, `notes/B20-fix-R.md`.
+
+## B19-D3 (2026-10-26): the walk refuses fewer than 1 lap with exit 2
+
+Question: `walk --laps 0` or a negative value was accepted, and the run still walked one approach leg and sent keys before it stopped. Should `walk` refuse `--laps` below 1 up front with a message and exit 2 (A), or keep accepting it (B)? The B19 reviewer raised it as minor M3 (`notes/B19-R.md`); the plan did not say.
+
+Ruling [Hong]: option A, decided by Hong on 2026-10-26: the walk refuses fewer than 1 lap with a message and exit 2, and no keys are sent. A typo such as `--laps 0` used to walk one approach leg.
+
+Reason: a lap count below 1 has no meaning, and the old behaviour sent keys to the game for a typo. Leaving `--laps` out still means "until stopped".
+
+As built: `main` checks `args.laps` right after the `--supervised` check and before `--minutes`, `--seed`, `--out`, the map load, the capture or the link (`src/route/walk.py`, the `args.laps < 1` test). It prints "error: --laps must be at least 1, got N" on stderr and returns 2. Tests: `test_laps_below_one_exits_2_before_anything_starts` (0, -1 and -5: exit 2, the message, no capture, no link, no stop control, no key, no `--out` folder) and `test_one_lap_is_accepted`, in `tests/route/test_walk_cli.py`. The exit-2 list in the `walk.py` docstring, the `--laps` help text and `src/route/CLAUDE.md` say so.
+
+Affects: the walk CLI's exit 2 cases.
+
+Cost if wrong: none; a user who wants a zero-lap run has no use for one.
+
+Undo: remove the `args.laps < 1` check in `main` and the test.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:355-356` and `:555`; `notes/B19-R.md` (M3).

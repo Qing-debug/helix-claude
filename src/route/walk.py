@@ -3,7 +3,7 @@
     python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised [--class kanna] [--laps N] [--minutes M]
                              [--seed S] [--out data/route/<UTC stamp>] [--record]
 
-Exit codes: 0 done · 1 run ended link_down · 2 usage (a bad --minutes or --seed), no --supervised, an --out that
+Exit codes: 0 done · 1 run ended link_down · 2 usage (a --laps below 1, a bad --minutes or --seed), no --supervised, an --out that
 already holds a run (B19-D2), or a leg log that cannot be opened · 3 no first frame or no character found · 4 connect
 failed · 5 map, route graph or character icon failed to load · 6 run() returned a Failure · 7 run() raised an exception · 9 the stop control failed to start · 10 the character
 was lost: a leg timed out with no move (B19-D1). 8 is the live link check's own code, never `main`'s.
@@ -148,7 +148,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--map", type=Path, required=True, help="map CSV (for example maps/fossil_foundry_2.csv)")
     parser.add_argument("--supervised", action="store_true", help="required: someone watches the run")
     parser.add_argument("--class", dest="character", choices=sorted(_CLASSES), default="kanna")
-    parser.add_argument("--laps", type=int, default=None, help="stop after N laps (default: until stopped)")
+    parser.add_argument("--laps", type=int, default=None, help="stop after N laps, at least 1 (default: until stopped)")
     parser.add_argument("--minutes", type=float, default=None, help="stop after M minutes of walking")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--out", type=Path, default=None, help="run folder (default data/route/<UTC stamp>)")
@@ -211,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.supervised:
         print("error: walk sends keys to the game; run it only while you watch, with --supervised", file=sys.stderr)
+        return 2
+    if args.laps is not None and args.laps < 1:  # B19-R M3: a typo used to walk one approach leg
+        print(f"error: --laps must be at least 1, got {args.laps}", file=sys.stderr)
         return 2
     minutes = args.minutes
     if minutes is not None and not (math.isfinite(minutes) and 0 < minutes <= threading.TIMEOUT_MAX / 60):
