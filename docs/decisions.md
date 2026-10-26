@@ -1836,9 +1836,9 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:516` (the ques
 
 ## H37 (2026-10-27): B21 is shortened to two 1-lap walks and then 10 recorded laps; the measuring tool and the hand recording are dropped (QB87, QB88)
 
-Question: the in-game walk test (plan task B21, parked by Hong on 2026-10-26) had eight steps: a 120 s hand recording with at least 5 teleports up (B20-D4), the measuring tool, a reach decision, a sim-realism comparison, a detection check on the recording, two 1-lap walks with one F12 press, and 10 laps. Hong asked first "what is this actually for?" and then why he would need to hand-record 5 teleports up and use the measuring tool. After the researcher's step-by-step explanation (`notes/WALK67.md`), the orchestrator asked him to confirm a shortened order (QB88).
+Question: the in-game walk test (plan task B21, parked by Hong on 2026-10-26) had eight steps: a 120 s hand recording with at least 5 teleports up (B20-D4), the measuring tool, a reach decision, a sim-realism comparison, a detection check on the recording, two 1-lap walks with one F12 press, and 10 laps. Hong asked first "what is this actually for?" and then why he would need to hand-record 5 teleports up and use the measuring tool. After orch 66 explained each step in chat (QB87), orch 67 asked him to confirm a shortened order (QB88; written up in `notes/WALK67.md`).
 
-Ruling [Hong]: shortened. His words (question bank QB87): "no need for the hand recoridng and measuring tool, i measured it and it the pixels are correct". He confirmed the order in QB88 (AskUserQuestion, option "1-lap walks, then 10 (Recommended)"): B21 is now two 1-lap walks, each with one F12 press, then 10 laps with the recorder on. The 10 laps are the Feature B sign-off bar (H4; spec B Targets, "10 consecutive laps with no manual intervention", `all_reached` true on 10 consecutive laps in `laps.jsonl`). The recorder is the walk CLI's `--record`.
+Ruling [Hong]: shortened. His words (question bank QB87): "no need for the hand recoridng and measuring tool, i measured it and it the pixels are correct". He confirmed the order in QB88 (AskUserQuestion, option "1-lap walks, then 10 (Recommended)"): B21 is now two 1-lap walks, the first with one F12 press and the second without (plan step 7, `docs/superpowers/plans/2026-10-23-p1b-route-walking.md:1659-1663`; QB88: "press F12 once"), then 10 laps with the recorder on. The 10 laps are the Feature B sign-off bar (H4; spec B Targets, "10 consecutive laps with no manual intervention", `all_reached` true on 10 consecutive laps in `laps.jsonl`). The recorder is the walk CLI's `--record`.
 
 Reason: his words above. He measured the teleport reach and the walk speed himself, so he takes his numbers (Kanna's 19 px sideways and 23 px up, `src/classes/classes.py`) as correct on Fossil Foundry 2. The walker re-plans from the measured position after each move, so a wrong reach number should waste moves and not break the run (`notes/WALK67.md`, section 4; read from `src/route/CLAUDE.md`, "The loop", not run live).
 
@@ -1866,19 +1866,19 @@ Ruling [Hong]: the first item of his next session. His words (QB88): PC free "No
 
 Reason: his words above: the walk is the test that shows whether Features A and B work in the real game.
 
-Affects: the order of work at his next session: B21 first, with him at the PC and MapleStory open. The walk tool needs his go and his presence (`src/route/CLAUDE.md`, Traps) and is not covered by H15. Agents run no key-sending tool in the meantime; Feature C planning goes on (H39).
+Affects: the order of work at his next session: B21 first, with him at the PC and MapleStory open. The walk tool needs his go and his presence (`src/route/CLAUDE.md`, Traps) and is not covered by H15. Agents run no key-sending tool in the meantime, while he is using the PC (QB86), so H15 is not overridden; Feature C planning goes on (H39).
 
 Cost if wrong: none; it is an ordering.
 
 Undo: Hong says so.
 
-Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:772`; question bank QB88; his step list `notes/B21-steps67.md` in the orchestrator workspace.
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:772`; question bank QB88 and QB86; his step list `notes/B21-steps67.md` in the orchestrator workspace.
 
 ## H39 (2026-10-27): The Feature C (runes) plan is written locally, on this PC (QB89)
 
 Question: is the Feature C plan written by an agent here (nothing for Hong to do; it uses his plan usage) or in a cloud session (it uses the cloud credit that ends 2026-11-04, and he has to start it and paste a prompt)? The orchestrator had parked this as an unsure case (H32).
 
-Ruling [Hong]: here. His answer (AskUserQuestion, as the ledger records it; the QB89 entry in the question bank still read "open" when this was written): "Here, on this PC (Recommended)".
+Ruling [Hong]: here. His answer (AskUserQuestion): "Here, on this PC (Recommended)".
 
 Reason: not given beyond the answer.
 
