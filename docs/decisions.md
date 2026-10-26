@@ -4,7 +4,7 @@ This file records Hong's design decisions and rulings that touch interfaces, dat
 
 ## Hong's standing facts
 
-Facts and principles Hong would give the same way every time (his answer to Q7, H28, 2026-10-26). Agents and orchestrators check this list before they ask him anything: a question it answers is not sent. Follow it and log `Ruling [standing fact]`. The list grows only with his yes.
+Facts and principles Hong would give the same way every time (his answer to Q7, H28, 2026-10-26). Agents and orchestrators check this list before they ask him anything: a question it answers is not sent. Follow it and log `Ruling [standing fact]`. The list grows only with his yes. (The last two sentences are rules of the orchestrator skill, not his words.)
 
 - Maps never use ropes or ladders. Kanna teleports only to a pixel exactly above or below.
 - People build maps in Hong's map editor, not by editing files.
@@ -1549,14 +1549,18 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:576` (the ruli
 Question: which questions should the orchestrator send to Hong? (Q1 on the question-review page: A, the new six-point list; B, the same but internal file formats still come to him; C, keep the old list.)
 
 Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q1 A. A question reaches him only if:
-1. It needs a fact about the game, the maps or the character that nobody has written down yet (the spec, this file and his standing facts do not hold it).
+1. It needs a fact about the game, the maps or the character that nobody has written down yet.
 2. It changes what the bot does in the game or what the app shows in normal use, and the options would look different to him.
-3. It departs from the spec's intent, changes a merge or sign-off gate, or defines what "working" means. A plan that is silent, or worded loosely while its intent is clear, is not a departure.
+3. It changes what the spec means, a sign-off or merge rule, or what "working" means.
 4. It loosens a safety rule or the "inputs must look human" rule, or overturns something he decided.
-5. It spends money he has not approved, or trades quality for cost.
+5. It spends more than the budget, or trades quality for cost.
 6. It needs his hands, eyes or presence. These come as one batched list with a proposed time.
 
-Reason: it is his 22 October rule (H10) plus the game facts and setup facts that mattered. Of the 65 questions put to him, about 20 (code details, edge cases, most of process) would not have reached him, and in those his answer differed from the recommendation only 3 times (page, "The proposal").
+Plus, as today, every push, delete or publish still reaches him, except the two standing yeses in H24 (push) and H25 (delete). (From the page's "The proposal".)
+
+Note: The orchestrator's readings, not on the page he saw (QA60-a section 5a; applied in the skill by SKL61): "written down" means the spec, this file and his standing facts; a plan that is silent, or worded loosely while its intent is clear, is not a departure from the spec; with Q5 B there is no per-feature budget, so point 5 reads as money he has not approved (H30 is the approved spend).
+
+Reason (not given by Hong; the page's recommendation, which he accepted): it is his 22 October rule (H10) plus the game facts and setup facts that mattered. Of the 65 questions put to him, about 20 (code details, edge cases, most of process) would not have reached him, and in those his answer differed from the recommendation only 3 times (page, "The proposal").
 
 Affects: the orchestrator skill's "Send it to Hong" list and "Rule on it yourself" section, and the agent rules; applied in the skill by the SKL61 unit. It narrows what H10 sends him without removing H10's two cases.
 
@@ -1570,9 +1574,9 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`; `notes/Q
 
 Question: what goes in the morning summary besides what needs Hong? (Q2: A, the choices of the safer option, edge cases, and changes to a command he might run; B, every decision an agent made; C, only the safer-option choices.)
 
-Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q2 A. The morning summary lists: choices where an agent picked the safer option (refuse bad input, never overwrite data); problems that only happen if someone edits a file by hand; and choices the plan did not cover that change a command he might run. These are decided by an agent with a second, senior agent checking, recorded with how to undo them, and listed so he can overturn them. Everything else (how the code is organised, internal file formats, log fields, test rules, tooling, process) is recorded in the ledger and this file only.
+Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q2 A. The morning summary lists: choices where an agent picked the safer option (refuse bad input, never overwrite data); problems that only happen if someone edits a file by hand; and choices the plan did not cover that change a command he might run. These are decided by an agent with a second, senior agent checking, recorded with how to undo them, and listed so he can overturn them. Everything else (how the code is organised, internal file formats, log fields, test rules, tooling, process) is recorded only (in the ledger, and in this file when it is a design choice).
 
-Reason: the page's "The proposal", the cards "agents decide, in the morning summary" and "agents decide, logged".
+Reason (not given by Hong; the page's recommendation, which he accepted): the page's "The proposal", the cards "agents decide, in the morning summary" and "agents decide, logged".
 
 Affects: the skill's morning summary and "Rule on it yourself" levels (SKL61).
 
@@ -1586,11 +1590,11 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`; `notes/Q
 
 Question: may agents push finished feature work to Hong's GitHub without asking each time? (Q3: A, a standing yes; B, a standing yes with each push listed in the morning summary; C, keep asking.)
 
-Ruling [Hong]: option B. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q3 B. The standing yes covers a push of the finished feature branch to `origin` (`Qing-debug/helix-claude`), never to `master`, never to `upstream`, never forced, and only after review and when all tests pass. Each push is listed in the morning summary.
+Ruling [Hong]: option B. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q3 B. This standing yes is for this job (Helix) only, not a general permission. It covers one thing: a push of a finished feature branch to `origin` (`Qing-debug/helix-claude`). Never to `master`, never to `upstream` (`Qing-debug/Helix`), never forced, and only after a review of the branch has returned Approved and the full test suite (`python tools/check.py --full`) passes on the commit pushed. (The page said "only after review and all tests pass"; "Approved" and "full" are the orchestrator's reading.) Each push (branch and SHA) is listed in the morning summary.
 
-Reason: he had said yes to every earlier push question (5 of 5, per the page); the summary keeps him informed.
+Reason (not given by Hong; the page's recommendation, which he accepted): he had said yes to every earlier push question (5 of 5, per the page); the summary keeps him informed.
 
-Affects: when agents may push (the orchestrator dispatches a separate unit for it). The "Safety rules" in the root CLAUDE.md still forbid any push to `upstream`. It is an exception to H10's note that a push still needs his yes (inference: H10 predates this answer). The first push under it was `p1b-route-walking` at `5257662` (unit PUSH61, ledger-B.md:611 and :615).
+Affects: when agents may push (the orchestrator dispatches a separate unit for it). The "Safety rules" in the root CLAUDE.md still forbid any push to `upstream`. It is an exception to H10's note that a push still needs his yes (inference: Hong did not mention H10; the link is the orchestrator's reading of the two entries). The first push under it was `p1b-route-walking` at `5257662` (unit PUSH61, ledger-B.md:611 and :615).
 
 Cost if wrong: a push of work he did not want published yet; revert with a follow-up commit.
 
@@ -1602,11 +1606,13 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`.
 
 Question: may agents delete the branches they made without asking? (Q4: A, a standing yes once the branch is merged or copied elsewhere; B, keep asking.)
 
-Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q4 A. An agent-made branch may be deleted without asking once it is merged or a copy of it exists elsewhere. The model-comparison branches (`ab/*`) are kept regardless.
+Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q4 A. An agent-made branch may be deleted without asking once it is merged or a copy of it exists elsewhere. The model-comparison branches (`ab/*`) are kept regardless. This standing yes is for this job (Helix) only. It covers branches agents created and nothing else: deleting anything else, or a branch with no other copy, still needs his yes.
 
-Reason: he had said yes every time he was asked (page, Q4).
+Orchestrator note (not Hong's words): H25 is an exception to H8's branch rule ("no deleting branches") for agent-made branches that are merged or copied elsewhere (`ab/*` kept); every other delete still follows H8.
 
-Affects: the orchestrator's branch cleanup. It extends H12, which already lets the orchestrator delete helper worktrees and branches after their merge into a local feature branch.
+Reason (not given by Hong; the page's recommendation, which he accepted): he had said yes every time he was asked (page, Q4).
+
+Affects: the orchestrator's branch cleanup. It extends H12 (inference, as for H24), which already lets the orchestrator delete helper worktrees and branches after their merge into a local feature branch.
 
 Cost if wrong: a deleted branch holding work with no other copy; the condition (merged or copied) is what prevents that.
 
@@ -1622,7 +1628,7 @@ Ruling [Hong]: option B, the one answer where he differed from the recommendatio
 
 Reason: not given beyond the answer. The recommendation had been A ("model choice is process; money is yours").
 
-Affects: model choice (the orchestrator skill's model table and the A/B ladder). Questions 2 to 9 of the model page are still his and still open; so is his yes on the final model-table text (see H29 and H30).
+Affects: model choice (the orchestrator skill's model table and the A/B ladder). Questions 2 to 9 of the model page are still his and still open; so is his yes on the final model-table text (see H29).
 
 Cost if wrong: model questions wait for him instead of being decided inside a budget.
 
@@ -1636,7 +1642,7 @@ Question: Hong had said decisions already in this file stay with him. Which did 
 
 Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q6 A. New entries in this file do not need him; overturning one he made does.
 
-Reason: read literally, "decisions already in docs/decisions.md stay with him" would send every new entry to him and reopen what Q1 narrows (`notes/QA60-a.md` section 4).
+Reason (not given by Hong; the page's recommendation, which he accepted): read literally, "decisions already in docs/decisions.md stay with him" would send every new entry to him and reopen what Q1 narrows (`notes/QA60-a.md` section 4).
 
 Affects: the orchestrator skill (a rule that nothing overturns his decisions) and the agent rules; an agent whose work seems to need that raises it.
 
@@ -1652,7 +1658,7 @@ Question: write the list of standing facts into this file? (Q7: A, yes; B, no.)
 
 Ruling [Hong]: option A. Hong answered the seven questions on the question-review page (`notes/QA60-page/index.html`, analysis in `notes/QA60-a.md`) with "i agree with all recommendations except for 5, my answer is b". Hong's decision (2026-10-26): Q7 A. The list is the heading "Hong's standing facts" at the top of this file.
 
-Reason: four of the six answers where he differed from the recommendation came from a fact or principle he would say the same way every time; writing them down once lets agents check before they ask (page, "The proposal").
+Reason (not given by Hong; the page's recommendation, which he accepted): four of the six answers where he differed from the recommendation came from a fact or principle he would say the same way every time; writing them down once lets agents check before they ask (page, "The proposal").
 
 Affects: the orchestrator skill and the agent rules point to the list by that heading.
 
@@ -1662,13 +1668,13 @@ Undo: remove the heading; agents then ask again.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`; "Hong's standing facts" above.
 
-## H29 (2026-10-26): Haiku may do routine implementation units, nothing else (model page MX61-D1)
+## H29 (2026-10-26): Haiku may do routine implementation units, nothing else (model page MX61-D1; not yet in the skill)
 
 Question: may Haiku be used at all? (MX61-D1: A, keep Haiku banned and routine implementation stays on sonnet-high; B, a narrow exception: `orch-haiku-high` for routine implementation units only, sonnet-high as fallback and comparison arm, Haiku banned everywhere else.)
 
 Ruling [Hong]: option B. Hong's decision (2026-10-26): "ill allow haiku for routine coding". Haiku at high effort may do routine implementation units; Sonnet at high effort is the fallback and the comparison arm; Haiku stays banned for everything else.
 
-Reason: the ledger records the cost of B as an edit to the fixed model rule in `SKILL.md`, `agent-rules.md` and the `haiku-high` preset description, a preset rebuild and a session restart, with a small quality risk (0 Critical, 1 Important over 2 units). The saving is small (about $1-2 over Features C and D).
+Reason: not given. The ledger records the cost of B as an edit to the fixed model rule in `SKILL.md`, `agent-rules.md` and the `haiku-high` preset description, a preset rebuild and a session restart, with a small quality risk (0 Critical, 1 Important over 2 units). The saving is small (about $1-2 over Features C and D).
 
 Affects: the model policy of the orchestrator skill. Not yet applied: the skill text that applies it waits for Hong's yes on the final model-table text, after the MX61 fix and re-review. Model page questions 2 to 9 remain his (H26).
 
@@ -1684,9 +1690,9 @@ Question: may the model comparison spend the money its plan needs?
 
 Ruling [Hong]: yes. Hong's decision (2026-10-26): "im fine with having to spend that money". Approved: the code-review ladder at about $87 (a range of about $60-120) before 2026-11-04; data gathering of about $80 over Features C and D; and a stop at $200 that returns to him.
 
-Reason: the plan's own figures (the $87 recomputes per `notes/MX61-R.md`; the $200 stop is the planner's proposal).
+Reason: not given by Hong beyond the words above. The figures are the plan's own (the $87 recomputes per `notes/MX61-R.md`; the $200 stop is the planner's proposal).
 
-Affects: item 5 of the six-point list (H22): this spend is approved, so it does not reach him again unless the $200 stop is hit or the plan grows past it.
+Affects: item 5 of the six-point list (H22): this spend is approved, so it does not reach him again unless the $200 stop is hit. The figures are those of the plan as MX61-R reviewed it (verdict Changes needed); the fixed plan and the final text still come back to him (H29).
 
 Cost if wrong: money spent on a comparison that proves little.
 
@@ -1698,11 +1704,11 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:617`.
 
 Question: what should the orchestrator do while Hong is away? (His away policy had changed several times since H6.)
 
-Ruling [Hong]: autonomous within the criteria he had just set. Hong's decision (2026-10-26, going to bed): "be autonomous but within the boundaries we've set, anything that you think requires my input based off our criteria ... + the input i just made". An item that meets the six-point list (H22) is parked under "Waiting on Hong". Everything else agents decide, logged or logged and listed in the morning summary (H23). Pushes of finished feature work and deletes of merged agent branches go ahead (H24, H25). Nothing overturns his decisions (H27). In the morning the orchestrator lists what needs him.
+Ruling [Hong]: autonomous within the criteria he had just set. Hong's decision (2026-10-26, going to bed): "be autonomous but within the boundaries we've set, anything that you think requires my input based off our criteria ... + the input i just made". An item that meets the six-point list (H22) is parked under "Waiting on Hong". Everything else agents decide, logged or logged and listed in the morning summary (H23). Pushes of finished feature work and deletes of agent-made branches under H25's condition (merged or copied elsewhere) go ahead (H24, H25). Nothing overturns his decisions (H27). In the morning the orchestrator lists what needs him.
 
 Reason: not given beyond the words above.
 
-Affects: how orchestrators and agents decide while he is away; it replaces the earlier away policies (H6, H9) for this stretch.
+Affects: how orchestrators and agents decide while he is away; it replaces the earlier away policies (H6, H9) for this stretch (inference: his words do not mention H6 or H9).
 
 Cost if wrong: a decision made that he would have wanted to see; the morning summary lists the kinds he may overturn.
 
