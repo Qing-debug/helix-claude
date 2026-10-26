@@ -1495,3 +1495,39 @@ Cost if wrong: none; a user who wants a zero-lap run has no use for one.
 Undo: remove the `args.laps < 1` check in `main` and the test.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:355-356` and `:555`; `notes/B19-R.md` (M3).
+
+## B22-inv-D1 (2026-10-26): the Feature B docs are written now as B22a, with B21's results listed as not done yet
+
+Question: plan task B22 (the "as built" docs) depends on B21, the supervised in-game session, which Hong parked on 2026-10-26. A: write the docs now as B22a, record B21's results as not measured and not signed off, note the split in the plan, and fill them in later as B22b. B: wait until B21 has run. C: write the docs now with placeholders where B21's numbers will go.
+
+Ruling [Hong]: option A. Hong's decision (2026-10-26), as the ledger records it: "B22-inv-D1 → A, write the Feature B docs now (B22a), B21's measurements listed as not done yet, B22b after B21."
+
+Reason: the investigation (`notes/B22-inv.md`) found that only B21's own results (reach on FF2, movement values, detection on moving frames, the 10-lap sign-off) need B21; the B14 and B18 results, the deviations and the commands are known now. B leaves the offline state undocumented for an unknown time. C would put something that looks like a number where none exists, against the plan's rule that every number comes from an output and against H3 (reach is not measured on FF2).
+
+As built: spec B has an "As built" section (status, results against the targets with the run outputs quoted, reach and movement values as not measured on FF2, deviations, a "Not done yet" list). `src/route/CLAUDE.md` gained the harness commands (the 1000-lap target run, the detection check, the recorder, the walk CLI and the measurement tool). Plan task B22 records the split and the task list row says so. The 1000-lap run was repeated at `1257222` because the earlier recorded run came before the planner fix B14-inv-D1.
+
+Affects: spec B, the plan's task B22 and task list, `src/route/CLAUDE.md`. No code.
+
+Cost if wrong: none worth naming; B22b replaces the "Not done yet" list with B21's outputs.
+
+Undo: revert the three B22a docs commits on `p1b-route-walking`.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:575` (B22-inv result) and `:577` (Hong's decision); `notes/B22-inv.md`.
+
+## B22-inv-D2 (2026-10-26): Hong's "B21 not needed for now" does not waive the in-game sign-off before Feature B merges
+
+Question: Hong said the B21 in-game measurement session was not needed for now, because he is fairly certain the recordings are right. Does that waive the in-game sign-off that H4 requires before Feature B merges to `master`?
+
+Ruling [spec-text]: option A, no change. Ruled by the orchestrator from the text, not by Hong. Feature B stays unmerged and is "ready for sign-off, not signed off". H4 says "B, C and D merge only after in-game sign-off", spec B "Shipping" says "Passing the offline targets makes it ready for sign-off, not ready to merge", and plan hard rule 1 says B merges to `master` only after the in-game sign-off passes. Hong's words are about the measurement session and do not mention merging.
+
+Reason: waiving a merge gate is Hong's to do, in his own words; reading it into a remark about recordings would be a guess. His remark is also not a measurement: the 19/23 reach is his own measurement, not made on Fossil Foundry 2 (H3), so the docs do not record reach as measured on FF2.
+
+As built: spec B's "As built" status line reads "ready for sign-off, not signed off, and not merged", and its "Not done yet" list names the sign-off.
+
+Affects: whether Feature B can merge (it cannot yet); the status line in spec B.
+
+Cost if wrong: none; Hong can waive the gate at any time.
+
+Undo: nothing to undo; to waive the gate, Hong says so and this entry is superseded.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:576` (the ruling) and `:551` (Hong's words); `notes/B22-inv.md`.
