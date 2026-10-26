@@ -1892,22 +1892,54 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:773`; question
 
 ## H40 (2026-10-27): Feature C ground truth and how the spinning-arrow reader is judged (QB90-QB93)
 
-Question: Feature C (runes, spec `docs/superpowers/specs/2026-10-21-p1c-runes-design.md`) has to read spinning arrows, and no one has the right answers for them. What counts as ground truth, how is the arrow reader judged when Hong can only bring about 10 runes, and are all three reading methods built? Orch 67 asked the first two (QB90, QB91, QB92); orch 68 redesigned the test for ~10 runes and asked again (QB93; numbers in `notes/D7R68.md`).
+Question: Feature C (runes, spec `docs/superpowers/specs/2026-10-21-p1c-runes-design.md`) has to read spinning arrows, and no one has the right answers for them. What counts as ground truth, how is the arrow reader judged when Hong can only bring about 10 runes, and are all three reading methods built? Orch 67 asked QB90, QB91 and QB92; orch 68 redesigned the test for ~10 runes and asked again (QB93; numbers in `notes/D7R68.md`).
 
 Ruling [Hong]: four parts are decided and the judging rule is open.
 
 1. Ground truth (QB90, ledger-C.md:24). His words: "I can get video gameplay of spinning runes, i'll write down the "tells" that is used to identify the undetlying direction and i'll provide the correctt directions as well, Then you can assess your various methods until you get one that generalises ". The ground truth is his labelled videos of spinning runes, his written tells and his correct directions. This replaces the option of building the answer set ourselves.
 2. Game facts (QB91, ledger-C.md:25). His words: "you can  just tap the arrow key to input the direction, you have to answer from left to right. I dont knnow how long the rune msut be on the map for the rune cuirse to start, i beleive its at least 2 minutes, it lasts until the rune is used". So the input is one arrow-key tap per arrow, left to right. The curse starts at least about 2 minutes after the rune appears (his belief, not known) and lasts until the rune is used. The arrow time limit and the distance you must stand within are still unknown (RuneParams guesses stay marked "unverified").
 3. How many runes (QB92, ledger-C.md:32). His words: "ill try to  find as many as 20, but i dont think i will be able to. I reckon ill only be able to get a few like 10 in total". Asked again how many he can get (QB93 question 1), he said: "I dont  know how many i cann get, i can try my best  to  get as m any as possible but until i do it, i wonnt know". So the count is about 10 and stays unknown until he records. Each four-arrow spinning panel has 2 spinning arrows (160 of 161 panels in HX's Stage B labels, `notes/D7R68.md`), so ~10 runes are about 20 spinning arrows. (The ledger line 32 says ~40 arrows at 4 per rune; that count is wrong.)
-4. Judging rule: OPEN (QB93, ledger-C.md:43). He first picked "Sealed, score once (Recommended)" and then took it back. His words: "i take back that decision, i dont  actually know the benefits/cost of each  of  the  trhee ways of doing the testing. I'll answer  it next time after  i've had time to understand the cost/beenfit". So no judging rule is decided. The three options stay open (`notes/D7R68.md`, QB93): A. sealed answers, one score on every spinning arrow he brings, bar scaled to the count (about 1 wrong per 20 arrows), game-accepted solves added later; B. leave-one-clip-out over all clips (re-runnable, but reruns flatter the score); C. a small tune/test split with a lower bar, the final say from supervised-session solves. Hong decides at his next session. The plan's 50/50 split with at least 40 held-out arrows cannot be met with ~10 runes, so it cannot stand as written.
+4. Judging rule: OPEN (QB93; his pick is at ledger-C.md:43, his retraction at ledger-C.md:47). He first picked "Sealed, score once (Recommended)" and then took it back. His words: "i take back that decision, i dont  actually know the benefits/cost of each  of  the  trhee ways of doing the testing. I'll answer  it next time after  i've had time to understand the cost/beenfit". So no judging rule is decided. The three options stay open (`notes/D7R68.md`, QB93): A. sealed answers, one score on every spinning arrow he brings, bar scaled to the count (about 1 wrong per 20 arrows), game-accepted solves added later; B. leave-one-clip-out over all clips (re-runnable, but reruns flatter the score); C. a small tune/test split with a lower bar, the final say from supervised-session solves. Hong decides at his next session. Reading his phrase "three ways of doing the testing" as these three judging options is orch 68's reading (ledger-C.md:47), not his stated meaning; he can correct it, and "all three readers" (part 5) does not depend on it. The plan's 50/50 split with at least 40 held-out arrows cannot be met with ~10 runes, so it cannot stand as written.
 5. Methods (QB93 question 2, ledger-C.md:41). He picked "All three, as spec (Recommended)". All three readers are built and compared as spec C:29 says. The plan's "pose model only if needed" is dropped.
 
 Reason: his answers above; not given beyond them. What a test of this size can show (`notes/D7R68.md`, exact binomial, read not run live by this unit; for option A with 20 arrows and a bar of 19): a method that is truly 80% right per arrow passes 7% of the time, 90% passes 39% and 95% passes 74%. So it catches a bad reader (80% or worse) and cannot tell 90% from 95%. A pass does not prove the 95% target (spec C:61); the supervised-session solves keep counting toward it.
 
-Affects: plan C9-C11, D7 and the [Hong] H-7 text wait on the judging rule (the ledger says one unit updates them after piece 3a); the plan's D3 line that game outcomes do not set the flag may change with it. What he does: record the spinning runes, write the tells and the correct directions, and answer the judging question at his next session.
+Affects: only the judging step, C11 step J (`judging.py`, which exits "no judging rule chosen yet" until he chooses), waits on the judging rule. The plan's C9-C11, D7 and [Hong] H-7 text were rewritten to leave it as one open slot (`notes/D7T68.md`, ledger-C.md:53); the plan's D3 line that game outcomes do not set the flag may still change with it. What he does: record the spinning runes, write the tells and the correct directions, and answer the judging question at his next session.
 
 Cost if wrong: for the four decided parts, recording the wrong runes or tells costs his time. The open judging rule has no cost yet because nothing is built on it; under option A a failed batch cannot be re-tested on the same runes, and a truly-95% reader fails the bar about 26% of the time (`notes/D7R68.md`).
 
 Undo: Hong says so.
 
-Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:24`, `:25`, `:32`, `:41`, `:43`; question bank QB90, QB91, QB92, QB93; `.superpowers/orchestrator/2026-10-21-phase1/notes/D7R68.md`.
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:24`, `:25`, `:32`, `:41`, `:42`, `:43` (the pick he took back), `:47` (his retraction); question bank QB90, QB91, QB92, QB93; `.superpowers/orchestrator/2026-10-21-phase1/notes/D7R68.md`.
+
+## H41 (2026-10-27): Before his walk test and videos, build only the independent parts of Feature C (QB94)
+
+Question: after the Feature C plan is reviewed and fixed, should agents build any of Feature C before Hong's walk test (B21, H37-H38) and his spinning-rune videos? He first asked which C parts rely on A and B and what a redo would involve; the answer came from the plan's task table: C7, C15, C19 and C20 lean on Feature B's walking code, and C16, C18 and C20 use Feature A's typing, which is signed off.
+
+Ruling [Hong]: build the independent parts only. His answer (AskUserQuestion): "Independent parts only (Recommended)". The list given with the question was C1-C6, C8, C10, C10b and C12, nothing touching walking or vision. QB95 (H42) then took C10b off it, so the list now is C1-C6, C8, C10 and C12. C7 and C13-C21 wait until the walk test passes. C9 and C11 wait for his videos. C22 needs him.
+
+Reason: not given beyond the answer. The recommended option avoids patching or rewriting work that Feature B's walk test may change.
+
+Affects: the order of Feature C building (plan `docs/superpowers/plans/2026-10-27-p1c-runes.md`, task table). Nothing in the held tasks is built until the walk test passes (H38 makes that test the first item of his next session). The plan's C10b, D7, task table and critical path are updated to match in the plan fix unit.
+
+Cost if wrong: the independent parts could still need small changes if Feature B changes. The other options were waiting for both (nothing built, slower) and building everything that does not need him (a patch or rewrite risk for C7 and C13-C21).
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:80`; question bank QB94.
+
+## H42 (2026-10-27): The pose-model arrow reader (C10b) is held and will train on real game footage (QB95)
+
+Question: spec C:29 builds three arrow readers, one of them a pose model. The plan trained it on made-up rotated arrows. Should it train on made-up arrows, on real footage, or be dropped?
+
+Ruling [Hong]: hold it, and train it on real game footage. His answer (AskUserQuestion): "Hold it; train on real game footage (Recommended)". His reason, raised by him unprompted before the question: "I don't think there's a need to do this because the way the underlying arrow rotation of the spinning arrows are shown, I believe, is quite unique to MapleStory. So really, you would only ever want to train the models based off how it actually runs in MapleStory since there are unique game specific tells that tellyo which unerrlyinf direcction it points in". So C10b is not built before his videos and the judging rule (H40 part 4). After them it trains on real game footage, which means a train/test split of his clips (or more clips). That split constrains the judging options for this reader, because clips used to train it cannot also score it. All three readers are still built (H40 part 5, QB93 question 2); this changes how and when the pose model is built, not whether.
+
+Reason: his words above: the tells that show which way a spinning arrow points are unique to MapleStory, so a model trained on made-up rotated arrows would not learn them.
+
+Affects: plan C10b, D7, the task table and the critical path, which the plan fix unit updates; QB94's early-build list (H41) loses C10b; the judging rule still to be chosen (H40 part 4), because the pose reader needs a train/test split of his clips.
+
+Cost if wrong: C10b is built later than it could have been, and it needs enough of his clips to split into a training part and a test part. The other options were to drop the pose model (a departure from spec C:29 and a reversal of his QB93 answer) and to keep the made-up-arrows plan.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:87`; question bank QB95; H40 parts 4 and 5.
