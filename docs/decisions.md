@@ -1889,3 +1889,25 @@ Cost if wrong: it uses his plan usage and not the cloud credit.
 Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:773`; question bank QB89.
+
+## H40 (2026-10-27): Feature C ground truth and how the spinning-arrow reader is judged (QB90-QB93)
+
+Question: Feature C (runes, spec `docs/superpowers/specs/2026-10-21-p1c-runes-design.md`) has to read spinning arrows, and no one has the right answers for them. What counts as ground truth, how is the arrow reader judged when Hong can only bring about 10 runes, and are all three reading methods built? Orch 67 asked the first two (QB90, QB91, QB92); orch 68 redesigned the test for ~10 runes and asked again (QB93; numbers in `notes/D7R68.md`).
+
+Ruling [Hong]: four parts are decided and the judging rule is open.
+
+1. Ground truth (QB90, ledger-C.md:24). His words: "I can get video gameplay of spinning runes, i'll write down the "tells" that is used to identify the undetlying direction and i'll provide the correctt directions as well, Then you can assess your various methods until you get one that generalises ". The ground truth is his labelled videos of spinning runes, his written tells and his correct directions. This replaces the option of building the answer set ourselves.
+2. Game facts (QB91, ledger-C.md:25). His words: "you can  just tap the arrow key to input the direction, you have to answer from left to right. I dont knnow how long the rune msut be on the map for the rune cuirse to start, i beleive its at least 2 minutes, it lasts until the rune is used". So the input is one arrow-key tap per arrow, left to right. The curse starts at least about 2 minutes after the rune appears (his belief, not known) and lasts until the rune is used. The arrow time limit and the distance you must stand within are still unknown (RuneParams guesses stay marked "unverified").
+3. How many runes (QB92, ledger-C.md:32). His words: "ill try to  find as many as 20, but i dont think i will be able to. I reckon ill only be able to get a few like 10 in total". Asked again how many he can get (QB93 question 1), he said: "I dont  know how many i cann get, i can try my best  to  get as m any as possible but until i do it, i wonnt know". So the count is about 10 and stays unknown until he records. Each four-arrow spinning panel has 2 spinning arrows (160 of 161 panels in HX's Stage B labels, `notes/D7R68.md`), so ~10 runes are about 20 spinning arrows. (The ledger line 32 says ~40 arrows at 4 per rune; that count is wrong.)
+4. Judging rule: OPEN (QB93, ledger-C.md:43). He first picked "Sealed, score once (Recommended)" and then took it back. His words: "i take back that decision, i dont  actually know the benefits/cost of each  of  the  trhee ways of doing the testing. I'll answer  it next time after  i've had time to understand the cost/beenfit". So no judging rule is decided. The three options stay open (`notes/D7R68.md`, QB93): A. sealed answers, one score on every spinning arrow he brings, bar scaled to the count (about 1 wrong per 20 arrows), game-accepted solves added later; B. leave-one-clip-out over all clips (re-runnable, but reruns flatter the score); C. a small tune/test split with a lower bar, the final say from supervised-session solves. Hong decides at his next session. The plan's 50/50 split with at least 40 held-out arrows cannot be met with ~10 runes, so it cannot stand as written.
+5. Methods (QB93 question 2, ledger-C.md:41). He picked "All three, as spec (Recommended)". All three readers are built and compared as spec C:29 says. The plan's "pose model only if needed" is dropped.
+
+Reason: his answers above; not given beyond them. What a test of this size can show (`notes/D7R68.md`, exact binomial, read not run live by this unit; for option A with 20 arrows and a bar of 19): a method that is truly 80% right per arrow passes 7% of the time, 90% passes 39% and 95% passes 74%. So it catches a bad reader (80% or worse) and cannot tell 90% from 95%. A pass does not prove the 95% target (spec C:61); the supervised-session solves keep counting toward it.
+
+Affects: plan C9-C11, D7 and the [Hong] H-7 text wait on the judging rule (the ledger says one unit updates them after piece 3a); the plan's D3 line that game outcomes do not set the flag may change with it. What he does: record the spinning runes, write the tells and the correct directions, and answer the judging question at his next session.
+
+Cost if wrong: for the four decided parts, recording the wrong runes or tells costs his time. The open judging rule has no cost yet because nothing is built on it; under option A a failed batch cannot be re-tested on the same runes, and a truly-95% reader fails the bar about 26% of the time (`notes/D7R68.md`).
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:24`, `:25`, `:32`, `:41`, `:43`; question bank QB90, QB91, QB92, QB93; `.superpowers/orchestrator/2026-10-21-phase1/notes/D7R68.md`.
