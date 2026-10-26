@@ -3,7 +3,8 @@
 **Status: approved** · written 2026-10-23 on branch `p1b-route-walking` (cut from `master` 2413c64)
 
 Amended after approval: B19 (PB-amend, 2026-10-23); B15 score scrub (B15-D1, 2026-10-26); B19 lost character and
-used `--out` (B19-D1, B19-D2, 2026-10-26); B20 summary and B21 steps 4 and 5 (B20-D1, B20-D4, FDOC54, 2026-10-26)
+used `--out` (B19-D1, B19-D2, 2026-10-26); B20 summary and B21 steps 4 and 5 (B20-D1, B20-D4, FDOC54, 2026-10-26); B22 split into B22a and B22b
+(B22-inv-D1, 2026-10-26)
 
 > **For agentic workers:** one fresh implementer per task, in the order of the task list. Each task is TDD: write the
 > listed tests first, watch them fail, implement, watch them pass, run the full suite, commit. Steps use checkbox
@@ -541,7 +542,7 @@ everything in game (B17-B21).
 | B19 | Runtime wiring and the walk CLI | S | no | B13, B16, B17 |
 | B20 | Movement measurement tool | S | no | B19 |
 | B21 | Supervised in-game session: reach measurement, sim realism, sign-off (human-only) | S | no | B14, B18, B19, B20 |
-| B22 | Docs: CLAUDE.md, spec B "as built" | M | no | B21 |
+| B22 | Docs: CLAUDE.md, spec B "as built" (split: B22a now, B22b after B21) | M | no | B22a: B14, B18; B22b: B21 |
 
 **Counts:** M 5 (B1, B2, B3, B8, B22) · O 6 (B4, B5, B6, B7, B15, B18) · S 11 (B9-B14, B16, B17, B19, B20,
 B21). Cloud yes 16, Cloud no 6. **Shortfall: M has 5 tasks, one short of 6;** the work does not split into another
@@ -1673,8 +1674,20 @@ frames.
 records B21's in-game results.
 **Interface created:** none.
 
+*Amended (B22-inv-D1, Hong, 2026-10-26): B22 is split, because Hong parked the in-game session (B21) and chose to write the docs now.*
+- **B22a (done 2026-10-26; depends on B14 and B18):** spec B's "As built" section (the B14 and B18 results, the deviations,
+  reach and movement values as not measured on FF2, and a "Not done yet" list naming B21 steps 2-8 and the open items under
+  "Not verified at planning time") and the harness commands in `src/route/CLAUDE.md`. The root `CLAUDE.md` needs no change:
+  its "Route" paragraph and the sim smoke command are already there. B14's result is a fresh 1000-lap run at the commit
+  the docs were written on, not the numbers recorded earlier. No number is written for B21's results.
+- **B22b (after B21; Cloud: no):** replace the "Not done yet" list with B21's outputs: FF2 reach (steps 3 and 4), movement
+  values (step 5), detection on moving frames (step 6), the 10-lap sign-off (step 8). Every number comes from a B21 output
+  quoted in the commit body.
+
+Both parts follow the rule and the run below.
+
 - [ ] Every number written comes from a B14/B18/B21 output quoted in the commit body.
-- **Run:** `python -m pytest -q` (Windows) still passes.
+- **Run:** `python -m pytest -q` (Windows) still passes. The current convention is `python tools/check.py --full` (root `CLAUDE.md`).
 - **Commit:** `docs(route): document route walking as built and the FF2 measurements`
 
 ---
