@@ -1570,6 +1570,8 @@ Undo: Hong says so; the skill's list goes back to "any criterion in agent-rules 
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`; `notes/QA60-a.md` section 5a.
 
+Extended by H32: a question the asker cannot place on this list is also sent to him (Hong, 2026-10-26: "if an agent doesnt know if something needs me, assume it does").
+
 ## H23 (2026-10-26): The morning summary lists the safer-option choices, the edge cases and the command changes (question-review page Q2)
 
 Question: what goes in the morning summary besides what needs Hong? (Q2: A, the choices of the safer option, edge cases, and changes to a command he might run; B, every decision an agent made; C, only the safer-option choices.)
@@ -1636,6 +1638,8 @@ Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:610`.
 
+Answered by H35: his answers to model page Q2 to Q9, to the three cards under "About the table text" and his yes to the whole model-table text (2026-10-27).
+
 ## H27 (2026-10-26): Agents must not overturn a decision Hong made without asking him (question-review page Q6)
 
 Question: Hong had said decisions already in this file stay with him. Which did he mean? (Q6: A, agents must not overturn a decision he made without asking; B, every new entry in this file needs him.)
@@ -1684,6 +1688,8 @@ Undo: Hong says so; Haiku is banned again.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:617`; `notes/MX61-R.md`.
 
+Confirmed by H35 (2026-10-27): Haiku at high effort builds routine units first, Sonnet at high effort is its backup and the model it is compared against (QB80), and he said yes to the whole model-table text that this entry was waiting on. The routine row is provisional until about 7 to 10 routine comparisons. The unit that applies it to the skill, MX65-apply, was dispatched at ledger-B.md:733.
+
 ## H30 (2026-10-26): Hong approves the model-ladder spend: about $87 before 2026-11-04, about $80 of data gathering, and a $200 stop that returns to him (model page MX61 money)
 
 Question: may the model comparison spend the money its plan needs?
@@ -1700,6 +1706,8 @@ Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:617`.
 
+Superseded in part by H35 (2026-10-27): the stop is $300, not $200, and every task is compared, not every third (about $72 to $120 more than every third would cost, PGQ65). The code-review comparison at about $87 stays: he confirmed it (model page Q7).
+
 ## H31 (2026-10-26): Away mode from the late evening of 2026-10-26: autonomous within the new criteria
 
 Question: what should the orchestrator do while Hong is away? (His away policy had changed several times since H6.)
@@ -1715,3 +1723,95 @@ Cost if wrong: a decision made that he would have wanted to see; the morning sum
 Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:614`.
+
+Narrowed by H32 and H33: a case nobody can place on the six-point list is not decided by agents while he is away; it waits for him.
+
+## H32 (2026-10-26): If an agent doesn't know whether something needs Hong, it assumes it does; every question put to him goes into a question bank (QB79)
+
+Question: when the asker cannot tell whether a question needs Hong, should it rule on it itself? (QB79: yes or no to the proposed line "if unsure, rule on it yourself at the morning-summary level and put it at the top of the morning summary".)
+
+Ruling [Hong]: no. Hong's decision, logged by retired orchestrator 61 after orchestrator 63 paused (ledger-B.md:681; the question bank dates it 2026-10-26, and ANS64 found the answer at 2026-10-26T09:54:10 in his session 9bd46827, line 631): "No, err on the side of caution"; "if an agent doesnt know if something needs me, assume it does." He added a standing process: every question put to him goes into a running question bank with his answer, and later periodic reviews like the question-review page (H22 to H28) use the bank to add examples of which kinds of question need him and which don't. (The sentence about the bank is the ledger's wording of his request, not his typed words.)
+
+Orchestrator's rulings on how the bank works (not Hong's words; ledger-B.md:683 `Ruling [process]`, and :695 for the second point):
+- The bank is one file for all jobs, outside this repo: `C:/Users/Qing_programming/.claude/orchestrator/question-bank.md`, because it is about how orchestrators sort questions, not about one repo.
+- An entry holds the date, the job and part, who asked, the question as put to him, the options and recommendation, his answer verbatim, the send-to-Hong item (or `unsure`) and what it changed. An entry is added as `open` when a question is put to him and filled in when he answers (the skill review SKL64-R found that adding entries only when he decides would miss questions he has not answered yet).
+- A review runs at the end of each feature or after 20 new entries since the last review, whichever comes first. The first one after the question-review page is due at the end of Feature B or at QB85. Any change to the send-to-Hong list that a review proposes still needs his yes.
+
+Reason: not given in the ledger line. The memory note `unsure-means-ask-hong.md` records it as: he would rather err on the side of caution while the criteria for what needs him are still being learned from real examples.
+
+Affects: the orchestrator skill carries both now (unit SKL64, confirmed Approved by SKL64-R2, ledger-B.md:713): `SKILL.md` "Send it to Hong" (an unsure case counts as on the list; its bank entry records the item as `unsure`) and the new "Question bank" rule under "Decisions and escalation", plus `references/records.md` and the T1 row of `references/tunables.md`. The proposed "rule it yourself" line is gone from the skill. `agent-rules.md` needed no change (its section 3 already covers an unsure case), so no preset rebuild. It extends H22: a question the asker cannot place on the six-point list is also sent to him. It narrows H31 for the unsure case (see H33 for away mode).
+
+Cost if wrong: more questions reach him than he needs; the bank reviews are meant to show which kinds he did not need.
+
+Undo: Hong says so; the "if you can't tell" clause in `SKILL.md` "Send it to Hong" and the "Question bank" rule are removed.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:681` (his words), `:683` (the bank rule), `:685` (ANS64, the earlier answer), `:691` to `:700` (SKL64, SKL64-R, SKL64-fix); question bank QB79; `notes/SKL64.md`, `notes/SKL64-R.md`, `notes/SKL64-R2.md`.
+
+## H33 (2026-10-27): While Hong is away under "decide as Hong", a case nobody can place on the list waits for him (SKL64-D1, QB81)
+
+Question: when the asker cannot tell whether a question needs him and he is away under "decide as Hong", does the case wait for him (A, the recommendation, like items 1, 5 and 6 of the H22 list) or go to the adjudicator path that items 2 to 4 take (B)? (SKL64-D1, raised by SKL64 and made provisionally as A; QB81.)
+
+Ruling [Hong]: option A. Hong's decision (AskUserQuestion, orchestrator 64, 2026-10-27; ledger-B.md:699): "Yes, it waits (Recommended)". The skill had carried A provisionally since SKL64; it is final now.
+
+Reason: the recommendation's own reason was his rule in H32, "assume it needs me". Hong gave none beyond the answer.
+
+Affects: `SKILL.md` "Send it to Hong" and "When Hong is away" (an unsure case waits under "decide as Hong", with items 1, 5 and 6). FIX64 removed the provisional mark (ledger-B.md:706, confirmed by SKL64-R2 at :713). It narrows H31, whose "everything else agents decide" no longer covers a case nobody can place.
+
+Cost if wrong: an unsure case sits until he is back instead of being ruled by an adjudicator.
+
+Undo: Hong says so; the "waits" clause in `SKILL.md` "Send it to Hong" and the words "unsure cases" in the "When Hong is away" sentence are removed, so an unsure case goes the adjudicator path of items 2 to 4 (SKL64-D1's undo, as the ledger recorded it at :691).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:691` (the provisional decision), `:692` (sent to him), `:699` (his answer); question bank QB81; `notes/SKL64.md`.
+
+## H34 (2026-10-27): The 45 local `probe/*` branches were backed up into one bundle file and then deleted, under Hong's explicit yes (QB6)
+
+Question: what happens to the 45 local `probe/*` branches (the change-cost probe, made by agents on 2026-10-25; none merged, and each is the only copy of its commit, so H25 alone did not cover deleting them)? Options: A, back up all 45 into one bundle file and then delete them (the recommendation); B, delete them outright; C, keep them. (The `ab/*` half of QB6 was answered by H25: `ab/*` is kept regardless.)
+
+Ruling [Hong]: option A. Hong's decision (AskUserQuestion, orchestrator 64, 2026-10-27; ledger-B.md:699): "Back up, then delete (Recommended)". The ledger records it as his explicit yes for this delete.
+
+Done by unit PRB64-del (ledger-B.md:705): the bundle is `C:/Users/Qing_programming/helix-backups/probe-branches-2026-10-27.bundle` (about 94 MiB, the full history of each branch). `git bundle verify` said "The bundle records a complete history."; `git bundle list-heads` showed 45 refs with the expected tips; a test restore into a throwaway bare repo gave 45 identical branches. Then 45 `git branch -D`: a `for-each-ref` before and after differ by exactly the 45 `refs/heads/probe/*` lines, so the 59 `ab/*` branches and everything else kept their SHAs. No push, fetch or checkout; the working tree stayed clean on `p1b-route-walking`. The 45 names and tips are in `notes/PRB64-del.md`.
+
+Restore: `git fetch C:/Users/Qing_programming/helix-backups/probe-branches-2026-10-27.bundle 'refs/heads/probe/*:refs/heads/probe/*'`
+
+Reason: not given beyond the answer. The facts behind the question (ledger-B.md:689): nothing in the repo reads the probe branches; `ab/RESULTS.md` cites result files, not the branches.
+
+Affects: local branches only; none were ever on `origin` or `upstream`. H25 is unchanged: the yes covers these 45 branches. Whether a bundle counts as "a copy elsewhere" under H25 was unsure, so it was sent to him (ledger-B.md:690); his answer is for these 45, and the ledger records no general ruling on it.
+
+Cost if wrong: the branches are gone from the repo; the only copy is the bundle file, which lives outside the repo (`C:/Users/Qing_programming/helix-backups/`).
+
+Undo: the restore command above.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:689` and `:690` (the facts and the question), `:699` (his answer), `:705` (the delete); question bank QB6; `notes/PRB64.md`, `notes/PRB64-del.md`.
+
+## H35 (2026-10-27): Hong's answers on the model table: which model does which work, every task compared, and a $300 spend stop (model page Q2 to Q9 and the rest of the MX61 text)
+
+Question: which model does which work, how much of it is compared, and what may that cost? The model page that orchestrator 64 published (https://claude.ai/artifact/L3EpkwqPiph6mZS5CAqgVS) had eight numbered cards (Q2 to Q9; Q1, cost counted in dollars rather than tokens, was answered on 2026-10-26: AN55-D1, ledger-B.md:585) and three more under "About the table text": Opus at medium; Sonnet high as Haiku's fallback and comparison model; the whole model-table text. H26 had left the nine model questions with him, and H29 and H30 were waiting on this yes.
+
+Ruling [Hong]: yes to the whole text, with the answers below. All are from 2026-10-27: pasted page answers (ledger-B.md:728) unless marked chat (talking to orchestrator 65). The quotes are as the question bank has them.
+- Ordinary work (several files, some design choices) [Q2]: "A. Sonnet xhigh".
+- The cost check against the next good setting [Q3]: "B. No, keep it literal". The rule's cost check stays as written.
+- Routine work [Q4]: "Change: need more test  for  routine row so we can  be sure." Asked whether comparing every task (below) was enough or he wanted extra routine-only runs, he answered in chat: "7-10 routine comparisons sounds good". So: no extra routine-only runs. Haiku at high effort builds routine units first (H29), and the routine row stays provisional until about 7 to 10 routine comparisons (2 measured so far, plus Feature B's) have been made.
+- Haiku's backup and comparison model: in chat he first wrote "use sonnnet high for routine tasks"; asked whether that meant Haiku builds routine tasks first with Sonnet high as its backup and comparison, or dropping Haiku, he chose the first (the page card read "Yes, Sonnet high for both"; same answer). The ledger and QB80 record this wording as his answer, which is the orchestrator's wording of the option he accepted: "Haiku still builds routine tasks first, as you agreed earlier, with Sonnet high as its backup and the model it's compared against." H29 (Haiku for routine coding) stands.
+- Subtle work (timing, control loops, concurrency, data loss) [Q5]: "A. Opus xhigh".
+- Plan reviews [Q6]: "B. Keep Opus xhigh".
+- The code-review comparison [Q7]: "Confirm: A. Run it". Six finished changes with bugs planted in them, each reviewed by six model settings, on this PC from 2026-10-28 to 2026-10-31 (no later than 2026-11-03, because the cloud credit ends 2026-11-04), about $87 to $89, the spend H30 approved.
+- The other gaps [Q8]: "Confirm: C. The plan's mix"; in chat: "im finee with optionn C" and the card's text "The plan's mix: fill mutation testing (on the compared tasks, inside the about $80 for Features C and D), re-run after C and D, and leave the Feature A baseline out." (ledger-B.md:719).
+- Ties [Q9]: "B. The cheaper in dollars".
+- Opus at medium: "B. Narrow it". Per the page card, Opus at medium no longer does routine coding; it stays for data gathering and the mechanical units.
+- Every task is compared, not every third (chat): "lets do every task, more data the better" (ledger-B.md:718). A second model builds every task.
+- The spend stop is $300, was $200 (chat): "yes raise to 300" (ledger-B.md:725). Comparing every task costs about $72 to $120 more than every third; the total comes to about $241 to $289 (PGQ65, ledger-B.md:714), which is past the old $200 stop.
+- The whole model-table text: "Yes" (with the chat changes, every task and the $300 stop).
+
+Orchestrator notes (not Hong's words):
+- "Provisional until about 7 to 10 routine comparisons" is the orchestrator's reading of his Q4 answer and his "7-10 routine comparisons sounds good" (`Ruling [spec-text]`, ledger-B.md:732).
+- The page's sentence on mutation testing was wrong twice, so the text is corrected when it is applied: the bugs are planted in a model's own code and its own tests must fail on them; the second judge reviews the whole task, not each bug (ledger-B.md:715). Q8 C means mutation testing as corrected.
+
+Reason: Hong gave a reason twice: "more data the better" (every task) and "so we can be sure" (the routine row). Otherwise not given.
+
+Affects: the orchestrator skill's model table and the model comparison rules (`references/model-ab.md`), the fixed model rule for Haiku (H29) and for Opus at medium, and the spend stop; the plan is `notes/MX61-plan.md`. Applying it to the skill is the unit MX65-apply (dispatched, ledger-B.md:733; backups in `notes/MX65-backup/`), so the skill text may still be the old one when you read this.
+
+Cost if wrong: money, up to the $300 stop; and a routine model picked on few units, which the provisional status and the comparison of every task are there to check.
+
+Undo: Hong says so; the skill's table goes back to the text in `notes/MX65-backup/`.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:718`, `:719`, `:725`, `:726`, `:728`, `:731` and `:732`; question bank QB9 (q2 to q9), QB77, QB78, QB80, QB82, QB83 and QB84; `notes/MAP65.md` (which answer belongs to which card), `notes/PGQ65.md` (the costs).
