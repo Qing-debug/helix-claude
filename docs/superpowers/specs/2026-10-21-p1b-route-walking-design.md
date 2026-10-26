@@ -84,7 +84,7 @@ Only code that really works is merged (user, 2026-10-21). Branch `p1b-route-walk
 
 ### Status
 
-The offline targets are met. The in-game session (plan task B21) has not been run: Hong parked it on 2026-10-26 (decision B22-inv-D1), and that decision is not a measurement of anything. Feature B is **ready for sign-off, not signed off, and not merged**. It stays on `p1b-route-walking` until the in-game sign-off passes (H4; "Shipping" above; decision B22-inv-D2).
+The simulator targets are met, and the detection target is met on one standing spot only (moving frames are not checked). The in-game session (plan task B21) has not been run: Hong parked it on 2026-10-26 (decision B22-inv-D1), and that decision is not a measurement of anything. Feature B is **ready for sign-off, not signed off, and not merged**. It stays on `p1b-route-walking` until the in-game sign-off passes (H4; "Shipping" above; decision B22-inv-D2).
 
 ### Results against the reliability targets
 
@@ -150,7 +150,7 @@ PASS
 The code is `src/route/`. Its layout, seams, frozen files, commands and traps are in `src/route/CLAUDE.md`, and the one-paragraph summary is in the root `CLAUDE.md`. Two choices a reader of the spec might not expect:
 
 - Terrain inference sits in its own layer (`RouteGraph.build`) on top of the unchanged `PathGraph` (PB-D1), so the map editor's edge preview does not show the slope and near-vertical links the bot uses.
-- When teleport-down and drop are both possible and cost within 30% of each other, the planner picks one at random (PB-D3, `ability_mix_band` in `src/route/params.py`). Both abilities are used on FF2: the simulator run above has 994 drops and 1110 teleports down.
+- When teleport-down and drop are both possible and cost within 30% of each other, the planner picks one at random (PB-D3, `ability_mix_band` in `src/route/params.py`). Both abilities are used in the simulator on the FF2 map: the simulator run above has 994 drops and 1110 teleports down.
 
 ### Deviations from the spec and the plan
 
@@ -178,7 +178,7 @@ The plan was amended after approval for B19, B15, B20 and B21 (the plan's "Amend
 - **Detection on moving frames**: only one standing position is checked. A moving recording is queued for Hong's next game session.
 - **The in-game sign-off** (10 consecutive laps with no manual intervention, read from `laps.jsonl` with `all_reached` true, and Hong's word): not run, so Feature B is not mergeable (H4).
 - **Plan "Not verified at planning time" items still open:** 1 (movement values); 2 (teleport semantics: that a horizontal teleport always travels the full reach, that teleport UP lands on the first platform at or below the end point, that teleport DOWN passes through the current platform; `SimWorld` assumes them); 3 (the platform extents in `tests/fixtures/ff2_terrain.json`, for example mid-left drawn to x 80); 4 (vertical reach on FF2 may not be measurable by landing; then 23 stays and B21 says so); 6 (how often the capture thread delivers no new frame between two 50 ms polls; no run counted it); 8 (whether F12 is bound in MapleStory); 10 (detection on moving frames). Item 5 (detection method) is answered for standing frames by the detection run above, and item 7 (1000-lap wall time) by the simulator run above (about 6 s). Item 9 is a note for Feature D.
-- **The F12 stop was checked against the "Helix input test sink" window, not MapleStory.** The B19 link check on 2026-10-26 (real board link and `StopControl`, run folder `data/route/linkcheck/20261026T001306Z`): `stop.json` has reason `stopped` and trigger source `hotkey`; the last leg's outcome is `stopped`, 44.9 ms after the trigger.
+- **The F12 stop was checked against the "Helix input test sink" window, not MapleStory.** The B19 link check on 2026-10-26 (real board link and `StopControl`, run folder `data/route/linkcheck/20261026T001306Z`): `stop.json` has reason `stopped` and trigger source `hotkey`; the last leg's outcome is `stopped`, 44.9 ms after the trigger. The run used the test fixture map with a simulated position source, so it checks the stop path and the key link, not walking; the evidence is `stop.json`, the last `legs.jsonl` line, and the run folder's `check_out.txt` and `listener.log`.
 - **Ctrl+C at a prompt of `measure_moves` on a real console, and its 0.3 s typed-ahead Enter drop,** have only run against pipes and fakes; Hong tries both once in B21 (B20-D3).
 - **Owed to Hong before B21 runs:** B21 step 2 now includes at least 5 hand teleports UP into open space (B20-D4).
 - **B22b** (plan task B22, after B21) replaces this list with B21's outputs.
