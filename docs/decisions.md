@@ -1490,6 +1490,8 @@ Undo: delete the two amendment paragraphs in step 4 of task B21 in the plan (`6a
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:384` and `:386`; `notes/B20-D2D3-adjudicator.md`, `notes/B20-fix-R.md`.
 
+Superseded in part by H37 (2026-10-27): Hong dropped the hand recording and the measuring tool, so step 2's five teleports up and step 4's check on those frames are no longer a requirement. What this entry says about `peak_y` being a lower bound is still true of the tool; the tool is just not run in B21 now.
+
 ## B19-D3 (2026-10-26): the walk refuses fewer than 1 lap with exit 2
 
 Question: `walk --laps 0` or a negative value was accepted, and the run still walked one approach leg and sent keys before it stopped. Should `walk` refuse `--laps` below 1 up front with a message and exit 2 (A), or keep accepting it (B)? The B19 reviewer raised it as minor M3 (`notes/B19-R.md`); the plan did not say.
@@ -1831,3 +1833,59 @@ Cost if wrong: a setup that is cheaper in dollars but uses more of his plan mete
 Undo: Hong says so; the cost clause goes back to tokens.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:516` (the question), `:584` to `:585` (USE60 and his decision); question bank QB9; `notes/USE60.md`.
+
+## H37 (2026-10-27): B21 is shortened to two 1-lap walks and then 10 recorded laps; the measuring tool and the hand recording are dropped (QB87, QB88)
+
+Question: the in-game walk test (plan task B21, parked by Hong on 2026-10-26) had eight steps: a 120 s hand recording with at least 5 teleports up (B20-D4), the measuring tool, a reach decision, a sim-realism comparison, a detection check on the recording, two 1-lap walks with one F12 press, and 10 laps. Hong asked first "what is this actually for?" and then why he would need to hand-record 5 teleports up and use the measuring tool. After the researcher's step-by-step explanation (`notes/WALK67.md`), the orchestrator asked him to confirm a shortened order (QB88).
+
+Ruling [Hong]: shortened. His words (question bank QB87): "no need for the hand recoridng and measuring tool, i measured it and it the pixels are correct". He confirmed the order in QB88 (AskUserQuestion, option "1-lap walks, then 10 (Recommended)"): B21 is now two 1-lap walks, each with one F12 press, then 10 laps with the recorder on. The 10 laps are the Feature B sign-off bar (H4; spec B Targets, "10 consecutive laps with no manual intervention", `all_reached` true on 10 consecutive laps in `laps.jsonl`). The recorder is the walk CLI's `--record`.
+
+Reason: his words above. He measured the teleport reach and the walk speed himself, so he takes his numbers (Kanna's 19 px sideways and 23 px up, `src/classes/classes.py`) as correct on Fossil Foundry 2. The walker re-plans from the measured position after each move, so a wrong reach number should waste moves and not break the run (`notes/WALK67.md`, section 4; read from `src/route/CLAUDE.md`, "The loop", not run live).
+
+What this leaves unmet (from `notes/WALK67.md`, "What the short order leaves unmet"; these now rest on his own measurement and on the walk itself):
+- Plan steps 2 (120 s hand recording), 3 (measuring tool), 4 (reach decision) and 5 (sim realism: compare the measured `walk_px_per_s`, `teleport_settle_s`, `drop_settle_s` and platform ends with the simulator) are not run. `SimParams` and `MovementParams` stay at their estimates (`src/route/params.py:16-19`, all marked ESTIMATE) and `tests/fixtures/ff2_terrain.json` stays hand-drawn from the node layout. The 1000-lap simulator result therefore still describes the estimated movement values, not measured ones.
+- Spec B Goal 2 and decision H3 (measure the reach on FF2 in the first supervised session) are met only by his own measurement, which no tool output records. The plan's "Not verified" items 1 (movement values) and 4 (vertical reach measurable by landing) are his claim, not an output.
+- Plan step 6 and the spec's detection target on moving frames ("Not verified" 10: found within 1 px in at least 99.5% of frames, never more than 3 px away) are not run in B21. The detection check has so far run on standing frames only (304 of 304, one standing spot). The frames the 10-lap `--record` run saves can feed `detection_check draft` and `check` later; checking the contact sheets stays Hong's.
+- B20-D4's requirement of 5 hand teleports up is superseded (pointer added at B20-D4). The B20-D3 tries (Ctrl+C at a measurement prompt, the 0.3 s typed-ahead Enter drop; spec B "Not done yet") are not done, because the tool is not run.
+- Still in B21 and checked only by the walk: F12 stopping a run while MapleStory has focus (plan "Not verified" 8; so far checked against the test sink window only), and teleport semantics (2) and platform extents (3) by watching.
+- B22b writes the docs after B21 under the rule "every number comes from a B14/B18/B21 output quoted in the commit body" (plan task B22). With the measurement dropped, B22b cannot quote FF2 reach or movement values from an output. That rule needs Hong's call before B22b is written; this entry does not change it.
+
+Affects: what B21 means, the Feature B sign-off path (still the 10 laps, so H4 stands) and which spec "not verified" items stay open. The plan and spec text and the code are not changed here.
+
+Cost if wrong: if the FF2 reach is not 19/23, the walker wastes moves or repeats a teleport up until the 60 s leg timeout, and the 10 laps might not all be reached (that would show on the 10-lap run itself). The 1000-lap simulator result would describe the wrong numbers. If he later wants the measurement, the tool is built and the plan steps are unchanged (`python -m src.route.harness.measure_moves --supervised`).
+
+Undo: Hong says so; B21 goes back to the plan's eight steps.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:771` and `:772`; question bank QB87 and QB88; `notes/WALK67.md`, `notes/B21Q66.md`. His step list is `notes/B21-steps67.md` in the orchestrator workspace.
+
+## H38 (2026-10-27): The shortened B21 walk test is the first thing he does at his next session (QB88)
+
+Question: when does B21 run? The PC was in use on 2026-10-27, so no key-sending test could run that day.
+
+Ruling [Hong]: the first item of his next session. His words (QB88): PC free "Not today"; then in chat: "i'll run this test when im next back, it sounds like  its extremely high priority seeing as it determines whether feature A and B have been built correctly so this is top priority the next time im onn".
+
+Reason: his words above: the walk is the test that shows whether Features A and B work in the real game.
+
+Affects: the order of work at his next session: B21 first, with him at the PC and MapleStory open. The walk tool needs his go and his presence (`src/route/CLAUDE.md`, Traps) and is not covered by H15. Agents run no key-sending tool in the meantime; Feature C planning goes on (H39).
+
+Cost if wrong: none; it is an ordering.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:772`; question bank QB88; his step list `notes/B21-steps67.md` in the orchestrator workspace.
+
+## H39 (2026-10-27): The Feature C (runes) plan is written locally, on this PC (QB89)
+
+Question: is the Feature C plan written by an agent here (nothing for Hong to do; it uses his plan usage) or in a cloud session (it uses the cloud credit that ends 2026-11-04, and he has to start it and paste a prompt)? The orchestrator had parked this as an unsure case (H32).
+
+Ruling [Hong]: here. His answer (AskUserQuestion, as the ledger records it; the QB89 entry in the question bank still read "open" when this was written): "Here, on this PC (Recommended)".
+
+Reason: not given beyond the answer.
+
+Affects: where the Feature C plan (spec `docs/superpowers/specs/2026-10-21-p1c-runes-design.md`) is written. C cannot merge before B (spec C "Shipping"), so B21 gates C's merge, not C's planning.
+
+Cost if wrong: it uses his plan usage and not the cloud credit.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:773`; question bank QB89.
