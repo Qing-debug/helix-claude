@@ -302,7 +302,7 @@ def test_legs_only_folder_rebuilds_header_and_events(tmp_path):
     run = read_run(_legs_folder(tmp_path)).unwrap()
     h = run.header
     assert h.source == "legs" and h.map == "maps/ff2.csv" and h.map_sha256 == "cd" * 32
-    assert h.character == "kanna" and h.params == PARAMS
+    assert h.character == "kanna" and h.params == PARAMS and h.git_head == "deadbeef"
     assert h.rotation is None and h.wall_ns is None and h.perf_ns is None
     assert run.origin == "legs" and run.ended is True and run.bad_lines == 0
     assert [e.ev for e in run.events] == [
@@ -362,7 +362,7 @@ def test_torn_last_line_is_skipped(tmp_path):
     (tmp_path / "steps.jsonl").write_bytes(_header_bytes() + b"".join(events[:4]) + events[4].rstrip(b"\n"))
     run = read_run(tmp_path).unwrap()
     assert [e.ev for e in run.events] == ["leg", "planned", "sent", "settled"]
-    assert run.ended is False
+    assert run.ended is False and run.bad_lines == 0  # a torn last line is skipped, not counted
 
 
 # 11 --------------------------------------------------------------------------------------------------------------
@@ -436,3 +436,14 @@ def test_tail_poll_reads_only_the_new_line(tmp_path, monkeypatch):
     got = tail.poll()
     assert [e.ev for e in got if isinstance(e, StepEvent)] == ["stall"]
     assert read_sizes == [len(new)]
+
+
+def test_legs_only_leg_record_with_a_null_to_is_a_bad_line(tmp_path):
+    _legs_folder(tmp_path)
+    lines = (tmp_path / "legs.jsonl").read_bytes().splitlines(keepends=True)
+    record = json.loads(lines[0])
+    record["to"] = None
+    (tmp_path / "legs.jsonl").write_bytes((json.dumps(record) + "\n").encode() + lines[1])
+    run = read_run(tmp_path).unwrap()
+    assert run.bad_lines == 1
+    assert [e.ev for e in run.events] == ["leg", "planned", "settled", "planned", "leg_end"]  # only the second leg

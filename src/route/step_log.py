@@ -32,9 +32,10 @@ Where the plan is silent (decided here, each local and reversible):
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from returns.result import Failure, Result, Success
 
@@ -391,8 +392,11 @@ def _read_legs(folder: Path) -> Result[RunSteps, str]:
 
 def _leg_events(leg: Mapping[str, Any]) -> list[StepEvent]:
     """The events of one `leg_log.leg_to_json` record. Raises on a malformed record (the caller counts it)."""
+    dst = _position(leg["to"])
+    if dst is None:
+        raise ValueError("a leg record's `to` must be a position")
     out = [StepEvent("leg", leg["start_ns"], {
-        "lap": leg["lap"], "leg": leg["leg"], "from": _position(leg["from"]), "to": _position(leg["to"]),
+        "lap": leg["lap"], "leg": leg["leg"], "from": _position(leg["from"]), "to": dst,
     })]
     moves = leg["moves"]
     if not isinstance(moves, list):
