@@ -33,8 +33,9 @@ Where the plan is silent (decided here, each local and reversible):
   never touches a file that a slow writer is still writing; when `close` gives up waiting, the thread still finishes
   the queue and closes the file. `close` reports the first write or encode failure if there was one, else "writer
   still busy" if the join timed out, and a repeated `close` returns the first one's result. A second `start` is a
-  `Failure` ("step log already started"); a header that cannot be encoded or written is a `Failure` too (a file that
-  was created stays, so a retry into the same folder fails as "exists").
+  `Failure` ("step log already started"); a header that cannot be encoded or written is a `Failure` too, and a
+  `steps.jsonl` that `start` created for it is removed again, so a retry into the same folder is not refused as
+  "exists". The writer closes the file even when its last flush fails (a full disk).
 """
 
 import json
@@ -501,7 +502,12 @@ class StepLog:
                 handle.close()
             except OSError:
                 pass
-            return Failure(f"cannot write the run line to {path}: {e}")
+            message = f"cannot write the run line to {path}: {e}"
+            try:
+                path.unlink(missing_ok=True)  # this start created it ("x"), so removing it touches nothing else
+            except OSError as gone:
+                return Failure(f"{message} (and {path} could not be removed: {gone})")
+            return Failure(message)
         self._file = handle
         self._thread = threading.Thread(target=self._drain, name="step-log", daemon=True)
         self._thread.start()
@@ -590,14 +596,21 @@ class StepLog:
                 self._write(event)
             except Exception as e:
                 self._fail(f"{type(e).__name__}: {e}")
+        handle = self._file
+        if handle is None:
+            return
         try:
-            handle = self._file
-            if handle is not None:
-                handle.flush()
-                os.fsync(handle.fileno())
-                handle.close()
+            handle.flush()
+            os.fsync(handle.fileno())
         except Exception as e:
             self._fail(f"{type(e).__name__}: {e}")
+        finally:
+            # closed in every path: on a full disk the flush above fails with the line still buffered, and the
+            # BufferedWriter's own close then raises too but still closes the OS file
+            try:
+                handle.close()
+            except Exception as e:
+                self._fail(f"{type(e).__name__}: {e}")
 
     def _write(self, event: object) -> None:
         if self._failure is not None:

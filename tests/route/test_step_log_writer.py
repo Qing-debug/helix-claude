@@ -2,9 +2,12 @@
 daemon thread appends them to `steps.jsonl`; start, close, calls after close, write failures, a slow disk, and no loss
 at shutdown."""
 
+import errno
+import io
 import math
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from returns.pipeline import is_successful
@@ -209,6 +212,64 @@ def test_13_an_encode_failure_is_kept_and_later_events_are_not_written(tmp_path,
     assert not is_successful(closed) and closed.failure() == log.failure
     assert len(capsys.readouterr().err.splitlines()) == 1
     assert _lines(tmp_path / STEPS_FILE)[1:] == [event_line(("reached", 1, (1, 2))).unwrap()]
+
+
+class FullDisk(io.RawIOBase):
+    """A raw file on a full disk: every write fails with ENOSPC; `close` closes the real file under it."""
+
+    def __init__(self, real):
+        self.real = real
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def fileno(self):
+        return self.real.fileno()
+
+    def close(self):
+        self.real.close()
+        super().close()
+
+
+def test_13_a_full_disk_still_closes_the_file_when_the_last_flush_fails(tmp_path, capsys):
+    # The line stays in the BufferedWriter's buffer (its raw write failed), so the writer's flush at the sentinel fails
+    # again; the file must still be closed (RV-2 review I1). Test 13's proxy raises before the line reaches the buffer.
+    log = StepLog()
+    assert is_successful(log.start(tmp_path, HEADER))
+    real = log._file.detach()  # the header is already flushed; the OS file now sits under a full disk
+    log._file = io.BufferedWriter(FullDisk(real))
+    _call(log, "reached", (1, (1, 2)))
+    closed = log.close()
+    assert not is_successful(closed) and "No space left" in closed.failure()
+    assert real.closed and log._file.closed
+    assert len(capsys.readouterr().err.splitlines()) == 1
+    assert _lines(tmp_path / STEPS_FILE) == [header_line(HEADER).unwrap()]
+
+
+def test_13_a_header_that_cannot_be_written_leaves_no_file_and_a_retry_works(tmp_path, monkeypatch):
+    # RV-2 review m2: a failed start leaves no steps.jsonl, so a retry into the same folder is not refused as "exists".
+    real_open = Path.open
+
+    def disk_full(data):
+        raise OSError("disk full")
+
+    def open_on_a_full_disk(self, *args, **kwargs):
+        return FileProxy(real_open(self, *args, **kwargs), disk_full)
+
+    before = len(_step_log_threads())
+    with monkeypatch.context() as m:
+        m.setattr(Path, "open", open_on_a_full_disk)
+        started = StepLog().start(tmp_path, HEADER)
+    assert not is_successful(started) and "disk full" in started.failure()
+    assert not (tmp_path / STEPS_FILE).exists()
+    assert len(_step_log_threads()) == before
+    retry = StepLog()
+    assert retry.start(tmp_path, HEADER) == Success(None)
+    assert retry.close() == Success(None)
+    assert _lines(tmp_path / STEPS_FILE) == [header_line(HEADER).unwrap()]
 
 
 # ---- 14. a slow disk ----------------------------------------------------------------------------------------------
