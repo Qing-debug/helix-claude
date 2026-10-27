@@ -73,3 +73,21 @@ layers = [
     "src.route.terrain",
     "src.route.params | src.route.leg_log | src.route.character | src.route.step_log",
 ]
+
+[[tool.importlinter.contracts]]
+name = "route_view boundaries"
+type = "forbidden"
+source_modules = ["src.route_view"]
+forbidden_modules = [
+    "src.gui", "src.main", "src.vision", "src.rune_solver",
+    "src.input.input_layer", "src.input.link", "src.input.actions", "src.input.timing", "src.input.harness",
+    "src.route.walker", "src.route.walk", "src.route.moves", "src.route.runtime", "src.route.sim",
+]
+
+[[tool.importlinter.contracts]]
+name = "route_view is a leaf"
+type = "forbidden"
+source_modules = [
+    "src.route", "src.controller", "src.gui", "src.main", "src.vision", "src.input", "src.classes", "src.rune_solver",
+]
+forbidden_modules = ["src.route_view"]
