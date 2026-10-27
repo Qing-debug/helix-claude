@@ -92,7 +92,8 @@ def _edges(agent, params):
     built = RouteGraph.build(agent.pathGraph, params)
     assert is_successful(built), built
     graph = built.unwrap().graph
-    return {(u.minimap_position, v.minimap_position, data["kind"], data["cost_s"]) for u, v, data in graph.edges(data=True)}
+    return {(u.minimap_position, v.minimap_position, data["kind"], data["cost_s"])
+            for u, v, data in graph.edges(data=True)}
 
 
 def _files(folder):
@@ -400,6 +401,24 @@ def test_a_walker_that_raises_still_ends_and_closes_the_step_log_and_not_a_passe
     with pytest.raises(RuntimeError, match="boom"):
         run_sim(CSV, TERRAIN, 1, 1, observer=observer)
     assert observer.calls == []
+
+
+def test_an_end_step_log_that_raises_still_closes_the_leg_log(tmp_path, monkeypatch):
+    closed = []
+    leg_log_close = run_module.JsonlLegLog.close
+    end_step_log = run_module._end_step_log
+
+    def raising_end(step_log, t_ns, ran):
+        end_step_log(step_log, t_ns, ran)  # the step log is really ended and closed; then stderr "breaks"
+        raise OSError("broken pipe")
+
+    monkeypatch.setattr(run_module, "_end_step_log", raising_end)
+    monkeypatch.setattr(run_module.JsonlLegLog, "close", lambda self: (closed.append(self), leg_log_close(self)))
+    out = tmp_path / "run"
+    with pytest.raises(OSError, match="broken pipe"):
+        run_sim(CSV, TERRAIN, 1, 1, out_dir=out)
+    assert len(closed) == 1
+    shutil.rmtree(out)  # raises if a handle is still open (Windows)
 
 
 def test_a_failed_close_is_printed_and_the_report_is_still_returned(tmp_path, monkeypatch, capsys):

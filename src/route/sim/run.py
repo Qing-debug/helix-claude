@@ -10,8 +10,8 @@ report into six pass/fail checks, and `main` is the CLI:
         [--known-case X1,Y1:X2,Y2]... [--min-single-error-legs K] [--class kanna]
 
 With `out_dir` (`--out`) the run writes `legs.jsonl` and `laps.jsonl` (the leg log), `map.csv` and `steps.jsonl` (the
-step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end` event.
-`observer` gives the same events to a caller that wants them without a folder.
+step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end`
+event. `observer` gives the same events to a caller that wants them without a folder.
 
 Recovery metric: every leg whose world effects carry an injected error is replayed in a fresh noise-off world from
 the position the leg began at (same terrain, same route graph, offsets included), and `extra = moves - nominal`,
@@ -189,7 +189,7 @@ def _load_shifted_agent(map_csv: Path, character: CharacterClass, k: int,
             loaded = _load_agent(shifted, character)
             csv_bytes = shifted.read_bytes()
     except OSError as err:
-        return Failure(f"cannot write the node-offset copy of {map_csv}: {err}")
+        return Failure(f"cannot read or write the node-offset copy of {map_csv}: {err}")
     if not is_successful(loaded):
         return Failure(f"with node offsets: {loaded.failure()}")
     return Success((loaded.unwrap(), csv_bytes))
@@ -275,9 +275,9 @@ def _run_header(character: CharacterClass, params: MovementParams, rotation: Seq
 
 def _open_out_dir(out_dir: Path, map_csv: Path, shifted_bytes: bytes | None, character: CharacterClass,
                   params: MovementParams, rotation: Sequence[Node]) -> Result[tuple[JsonlLegLog, StepLog], str]:
-    """Open the `--out` folder: a folder that already has `steps.jsonl` is refused before any file in it is touched, then
-    the leg log is opened, `map.csv` is written and the step log is started (its exclusive open of `steps.jsonl` is
-    the backstop of the check). On a `Failure` nothing stays open."""
+    """Open the `--out` folder: a folder that already has `steps.jsonl` is refused before any file in it is touched,
+    then the leg log is opened, `map.csv` is written and the step log is started (its exclusive open of `steps.jsonl`
+    is the backstop of the check). On a `Failure` nothing stays open."""
     try:
         map_bytes = map_csv.read_bytes() if shifted_bytes is None else shifted_bytes
     except OSError as err:
@@ -382,10 +382,12 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
     try:
         ran = walker.run()
     finally:
-        if step_log is not None:
-            _end_step_log(step_log, clock.now_ns(), ran)
-        if log is not None:
-            log.close()
+        try:
+            if step_log is not None:
+                _end_step_log(step_log, clock.now_ns(), ran)
+        finally:
+            if log is not None:
+                log.close()
     if not is_successful(ran):
         return Failure(ran.failure())
     summary = ran.unwrap()
@@ -475,7 +477,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--map", type=Path, default=fixtures / "fossil_foundry_2.csv")
     parser.add_argument("--terrain", type=Path, default=fixtures / "ff2_terrain.json")
     parser.add_argument("--out", type=Path, default=None,
-                        help="write legs.jsonl, laps.jsonl, steps.jsonl and map.csv here (a folder that has steps.jsonl is refused)")
+                        help="write legs.jsonl, laps.jsonl, steps.jsonl and map.csv here "
+                             "(a folder that has steps.jsonl is refused)")
     parser.add_argument("--known-case", type=_known_case, action="append", metavar="X1,Y1:X2,Y2",
                         help="a rotation leg that must be reached in every lap (repeatable)")
     parser.add_argument("--min-single-error-legs", type=int, default=100)
