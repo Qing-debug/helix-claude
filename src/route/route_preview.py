@@ -20,6 +20,7 @@ Where the plan is silent (each decided here):
 - Both ends of the aim node's platform equally near the landing x: the platform's first (left) end.
 - The from-anchor's platform is left out of the landing order when the anchor has none (`attach` always sets one).
 - An up/down landing with no surface at the launch x either (`_launch_x` never gives such an x) is `h` itself.
+- An aim node missing from `path` (never so today) counts as at index 0: no earlier path platform is tried.
 - The stub generators are two classes, one per value, each defining `random()` and nothing else.
 - V4's past-end landing (the end node's y) is a stated assumption: 2 of the FF2 sweep's 7 would fall (RV3-D5 notes).
 """
@@ -225,7 +226,7 @@ def _landing_horizontal(
     if lx == an.minimap_position[0]:
         return an.minimap_position
     terrain = rg.terrain
-    ai = next(i for i, node in enumerate(path) if node is an)
+    ai = next((i for i, node in enumerate(path) if node is an), 0)
     order = [terrain.platform_index(an), *(terrain.platform_index(node) for node in reversed(path[:ai]))]
     if platform is not None:
         order.append(platform)

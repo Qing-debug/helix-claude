@@ -8,6 +8,7 @@ that disagrees with V4's rule text is a plan error to report, not a reason to ch
 import inspect
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -315,6 +316,7 @@ def test_the_table_literals(built, case_id):
     if expected == ARRIVED:
         assert pv.arrived
         assert (pv.starts, pv.start, pv.path, pv.hops, pv.cost_to_go_s) == ((), None, (), (), 0.0)
+        assert pv.complete is True  # the docstring's "arrived is complete"
         return
     cost, hops = expected
     assert not pv.arrived
@@ -393,6 +395,16 @@ def test_a_node_position_has_one_start_at_its_cost_to_the_target(built):
     start = case.node((49, 28))
     assert [(s.node, s.cost_s) for s in pv.starts] == [(start, case.rg.cost_to(start, case.target).unwrap())]
     assert pv.start is start
+
+
+def test_a_start_cost_tie_goes_to_the_left_start():
+    # two lower nodes, one a lift under each end of the upper platform, the target in the middle of it, and the
+    # character midway between the lower nodes: both starts cost 2.55 s, and the left one is chosen (V4, _starts order)
+    nodes, rg = _synthetic([(10, 40), (26, 40), (10, 20), (18, 20), (26, 20)])
+    pv = preview(rg, (18, 40), nodes[3]).unwrap()
+    assert [s.node for s in pv.starts] == [nodes[0], nodes[1]]
+    assert pv.starts[0].cost_s == pv.starts[1].cost_s
+    assert pv.start is nodes[0] and pv.path[0] is nodes[0]
 
 
 @pytest.mark.parametrize("case_id", ROUTES)
@@ -516,6 +528,18 @@ def test_s3b_every_later_hop_agrees_with_next_move(built, case_id):
     assert follows(pv.path, pv.hops) is (case_id != "D1")
 
 
+def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray_path(built):
+    case = built["T1"]
+    pv = _preview(case)
+    assert s3b_problems(case.rg, pv, case.target) == []
+    wrong = replace(pv.hops[2], options=(TP_L,))
+    assert s3b_problems(case.rg, replace(pv, hops=(*pv.hops[:2], wrong, *pv.hops[3:])), case.target)
+    assert s3b_problems(case.rg, replace(pv, hops=pv.hops[:-1], complete=False), case.target)
+    assert follows(pv.path, pv.hops)
+    assert not follows(pv.path[:1], pv.hops)  # a hop whose `toward` is not on the path
+    assert not follows(tuple(reversed(pv.path)), pv.hops)  # hops going back down the path
+
+
 # ---- 10. FF2 sweep ----
 
 NOT_FOLLOWING = {
@@ -544,7 +568,8 @@ def test_ff2_sweep_every_ordered_node_pair():
             pairs += 1
             problems += _first_hop_problems(rg, a.minimap_position, b)
             result = preview(rg, a.minimap_position, b)
-            if not is_successful(result) or result.unwrap().arrived:
+            if not is_successful(result) or result.unwrap().arrived:  # V4: every FF2 pair has a route and a hop
+                problems.append(f"{a.minimap_position} -> {b.minimap_position}: no hops: {result}")
                 continue
             pv = result.unwrap()
             problems += s3b_problems(rg, pv, b)
