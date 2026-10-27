@@ -2057,7 +2057,7 @@ Ruling [local] (orchestrator rulings, not Hong's; each goes to the spec reviewer
 - RV1-D4 A: a pure `src/route/route_preview.py` that calls the planner's private helpers the way `next_move` does, pinned by check S3 (the preview must agree with the planner over a 20-lap simulator run); the seam is noted in `src/route/CLAUDE.md`. Reason: no frozen edit, and S3 fails loudly if the two drift. Cost if wrong: a later public planner function.
 - RV1-D5 A: the pure parts (`step_log.py`, `route_preview.py`) in `src/route`; the Tk app in a new top-level `src/route_view` package with its own import-linter contract. Reason: it keeps GUI code out of the walk package and route out of `src/gui`. Cost if wrong: moving one package.
 
-Affects: spec sections 5.2, 5.3, 5.8 and 6 and the three blocks in section 8; the plan (RV3) and `pyproject.toml` (one contract).
+Affects: spec sections 5.2, 5.3, 5.8 and 6 and the three blocks in section 8; the plan (RV3) and `pyproject.toml` (contract f gains `step_log` and `route_preview`, plus two new route_view contracts; spec section 5.8). Corrected by RV2g after the re-review (RV2r m18); the earlier text said "one contract".
 
 Spec review (RV2, 2026-10-27): agrees with all three; D4 on condition that check S3 is widened, which the spec now does (S3, S3b).
 
