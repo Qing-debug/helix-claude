@@ -61,11 +61,12 @@ def main(argv: list[str] | None = None, *, make_root: Callable[[], tk.Tk] = tk.T
         print(f"error: {loaded.failure()}", file=sys.stderr)
         root.destroy()
         return 2
-    RouteViewWindow(root, folder, loaded.unwrap(), live=False)  # shows the last step
+    window = RouteViewWindow(root, folder, loaded.unwrap(), live=False)  # shows the last step
     print(f"window built in {time.perf_counter() - _T0:.2f} s", flush=True)
     root.deiconify()
     if run_loop:
         root.mainloop()
+    del window  # referenced until here: its `shown_photo` must outlive the mainloop, and Tk's callbacks are no contract
     return 0
 
 

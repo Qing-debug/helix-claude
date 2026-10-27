@@ -601,3 +601,221 @@ def test_the_title_names_the_mode_folder_lap_leg_target_and_state(tmp_path, make
     assert legs._root.title().startswith("Route view · REPLAY (from legs.jsonl) · ")
     cut = make_window(make_folder(_sub(tmp_path, "cut"), G[:12]))
     assert cut._root.title().split(" · ")[1] == "REPLAY (did not end)"
+
+
+# RV-7 review fixes: what the window draws and where (I1) and the stale read-failure status (m1) ------------------------
+
+CHECKER = ((0, 0, 255), (255, 0, 0))
+
+
+def _checkerboard_png(path, size=(162, 82)) -> None:
+    """A one-pixel checkerboard of two colours: an enlargement that is not nearest-neighbour mixes them at block edges."""
+    width, height = size
+    image = Image.new("RGB", size)
+    image.putdata([CHECKER[(i % width + i // width) % 2] for i in range(width * height)])
+    image.save(path)
+
+
+def _photo_pixel(window, x, y) -> tuple[int, ...]:
+    """The colour of pixel (x, y) of the picture the canvas holds (Tk's `<image> get x y`; ImageTk has no `get`)."""
+    return tuple(int(c) for c in window._root.tk.call(str(window.shown_photo), "get", x, y))
+
+
+def _top_to_bottom(window) -> list:
+    """The root's packed widgets as they stack in the window: the top-side ones in pack order, then the bottom-side ones
+    with the last packed first (the packer fills the top edge downwards and the bottom edge upwards)."""
+    slaves = window._root.pack_slaves()
+    return ([w for w in slaves if w.pack_info()["side"] == "top"]
+            + [w for w in slaves if w.pack_info()["side"] == "bottom"][::-1])
+
+
+def test_the_picture_is_enlarged_with_nearest_neighbour_and_anchored_at_the_top_left(tmp_path, make_window):
+    folder = make_folder(tmp_path)
+    _checkerboard_png(folder / "minimap.png")
+    window = make_window(folder)
+    canvas = window.canvas
+    for s in (4, 2, 3, 4):
+        window.scale_buttons[s].invoke()
+        photo = window.shown_photo
+        assert (photo.width(), photo.height()) == (162 * s, 82 * s) == _canvas_size(window)  # enlarged by the scale
+        (bg,) = canvas.find_withtag("bg")
+        assert canvas.itemcget(bg, "image") == str(photo)
+        assert canvas.itemcget(bg, "anchor") == "nw" and canvas.coords(bg) == [0.0, 0.0]
+        assert canvas.bbox(bg) == (0, 0, 162 * s, 82 * s)  # minimap pixel (x, y) is canvas (x * s, y * s), as the nodes
+        assert canvas.find_all()[0] == bg  # the lowest item: everything else is drawn over it
+        for px, py in ((0, 0), (1, 0), (0, 1), (5, 3), (161, 81)):  # the first blocks and the last
+            for dx in (0, s - 1):
+                for dy in (0, s - 1):  # a block's edge pixels keep their own colour: nearest-neighbour, pixels sharp
+                    assert _photo_pixel(window, px * s + dx, py * s + dy) == CHECKER[(px + py) % 2], (s, px, py, dx, dy)
+
+
+def test_nodes_and_their_numbers_are_drawn_at_the_node_positions_in_the_editors_sizes(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    canvas, marks = window.canvas, window.model.nodes
+    blue = [m for m in marks if m.blue]
+    assert len(marks) == 21 and len(blue) == 7
+    for s in (4, 2):
+        window.set_scale(s)
+        nodes = canvas.find_withtag("node")
+        assert len(nodes) == 21
+        for item, mark in zip(nodes, marks, strict=True):
+            x, y, r = mark.pos[0] * s, mark.pos[1] * s, (3 if mark.blue else 2) * s  # NODE_R 3, ORANGE_R 2 (plan)
+            assert canvas.coords(item) == [x - r, y - r, x + r, y + r], (s, mark)
+            colours = ("lightblue", "blue") if mark.blue else ("orange", "darkorange")
+            assert (canvas.itemcget(item, "fill"), canvas.itemcget(item, "outline")) == colours
+        labels = canvas.find_withtag("label")
+        assert len(labels) == 7
+        for item, mark in zip(labels, blue, strict=True):  # beside the node, at x + r + 2 as the editor
+            assert canvas.coords(item) == [mark.pos[0] * s + 3 * s + 2, mark.pos[1] * s]
+            assert canvas.itemcget(item, "anchor") == "w" and canvas.itemcget(item, "fill") == "white"
+            assert canvas.itemcget(item, "text") == mark.label
+
+
+def test_the_ring_hop_numbers_aim_and_recent_moves_are_drawn_where_the_step_puts_them(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    canvas = window.canvas
+    window.show(6)  # settled at (80, 24); the plan in force aims at (79, 24); target #6 is at (101, 24)
+    view = window.model.step(6)
+    assert [h.from_pos for h in view.hops] == [(68, 27), (79, 24), (98, 24)]
+    assert [h.landing for h in view.hops] == [(79, 24), (98, 24), (101, 24)] and view.aim == (79, 24)
+    assert view.target is not None and view.target.pos == (101, 24)
+    for s in (4, 2, 3):
+        window.set_scale(s)
+        (ring,) = canvas.find_withtag("target")  # RING_R 5 (plan), around the target
+        x, y, r = 101 * s, 24 * s, 5 * s
+        assert canvas.coords(ring) == [x - r, y - r, x + r, y + r], s
+        numbers = canvas.find_withtag("hopnum")  # each hop's number sits at the point its hop lands on
+        assert [canvas.coords(i) for i in numbers] == [[79 * s, 24 * s], [98 * s, 24 * s], [101 * s, 24 * s]], s
+        assert [canvas.itemcget(i, "text") for i in numbers] == ["1", "2", "3"]
+        assert {canvas.itemcget(i, "anchor") for i in numbers} == {"s"}  # the digits stand above that point
+        x, y, r = 79 * s, 24 * s, 2 * s  # the aim: an x about the aim, two diagonals
+        assert sorted(canvas.coords(i) for i in canvas.find_withtag("aim")) == sorted(
+            [[x - r, y - r, x + r, y + r], [x - r, y + r, x + r, y - r]]), s
+    window.show(20)  # three finished moves are faint behind it, oldest first
+    view = window.model.step(20)
+    assert view.recent == (((49, 28), (68, 27)), ((68, 27), (80, 24)), ((101, 24), (105, 24)))
+    for s in (4, 2):
+        window.set_scale(s)
+        recent = canvas.find_withtag("recent")
+        assert [canvas.coords(i) for i in recent] == [
+            [a[0] * s, a[1] * s, b[0] * s, b[1] * s] for a, b in view.recent], s
+        assert {canvas.itemcget(i, "dash") for i in recent} == {"4 3"}  # dashed, as built (the plan: "dashed")
+        assert {canvas.itemcget(i, "fill") for i in recent} == {"gray60"}
+
+
+def test_9_the_warning_label_is_above_the_canvas_and_the_bar_stays_under_the_log(tmp_path, make_window):
+    warned = make_window(make_folder(_sub(tmp_path, "a"), None, default_header(map_sha256="f" * 64)))
+    order = [warned.warn_label, warned.main, warned.why_frame, warned.bar, warned.status_label]
+    assert _top_to_bottom(warned) == order  # warning, canvas and panel, why log, replay bar, status line
+    packed = warned._root.pack_slaves()  # the packing order too: it decides who is squeezed when the window is small
+    assert packed == [warned.status_label, warned.bar, warned.warn_label, warned.main, warned.why_frame]
+    warned.set_live(True)
+    assert _top_to_bottom(warned) == [w for w in order if w is not warned.bar]
+    warned.set_live(False)
+    assert _top_to_bottom(warned) == order  # the bar comes back where it was
+    assert warned._root.pack_slaves() == packed  # ... right after the status line in the packing order
+    clean = make_window(make_folder(_sub(tmp_path, "b")))
+    assert _top_to_bottom(clean) == [clean.main, clean.why_frame, clean.bar, clean.status_label]
+    clean.add_warning("clicking here takes focus from the game")
+    assert _top_to_bottom(clean) == [clean.warn_label, clean.main, clean.why_frame, clean.bar, clean.status_label]
+    clean.add_warning("second")
+    assert _top_to_bottom(clean) == [clean.warn_label, clean.main, clean.why_frame, clean.bar, clean.status_label]
+
+
+def test_6_the_log_scrolls_to_the_current_line(tmp_path, make_window, monkeypatch):
+    window = make_window(make_folder(tmp_path))
+    seen = []
+    real = window.why_text.see
+    monkeypatch.setattr(window.why_text, "see", lambda index: (seen.append(index), real(index))[1])
+    for k in (3, 20, 0):
+        window.show(k)
+        assert seen[-1] == f"{window.model.step(k).why_line + 1}.0"
+    assert len(seen) == 3
+
+
+def test_7_the_lap_and_leg_entries_follow_the_step(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    for k, leg in ((1, 5), (13, 5), (17, 6), (25, 6)):
+        window.show(k)
+        view = window.model.step(k)
+        assert (view.lap, view.leg) == (0, leg)
+        assert (window.lap_var.get(), window.leg_var.get()) == ("0", str(leg))
+
+
+def test_7_the_pressed_play_button_is_drawn_sunken_until_playback_ends(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    calls = window.after_calls
+
+    def reliefs() -> dict[int, str]:
+        return {speed: str(button.cget("relief")) for speed, button in window.play_buttons.items()}
+
+    window.btn_first.invoke()
+    assert reliefs() == {1: "raised", 4: "raised"}
+    window.play_buttons[4].invoke()
+    assert reliefs() == {1: "raised", 4: "sunken"}
+    window.play_buttons[1].invoke()  # the other speed takes over
+    assert reliefs() == {1: "sunken", 4: "raised"}
+    window.play_buttons[1].invoke()  # pressed again: stop
+    assert reliefs() == {1: "raised", 4: "raised"}
+    window.play_buttons[4].invoke()
+    window.btn_next.invoke()  # moving by hand
+    assert reliefs() == {1: "raised", 4: "raised"}
+    window.btn_first.invoke()
+    window.play_buttons[4].invoke()
+    window.lap_var.set("0")
+    window.leg_var.set("6")
+    window.go_to_leg()  # a jump by hand stops it too
+    assert window.index == 16 and window._speed is None and reliefs() == {1: "raised", 4: "raised"}
+    window.btn_first.invoke()
+    window.play_buttons[4].invoke()
+    for _ in range(40):
+        if window._speed is None:
+            break
+        calls[-1][1]()
+    assert window.index == 25 and reliefs() == {1: "raised", 4: "raised"}
+
+
+def test_8_going_live_stops_a_playback(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    calls = window.after_calls
+    window.btn_first.invoke()
+    window.play_buttons[4].invoke()
+    assert window._speed == 4.0 and str(window.play_buttons[4].cget("relief")) == "sunken"
+    window.set_live(True)
+    assert window._speed is None and str(window.play_buttons[4].cget("relief")) == "raised"
+    calls[-1][1]()  # the callback that was already scheduled finds a new generation and does nothing
+    assert window.index == 0
+
+
+def test_14_the_no_steps_status_goes_when_the_first_step_arrives(tmp_path, make_window):
+    folder = make_folder(tmp_path)
+    model, events = _live_model(folder)
+    assert model.events == []
+    window = make_window((model, folder), live=True)
+    assert window._status.get() == NO_STEPS and window.index is None
+    model.extend(events[:2])
+    window.show(1)
+    assert window.index == 1 and window._status.get() == ""
+
+
+def test_5_a_status_from_a_failed_read_goes_when_a_show_needs_no_file(tmp_path, make_window):
+    folder = make_folder(_sub(tmp_path, "snapshot"))
+    (folder / "minimap.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"junk")
+    window = make_window(folder)
+    assert not window.background_ok and window._status.get().startswith("cannot read minimap.png: ")
+    (folder / "minimap.png").unlink()
+    window.show(1)  # nothing is asked for any more, so nothing failed: the dark canvas and no stale status
+    assert window.shown_background == "dark" and window.background_ok and window._status.get() == ""
+
+    framed = make_folder(_sub(tmp_path, "frames"))
+    _write_frames(framed, times=(1.05, 1.5, 3.0))
+    (framed / FRAMES_DIR / "frame_000000.png").write_bytes(b"junk")
+    window = make_window(framed)
+    window.show(1)  # 1.100 s: frame 0, which cannot be read
+    assert not window.background_ok and window._status.get().startswith("cannot read frame_000000.png: ")
+    window.show(0)  # 1.000 s: no frame yet and no snapshot to ask for
+    assert window.shown_background == "dark" and window.background_ok and window._status.get() == ""
+    window.show(1)
+    window.set_status("something else")  # a status somebody else set is not ours to clear
+    window.show(0)
+    assert window._status.get() == "something else"

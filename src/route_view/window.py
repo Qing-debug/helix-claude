@@ -19,8 +19,8 @@ Where the plan is silent (each decided here, local and reversible):
 - A failed read keeps the last good picture only; it does not fall through to `minimap.png` or the dark canvas (the
   plan: "keep the last good picture (or the dark canvas if there is none)"). A step with no frame to ask for (none
   logged yet, no `minimap.png`) shows `minimap.png` or the dark canvas and forgets the last good picture.
-- The status line text for a read failure (and for "no steps logged") is cleared by the next `show` that succeeds, if
-  nothing else has replaced it.
+- The status line text for a read failure is cleared by the next `show` that reads a picture or needs no file, and the
+  one for "no steps logged" by the next `show` that has a step, in both cases if nothing else has replaced it.
 - Moving by hand (a button, the slider, `lap`/`leg` and Enter) stops a running playback; `show` itself does not.
 - `1x` and `4x` pressed while the other is playing switch the speed; pressed at the last step they play nothing.
 - A dark canvas with no `# minimap_size=` is the bounding box of the nodes and every logged position plus 10 px, at
@@ -455,6 +455,7 @@ class RouteViewWindow:
         wanted = self._wanted(view, background)
         self.background_ok = True
         if wanted is None:
+            self._clear_read_error()  # nothing is asked for, so nothing failed: no stale "cannot read" status
             self._use_picture("dark", None)
             return
         label, path = wanted
@@ -465,10 +466,14 @@ class RouteViewWindow:
             self._read_error = f"cannot read {path.name}: {err}; showing the last good picture"
             self._status.set(self._read_error)
             return  # the last good picture (or the dark canvas) stays
+        self._clear_read_error()
+        self._use_picture(label, image)
+
+    def _clear_read_error(self) -> None:
+        """Forget a failed read; its status text goes too, unless something else has replaced it."""
         if self._read_error is not None and self._status.get() == self._read_error:
             self._status.set("")
         self._read_error = None
-        self._use_picture(label, image)
 
     def _use_picture(self, label: str, image: Image.Image | None) -> None:
         self.shown_background, self.shown_image = label, image
