@@ -3,8 +3,8 @@
 This file holds the format only: the file names of a run folder, the event table (`FIELDS`), the run header, the line
 encoders (`header_line`, `event_line`), the line decoder (`parse_line`), the incremental reader for a file that is still
 being written (`StepTail`) and the whole-folder reader (`read_run`, with its legs-only fallback for a folder that has
-`session.json` and `legs.jsonl` but no `steps.jsonl`). RV-2 adds the writer (`StepLog`) to this file. It imports the
-standard library and `returns` only (plan hard rule 6; it joins the bottom layer of import-linter contract f).
+`session.json` and `legs.jsonl` but no `steps.jsonl`), and the writer (`StepLog`, plan task RV-2, contract V3). It
+imports the standard library and `returns` only (plan hard rule 6; it joins the bottom layer of import-linter contract f).
 
 One JSON object per line, strict JSON (`allow_nan=False`, default separators), UTF-8, ended by `\\n`; the writer
 appends in binary mode so `\\n` stays `\\n` on Windows (as `leg_log.py`). A reader strips a `\\r` before the `\\n`. A
@@ -29,14 +29,25 @@ Where the plan is silent (decided here, each local and reversible):
   `stopped` false, `pos` the move's `settled`), then `leg_end`. The `settled` after the last move of a `LINK_DOWN` leg
   is left out when the move's `settled` is null (the move never completed); nothing else is left out. There is no
   `sent` and no `end` event (`ended` is True).
+- `StepLog`: the writer thread itself flushes, fsyncs and closes `steps.jsonl` when it reaches the sentinel, so `close`
+  never touches a file that a slow writer is still writing; when `close` gives up waiting, the thread still finishes
+  the queue and closes the file. `close` reports the first write or encode failure if there was one, else "writer
+  still busy" if the join timed out, and a repeated `close` returns the first one's result. A second `start` is a
+  `Failure` ("step log already started"); a header that cannot be encoded or written is a `Failure` too (a file that
+  was created stays, so a retry into the same folder fails as "exists").
 """
 
 import json
+import math
+import os
+import queue
 import reprlib
+import sys
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
@@ -440,3 +451,169 @@ def _leg_events(leg: Mapping[str, Any]) -> list[StepEvent]:
         if event.t_ns is not None and not _is_int(event.t_ns):
             raise ValueError("t_ns must be an int")
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# writer
+
+_STOP = object()  # the writer thread's sentinel
+
+
+class StepLog:
+    """The walk's step observer (contract V3; it satisfies `walker.StepObserver` structurally and imports nothing from
+    the walker). Each event method only puts a tuple of plain values on a `queue.SimpleQueue`, whose `put` never
+    blocks; the daemon thread `step-log` encodes each one with `event_line` and appends it to `steps.jsonl` with one
+    `write` and a `flush` (no fsync per line, spec 5.2). After `close` every call is dropped (RV3-D2 A2)."""
+
+    def __init__(self) -> None:
+        self._queue: queue.SimpleQueue[object] = queue.SimpleQueue()
+        self._closed = False
+        self._file: BinaryIO | None = None
+        self._thread: threading.Thread | None = None
+        self._failure: str | None = None
+        self._close_result: Result[None, str] = Success(None)
+
+    @property
+    def failure(self) -> str | None:
+        """The first write or encode failure so far, else None."""
+        return self._failure
+
+    def start(self, folder: Path, header: RunHeader) -> Result[None, str]:
+        """Open `folder/steps.jsonl` exclusively (RV3-D3 A), write the header line and start the writer thread. Call
+        once; a `Failure` starts nothing."""
+        if self._closed:
+            return Failure("step log already closed")
+        if self._thread is not None:
+            return Failure("step log already started")
+        line = header_line(header)
+        if not is_successful(line):
+            return Failure(line.failure())
+        path = Path(folder) / STEPS_FILE
+        try:
+            handle = path.open("xb")  # "x": fails if the file exists
+        except OSError as e:
+            return Failure(f"cannot open {path}: {e}")
+        try:
+            handle.write(line.unwrap())
+            handle.flush()
+        except OSError as e:
+            try:
+                handle.close()
+            except OSError:
+                pass
+            return Failure(f"cannot write the run line to {path}: {e}")
+        self._file = handle
+        self._thread = threading.Thread(target=self._drain, name="step-log", daemon=True)
+        self._thread.start()
+        return Success(None)
+
+    def leg(self, t_ns: int, lap: int, leg: int, src: tuple[int, int] | None, dst: tuple[int, int]) -> None:
+        if self._closed:
+            return
+        self._queue.put(("leg", t_ns, lap, leg, src, dst))
+
+    def read_failed(self, t_ns: int, why: str) -> None:
+        if self._closed:
+            return
+        self._queue.put(("read_failed", t_ns, why))
+
+    def no_plan(self, t_ns: int, pos: tuple[int, int], why: str) -> None:
+        if self._closed:
+            return
+        self._queue.put(("no_plan", t_ns, pos, why))
+
+    def reached(self, t_ns: int, pos: tuple[int, int]) -> None:
+        if self._closed:
+            return
+        self._queue.put(("reached", t_ns, pos))
+
+    def stall(self, t_ns: int, best_cost_s: float) -> None:
+        if self._closed:
+            return
+        # math.inf (no plan yet in this leg) is not strict JSON: it is written as null (plan choice 3)
+        self._queue.put(("stall", t_ns, None if math.isinf(best_cost_s) else best_cost_s))
+
+    def planned(self, t_ns: int, pos: tuple[int, int], kind: str, direction: str | None, walk_ms: float | None,
+                cost_to_go_s: float, toward: tuple[int, int] | None) -> None:
+        if self._closed:
+            return
+        self._queue.put(("planned", t_ns, pos, kind, direction, walk_ms, cost_to_go_s, toward))
+
+    def sent(self, t_ns: int, input_name: str, reaction_ms: float | None, waited_ms: float | None,
+             keys: tuple[tuple[int, int], ...]) -> None:
+        if self._closed:
+            return
+        self._queue.put(("sent", t_ns, input_name, reaction_ms, waited_ms, keys))
+
+    def settled(self, t_ns: int, pos: tuple[int, int] | None, stopped: bool) -> None:
+        if self._closed:
+            return
+        self._queue.put(("settled", t_ns, pos, stopped))
+
+    def leg_end(self, t_ns: int, outcome: str, misses: int, off_graph: int, stalls: int) -> None:
+        if self._closed:
+            return
+        self._queue.put(("leg_end", t_ns, outcome, misses, off_graph, stalls))
+
+    def end(self, t_ns: int, reason: str | None, code: int | None) -> None:
+        """The run's last event (not a walker event: the walk's or the simulator's cleanup puts it)."""
+        if self._closed:
+            return
+        self._queue.put(("end", t_ns, reason, code))
+
+    def close(self, join_s: float = 2.0) -> Result[None, str]:
+        """Mark the log closed (every later call is dropped), end the writer thread and wait for it at most `join_s`.
+        Idempotent; never raises. Before `start` it discards the queued events and returns `Success`."""
+        if self._closed:
+            return self._close_result
+        self._closed = True
+        thread = self._thread
+        if thread is None:
+            self._queue = queue.SimpleQueue()
+            return self._close_result
+        self._queue.put(_STOP)
+        thread.join(join_s)  # join returns None either way; is_alive() tells a timeout (threading.py docstring)
+        if self._failure is not None:
+            self._close_result = Failure(self._failure)
+        elif thread.is_alive():
+            self._close_result = Failure(f"writer still busy after {join_s} s")
+        return self._close_result
+
+    def _drain(self) -> None:
+        """The writer thread: one line per event until the sentinel, then flush, fsync and close the file. It catches
+        `Exception` around each line, so it never dies with events left in the queue."""
+        while True:
+            event = self._queue.get()
+            if event is _STOP:
+                break
+            try:
+                self._write(event)
+            except Exception as e:
+                self._fail(f"{type(e).__name__}: {e}")
+        try:
+            handle = self._file
+            if handle is not None:
+                handle.flush()
+                os.fsync(handle.fileno())
+                handle.close()
+        except Exception as e:
+            self._fail(f"{type(e).__name__}: {e}")
+
+    def _write(self, event: object) -> None:
+        if self._failure is not None:
+            return  # after the first failure the thread drains the queue without writing
+        line = event_line(event if isinstance(event, tuple) else ())
+        if not is_successful(line):
+            self._fail(line.failure())
+            return
+        handle = self._file
+        if handle is None:
+            raise ValueError("the step log was not started")
+        handle.write(line.unwrap())
+        handle.flush()
+
+    def _fail(self, message: str) -> None:
+        """Keep the first failure and print it once."""
+        if self._failure is None:
+            self._failure = message
+            print(f"step log write failed (not reported again this run): {message}", file=sys.stderr)

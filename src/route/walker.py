@@ -24,13 +24,16 @@ Where the plan is silent:
 - A lap record's `start_ns` is its first leg's `start_ns` and its `end_ns` is its last leg's `end_ns`; a leg that
   ends `STOPPED` or `LINK_DOWN` is written to the sink and counted in `RunSummary.legs`, its lap is not.
 - `max_laps` of 0 (or less) walks the approach leg only and returns reason `"max_laps"`.
+- The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
+  thread, and after its first exception it is reported once on stderr and not called again this run. With no observer
+  nothing else happens: each call site is one `is not None` test.
 """
 
 import math
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -39,7 +42,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.controller.node import Node
-from src.input.input_layer import InputLayer
+from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import InputError
 from src.route.leg_log import LapRecord, LegOutcome, LegRecord, LegSink, MoveEntry
 from src.route.moves import execute
@@ -62,6 +65,30 @@ class Clock(Protocol):
 
 class PositionSource(Protocol):
     def read(self) -> Result[tuple[int, int], str]: ...  # Failure(STALE) = no new frame; any other Failure = miss
+
+
+class StepObserver(Protocol):
+    """What `walk_leg` reports as it goes (route view, contract V2): plain values, called on the walker's thread."""
+
+    def leg(self, t_ns: int, lap: int, leg: int, src: tuple[int, int] | None, dst: tuple[int, int]) -> None: ...
+
+    def read_failed(self, t_ns: int, why: str) -> None: ...
+
+    def no_plan(self, t_ns: int, pos: tuple[int, int], why: str) -> None: ...
+
+    def reached(self, t_ns: int, pos: tuple[int, int]) -> None: ...
+
+    def stall(self, t_ns: int, best_cost_s: float) -> None: ...  # math.inf before the leg's first plan
+
+    def planned(self, t_ns: int, pos: tuple[int, int], kind: str, direction: str | None, walk_ms: float | None,
+                cost_to_go_s: float, toward: tuple[int, int] | None) -> None: ...
+
+    def sent(self, t_ns: int, input_name: str, reaction_ms: float | None, waited_ms: float | None,
+             keys: tuple[tuple[int, int], ...]) -> None: ...
+
+    def settled(self, t_ns: int, pos: tuple[int, int] | None, stopped: bool) -> None: ...
+
+    def leg_end(self, t_ns: int, outcome: str, misses: int, off_graph: int, stalls: int) -> None: ...
 
 
 class RealClock:
@@ -99,6 +126,8 @@ class RouteWalker:
         sink: LegSink,
         rng: np.random.Generator,
         config: WalkerConfig = WalkerConfig(),
+        *,
+        observer: StepObserver | None = None,
     ) -> None:
         self._rg = rg
         self._rotation = tuple(rotation)
@@ -113,6 +142,7 @@ class RouteWalker:
         self._lock = threading.Lock()  # makes "start the stop guard" and "set run finished" one step each
         self._guard: threading.Thread | None = None
         self._sink_failure_printed = False
+        self._observer = observer
 
     def walk_leg(self, lap: int, leg: int, src: Node | None, dst: Node) -> LegRecord:
         """Walk from the character's current position to `dst`; the record says how the leg ended."""
@@ -121,6 +151,9 @@ class RouteWalker:
         timeout_ns = None if self._config.leg_timeout_s is None else self._config.leg_timeout_s * _NS_PER_S
         stall_ns = params.stall_s * _NS_PER_S
         start_ns = clock.now_ns()
+        if self._observer is not None:
+            self._emit(self._observer.leg, start_ns, lap, leg, None if src is None else src.minimap_position,
+                       dst.minimap_position)
         best = math.inf
         last_progress = start_ns
         entries: list[MoveEntry] = []
@@ -137,12 +170,16 @@ class RouteWalker:
             if now - last_progress > stall_ns:  # 3
                 stalls += 1
                 last_progress = now
+                if self._observer is not None:
+                    self._emit(self._observer.stall, now, best)
 
             read = self._positions.read()  # 4
             read_ns = clock.now_ns()
             if not is_successful(read):
                 if read.failure() != STALE:
                     misses += 1
+                if self._observer is not None:
+                    self._emit(self._observer.read_failed, read_ns, read.failure())
                 clock.sleep(params.poll_s)
                 continue
             pos = read.unwrap()
@@ -150,12 +187,16 @@ class RouteWalker:
             planned = next_move(self._rg, pos, dst, self._rng)  # 5
             if not is_successful(planned):
                 off_graph += 1
+                if self._observer is not None:
+                    self._emit(self._observer.no_plan, read_ns, pos, planned.failure())
                 clock.sleep(params.poll_s)
                 continue
             decision = planned.unwrap()
             move = decision.move
             if move is None:
                 outcome = LegOutcome.REACHED
+                if self._observer is not None:
+                    self._emit(self._observer.reached, read_ns, pos)
                 break
 
             if decision.cost_to_go_s < best - params.progress_eps_s:  # 6
@@ -165,9 +206,17 @@ class RouteWalker:
             if self._stop.is_set():  # 7
                 outcome = LegOutcome.STOPPED
                 break
+            if self._observer is not None:
+                self._emit(
+                    self._observer.planned, read_ns, pos, move.kind.value,
+                    None if move.direction is None else move.direction.name, move.walk_ms, decision.cost_to_go_s,
+                    None if decision.toward is None else decision.toward.minimap_position,
+                )
             stimulus_ns = read_ns if self._config.use_stimulus else None
             sent = execute(self._layer, move, stimulus_ns)
             failure = None if is_successful(sent) else sent.failure()
+            if self._observer is not None:
+                self._emit(self._observer.sent, clock.now_ns(), *_sent_values(sent))
             entry = MoveEntry(
                 t_ns=read_ns,
                 pos=pos,
@@ -184,12 +233,14 @@ class RouteWalker:
                 break
 
             settled, stopped = self._settle()  # 8
+            if self._observer is not None:
+                self._emit(self._observer.settled, clock.now_ns(), settled, stopped)
             entries.append(replace(entry, settled=settled))
             if stopped:
                 outcome = LegOutcome.STOPPED
                 break
 
-        return LegRecord(
+        record = LegRecord(
             lap=lap,
             leg=leg,
             src=None if src is None else src.minimap_position,
@@ -202,6 +253,10 @@ class RouteWalker:
             off_graph=off_graph,
             stalls=stalls,
         )
+        if self._observer is not None:
+            self._emit(self._observer.leg_end, record.end_ns, record.outcome.value, record.misses, record.off_graph,
+                       record.stalls)
+        return record
 
     def run(self) -> Result[RunSummary, str]:
         """Walk the approach leg (lap 0), then laps 1, 2, ... of the rotation until stopped, the link is down or
@@ -272,6 +327,16 @@ class RouteWalker:
             self._sink_failure_printed = True
             print(f"leg log write failed (not reported again this run): {written.failure()}", file=sys.stderr)
 
+    def _emit(self, call: Callable[..., None], *args: object) -> None:
+        """Call one observer method. Its first exception is printed to stderr once and the observer is dropped for the
+        rest of the run (plan choice 2), so an observer bug never ends a walk."""
+        try:
+            call(*args)
+        except Exception as exc:
+            self._observer = None
+            print(f"route view observer failed, not called again this run: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+
     def _settle(self) -> tuple[tuple[int, int] | None, bool]:
         """Wait for the character to stop moving after a move.
 
@@ -301,3 +366,16 @@ class RouteWalker:
 def _reason(record: LegRecord) -> str:
     """The `RunSummary.reason` for a leg that ends the run."""
     return "stopped" if record.outcome == LegOutcome.STOPPED else "link_down"
+
+
+def _sent_values(
+    sent: Result[ActionRecord, InputError],
+) -> tuple[str, float | None, float | None, tuple[tuple[int, int], ...]]:
+    """The `sent` observer values after `execute` (contract V2): `input`, `reaction_ms`, `waited_ms` and `keys`. On
+    success they are `"ok"`, the reaction draw's ms (None without a stimulus), the wait and the played steps as
+    `(delta_100us, mask)`; on failure the error's name, None, None and `()`."""
+    if not is_successful(sent):
+        return sent.failure().name, None, None, ()
+    rec = sent.unwrap()
+    reaction_ms = None if rec.reaction is None else rec.reaction.ms
+    return "ok", reaction_ms, rec.waited_ms, tuple((step.delta_100us, int(step.mask)) for step in rec.plan.steps)
