@@ -4,7 +4,8 @@
 `p1-route-view`, cut from `p1b-route-walking` at 5d1176a. Every claim about today's code cites `file:line` at 5d1176a.
 The nine choices of section 8 are decided: Hong decided D1, D2 and D6-D9; the orchestrator ruled on D3-D5 (the spec
 reviewer gets those as verdict questions). Section 8 keeps each question, its options and the evidence, and says what
-was chosen; the rest of the spec describes only the chosen design.*
+was chosen; the rest of the spec describes only the chosen design. Revised by unit RV2f after the spec review (RV2:
+7 Important, 12 Minor findings); section 11 maps each finding to its change.*
 
 ## 1. Summary
 
@@ -24,10 +25,11 @@ Shape (each part was an open decision in section 8, now decided):
 
 - The walker reports each step (position read, move planned, move sent, settle, leg end) to an optional observer.
   The walk process writes those steps to a new file, `steps.jsonl`, in the run folder. Nothing else in the walk
-  changes, and with no observer the walker behaves exactly as today.
+  changes, and with no observer the walker does what it does today (section 5.2 says how the code guarantees it).
 - The window is a separate program (its own process) that follows the run folder while the walk runs and replays it
-  afterwards. `walk --view` starts it before the countdown and turns `--record` on. It recomputes the expected route from each logged position with the planner's own functions, so the
-  planner is not changed.
+  afterwards. `walk --view` starts it detached from the walk's console, waits (at most 15 s) until its window is up,
+  then counts down; it turns `--record` on. It recomputes the expected route from each logged position with the
+  planner's own functions, so the planner is not changed.
 - The live minimap image comes from the frames the walk already records with `--record`, which `--view` turns on.
 
 ## 2. What Hong decided (binding)
@@ -58,7 +60,14 @@ decisions are `docs/decisions.md` H47-H52):
 
 The orchestrator ruled on three code-structure choices (not Hong's decisions; H53): RV1-D3 A (optional observer in the
 walker), RV1-D4 A (a pure preview module calling the planner's private helpers), RV1-D5 A (pure parts in `src/route`,
-the Tk app in a new `src/route_view`). The spec reviewer gets each as a verdict question.
+the Tk app in a new `src/route_view`). The spec reviewer (RV2) agreed with all three, D4 on condition that check S3 is
+widened (section 7, S3 and S3b).
+
+A consequence of Hong's D1 pick, not a new decision: because the view is a separate program that reads files, its
+live picture lags the walk by about 0.1-0.3 s (H48), while the walk waits only about 0.2 s between planning a move and
+sending its keys (the reaction wait: exgaussian mu 195 ms, sigma 20 ms, tau 35 ms, at least 110 ms,
+`src/input/timing.py:67-69`, `src/input/input_layer.py:88-90`). So a planned move usually shows on the view as, or just
+after, its keys are sent, not before. Check L1 is worded to match.
 Brief constraints (RV1): the view must not change what the bot does (route tests and the sim smoke stay
 byte-identical) or slow the walker's loop or the vision thread; frozen files bind. Hong's standing facts
 (`docs/decisions.md:9-13`) apply, in particular "Fix real problems, not ones we don't know will happen. Make checks
@@ -213,25 +222,45 @@ the implementation plan (unit RV3).
  minimap-capture (existing, unchanged)
 ```
 
-The two processes share only files in the run folder. The same viewer code replays a finished folder.
+The two processes share only files in the run folder. The same viewer code replays a finished folder. How the walk
+starts the viewer, waits for its window and tells it the run ended is in section 5.9.
 
 ### 5.2 Walk side: step events and `steps.jsonl`
 
-The walker gets an optional observer (decision RV1-D3 A, orchestrator ruling). It is called at the points of `walk_leg` below, with values the
-walker already has; it never reads the position source, the clock's `sleep` or the random generator. With no observer
-(the default, and the simulator's smoke run) nothing is called.
+The walker gets an optional observer (decision RV1-D3 A, orchestrator ruling). It is called at the points of `walk_leg`
+below. It never calls the position source, the clock's `sleep` or the random generator.
+
+The observer's type is a `Protocol` defined in `walker.py` itself, like `Clock` and `PositionSource`
+(`walker.py:57-64`), so `walker.py` imports nothing new. The constructor argument is `observer=None`, keyword-only and
+last, after `config` (`walker.py:92-102`), so every existing positional construction stays valid: `walk.py:278`,
+`sim/run.py:198` and `:299`, and the rune CLI that `p1c-runes` plans (section 10). It is a constructor argument, not a
+`WalkerConfig` field.
+
+Why no observer means no change (the code-shape rule; a plan-review check, not only a test): every call site is
+`if self._observer is not None:` with everything the event needs, including any `clock.now_ns()` call, built inside
+that branch. With `observer=None` the walker therefore does at most one attribute test per call site per loop and
+nothing else; it reads no clock, draws no number and builds nothing. Checks S1 and S2 (section 7) are regression
+checks on top of that rule, in the simulator only; they do not prove it.
+
+Timestamps: `leg`, `stall`, `read_failed`, `no_plan`, `reached` and `planned` use a time the walker already took
+(`start_ns`, `now` and `read_ns`, `walker.py:123`, `:133`, `:142`). `sent` and `settled` have none (nothing reads the
+clock after `execute` or `_settle`), so they call `clock.now_ns()` inside the observer branch; `RealClock.now_ns` is
+`time.perf_counter_ns` (`walker.py:67-71`) and `SimClock.now_ns` only returns a field (`sim/link.py:33-34`), so the
+call has no side effect. `leg_end` takes the leg record's `end_ns`: the return at `walker.py:192-204` becomes "build
+the record, call the observer, return the record".
 
 | Event | Where in `walk_leg` | Fields |
 |---|---|---|
-| `leg` | after `start_ns` (`walker.py:123`) | `t_ns`, `lap`, `leg`, `from`, `to` |
-| `read_failed` | a failed read (`walker.py:143-147`) | `t_ns`, `why` (`"stale"` or the source's message) |
-| `no_plan` | `next_move` failed (`walker.py:151-154`) | `t_ns`, `pos`, `why` (the planner's message) |
-| `reached` | `move is None` (`walker.py:157-159`) | `t_ns`, `pos` |
-| `stall` | a stall counted (`walker.py:137-139`) | `t_ns`, `best_cost_s` |
+| `leg` | after `start_ns` (`walker.py:123`) | `t_ns` (= `start_ns`), `lap`, `leg`, `from`, `to` |
+| `read_failed` | a failed read (`walker.py:143-147`) | `t_ns` (= `read_ns`), `why` (`"stale"` or the source's message) |
+| `no_plan` | `next_move` failed (`walker.py:151-154`) | `t_ns` (= `read_ns`), `pos`, `why` (the planner's message) |
+| `reached` | `move is None` (`walker.py:157-159`) | `t_ns` (= `read_ns`), `pos` |
+| `stall` | a stall counted (`walker.py:137-139`) | `t_ns` (= `now`), `best_cost_s` |
 | `planned` | after the stop check, before `execute` (`walker.py:165-168`) | `t_ns` (= `read_ns`), `pos`, `kind`, `dir`, `walk_ms`, `cost_to_go_s`, `toward` |
-| `sent` | after `execute` returns (`walker.py:169-170`) | `t_ns`, `input` (`"ok"` or the error name), `reaction_ms`, `waited_ms`, `keys` (`[[delta_100us, mask], ...]` from `plan.steps`) |
-| `settled` | after `_settle` (`walker.py:186-187`) | `t_ns`, `pos` (or null), `stopped` |
-| `leg_end` | before the return (`walker.py:192-204`) | `t_ns`, `outcome`, `misses`, `off_graph`, `stalls` |
+| `sent` | after `execute` returns (`walker.py:169-170`) | `t_ns` (`now_ns()`), `input` (`"ok"` or the error name), `reaction_ms`, `waited_ms`, `keys` (`[[delta_100us, mask], ...]` from `plan.steps`) |
+| `settled` | after `_settle` (`walker.py:186-187`) | `t_ns` (`now_ns()`), `pos` (or null), `stopped` |
+| `leg_end` | before the return (`walker.py:192-204`) | `t_ns` (= the record's `end_ns`), `outcome`, `misses`, `off_graph`, `stalls` |
+| `end` | not the walker: `walk.py`'s cleanup (section 5.9), last event of a run | `t_ns`, `reason` (the `stop.json` reason, or null), `code` (the exit code, or null if none was set) |
 
 The `planned` fields use the leg log's names (`kind`, `dir`, `walk_ms`, `cost_to_go_s`, `leg_log.py:96-106`) so the
 two files read alike. `legs.jsonl` and its keys (Feature D's contract, `tests/route/test_leg_log.py:26-29`) do not
@@ -259,15 +288,24 @@ Writing (walk process):
   blocks" (its docstring, printed from the venv's Python 3.14.0). That is all the walker thread does per event.
 - A daemon thread, `step-log`, takes events off the queue, encodes them and appends them to `steps.jsonl` with one
   `write` and a `flush` per line, no `fsync` (a crash loses at most the last lines; this is a debugging aid, unlike
-  the leg log, which syncs, `leg_log.py:197-198`). At the end of the run the cleanup puts a sentinel, joins the thread
-  for at most 2 s, then syncs and closes the file. Its cleanup step goes after `release_all` in `walk.py`'s cleanup
-  order (`walk.py:342-367`), so a slow disk never delays releasing the keys.
+  the leg log, which syncs, `leg_log.py:197-198`). At the end of the run the cleanup puts the `end` event, then a
+  sentinel, joins the thread for at most 2 s, then syncs and closes the file. Its cleanup step goes after
+  `release_all` and after `stop.json` in `walk.py`'s cleanup order (`walk.py:342-367`), so a slow disk never delays
+  releasing the keys and the `end` event comes after every other file of the run is final except the leg log, which
+  the viewer does not read for a run that has `steps.jsonl`.
 - The walk also copies the map file it loaded into the run folder as `map.csv` (so a later edit to `maps/` cannot
   change a replay) and, in every walk (decision RV1-D9 A, Hong's), saves one minimap snapshot, `minimap.png`, from the
-  first frame it already waits for (`walk.py:255-262`). `steps.jsonl`, `map.csv` and `minimap.png` are added to `_OUT_FILES` (`walk.py:81`).
+  first frame it already waits for (`walk.py:255-262`). `minimap.png` is written to a temporary name in the run folder
+  and moved into place with `os.replace`, so a viewer never reads half a PNG; the viewer also retries a failed decode
+  on its next poll. `steps.jsonl`, `map.csv`, `minimap.png` and the viewer's two files (`view.log`, `view.ready`,
+  section 5.9) are added to `_OUT_FILES` (`walk.py:81`), so the re-run guard (B19-D2) sees them.
 - The simulator writes `steps.jsonl` and `map.csv` too, but only when `--out` is given (`sim/run.py:291-297`, `:394`);
-  the smoke command has no `--out`, so its output cannot change. Only the run's own walker gets the observer, not the
-  replay walkers of the recovery metric (`sim/run.py:188-198`).
+  the smoke command has no `--out`, so its output cannot change. `map.csv` is the CSV the route graph was built from:
+  with node offsets that is the shifted copy (`sim/run.py:269-270`, written by `_load_shifted_agent` into a temporary
+  folder that is deleted on return, `sim/run.py:163-176`), not the `--map` file, so the copy must be taken while it
+  exists or written again from the same offsets. Only the run's own walker gets the observer, not the replay walkers of
+  the recovery metric (`sim/run.py:188-198`). It writes the `end` event too, when `run` returns (`reason` = the run
+  summary's reason, `code` null).
 
 An observer bug must not end a walk: the walker calls it inside a guard that catches `Exception`, prints one line to
 stderr the first time and stops calling it for the rest of the run (part of decision RV1-D3 A).
@@ -293,6 +331,10 @@ A new pure function computes, for a logged position and target, what the planner
      "teleport up (Up+E)", or for down the options of `down_options` with the coin-flip band (`planner.py:168-181`):
      "drop (Down+Alt)", "teleport down (Down+E)", or "drop or teleport down, 50/50".
 4. **Keys** for each hop come from the table in section 3.3; for the sent move they come from the logged schedule.
+
+Because the first move of a live or recorded step is the logged one, what the view adds is the route line and hops
+2..n, built by step 3's new rules. Check S3b (section 7) pins those against the planner's next real move, and S3's
+widened inputs cover the planner branches one simulator run never takes.
 
 The preview runs in the viewer process only, once per displayed step (a few Dijkstra searches on a graph of about 20
 nodes for FF2: `tests/fixtures/fossil_foundry_2.csv` has 21 node rows), never on the walker's thread.
@@ -356,8 +398,11 @@ failed read or failed plan (`walker.py:1-7`, `:129-190`). The log says which of 
 plan differs from what the previous one predicted.
 
 Live mode follows the folder: every 100 ms it reads new complete lines of `steps.jsonl` and `frames/index.jsonl` (a
-line without its newline is left for the next poll) and redraws only when something changed. Replay mode loads the
-folder, then steps by event, by move or by leg, scrubs with a slider, and plays at 1x or 4x on the logged times.
+line without its newline is left for the next poll) and redraws only when something changed. Per poll it decodes only
+the newest frame, however many index lines arrived. When it reads the `end` event it switches to replay of the same
+folder (H50) and its title says "ended: <reason>". With no `end` and no new line for 10 s its title says "no new
+steps for 10 s: the walk is still running or has crashed"; it keeps following. Replay mode loads the folder, then
+steps by event, by move or by leg, scrubs with a slider, and plays at 1x or 4x on the logged times.
 
 ### 5.5 Replay sources, best first
 
@@ -396,7 +441,17 @@ and the vision thread, so the walk can only be shown to be slowed little, by mea
 
 The board's keys go to whichever window has focus. Rules for the view during a live run:
 
-- The viewer starts before the walk's 5 s countdown (`walk.py:300-301`), so Hong focuses the game after it opened.
+- The viewer's window is up before the walk's 5 s countdown starts (`walk.py:300-301`), so Hong focuses the game
+  after it opened. Starting the process first is not enough: the window appears only after Python, Tk, Pillow, cv2,
+  networkx and the controller are imported and the route graph is built. So the walk waits for the viewer's ready
+  signal before it prints "Focus the game window..." (section 5.9).
+- Its first show does not activate it. Microsoft's docs for `SetForegroundWindow`
+  (https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow) let a process take the
+  foreground if, among others, "The calling process was started by the foreground process", which the viewer is when
+  Hong started the walk from a focused console. The viewer creates its root withdrawn, sets the extended style on the
+  Tk wrapper window (below) before the first show, and shows it without activating it (`ShowWindow` with
+  `SW_SHOWNOACTIVATE`, not Tk's `deiconify`). Whether Tk's own state stays right after that is part of the no-key
+  check.
 - It never calls `focus_force`, `lift`, `-topmost`, or opens a message box or dialog while following a live run;
   errors go to its status line.
 - Clicking it during a live run would move focus to it and the bot's next moves would go nowhere. Decision RV1-D6 B
@@ -406,7 +461,19 @@ The board's keys go to whichever window has focus. Rules for the view during a l
   `WS_EX_NOACTIVATE` (https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles): "A top-level
   window created with this style does not become the foreground window when the user clicks it." The docs speak of a
   window *created* with the style; whether setting it on an existing Tk window has the same effect is untested and
-  needs a no-key check (open the window, click it, read the foreground window).
+  needs a no-key check (below).
+- Which window gets the style: Tk's top-level is a wrapper around the window `winfo_id` returns. Measured by the
+  reviewer on a withdrawn `tk.Tk()`: `winfo_id` 0x51b86, `wm frame` 0x480b10 = `GetParent(winfo_id)`. The style goes
+  on the `wm frame` HWND, the window Windows activates; on the `winfo_id` child it does nothing useful.
+- Windows calls (ctypes) happen only inside the viewer's functions, never at import, so check S6 and cloud (Linux)
+  runs can import the package.
+
+The no-key check (sends no keys and needs no MapleStory; any other window can hold the foreground): run the real
+viewer, with its slider and buttons, following a sim folder; give another window the foreground; read
+`GetForegroundWindow`; click the viewer's canvas, a button and the slider; read `GetForegroundWindow` again. Pass: it is
+the other window every time, and the viewer's first show did not change it either. The clicks are real mouse input that
+moves the cursor, so Hong does them, or an agent only while nobody is using the PC (the same idle rule as H15). If it
+fails, the fallback of RV1-D6 applies (warning line, watch-only while live).
 
 ### 5.8 Where the code lives
 
@@ -416,11 +483,48 @@ Decided (decision RV1-D5 A, orchestrator ruling):
   of the legs-only fallback. Standard library only, so it fits plan hard rule 6 (the route import allowlist,
   `docs/superpowers/plans/2026-10-23-p1b-route-walking.md:62-65`, `tests/route/test_import_rules.py:64-69`).
 - `src/route/route_preview.py` (new): the pure preview of section 5.3. Imports `planner`, `locate`, `route_graph`.
+- Both new route modules join import-linter contract `f route layers` (`pyproject.toml:62-75`): `route_preview` in
+  a layer above `planner` (it imports it; nothing in the walk imports it), `step_log` in the bottom layer with
+  `params`, `leg_log` and `character` (standard library only; `walk.py` and `sim/run.py` import it).
 - `src/route_view/` (new top-level package, snake_case): the Tk window, live follower and replay. It may import
-  `src.route`, `src.controller`, `src.classes`, `tkinter`, Pillow (already pinned, `requirements.txt:6`) and `cv2`; a
-  new import-linter contract forbids it `src.gui`, `src.main`, `src.vision` and `src.input` beyond `protocol`, and
-  nothing in `src` imports it. `walk.py` starts it as a child process by module name (`python -m src.route_view`),
-  so the walk imports none of it (decision RV1-D7 A, Hong's: `walk --view` starts it).
+  `src.route.step_log`, `src.route.route_preview`, `src.route.planner`, `src.route.locate`, `src.route.route_graph`,
+  `src.route.params`, `src.route.terrain`, `src.controller`, `src.classes`, `src.input.protocol`, `tkinter`, Pillow
+  (already pinned, `requirements.txt:6`) and `cv2`. A new import-linter contract (a forbidden contract named by what
+  it does, e.g. `"route_view boundaries"`, not by a letter: `p1c-runes` already uses `g` and `h`, section 10) forbids
+  it `src.gui`, `src.main`, `src.vision`, `src.rune_solver`, every `src.input` module except `protocol`
+  (`src.input.input_layer`, `link`, `actions`, `timing`, `harness` and the rest), and the route modules that pull
+  those in: `src.route.walker`, `src.route.walk`, `src.route.moves`, `src.route.runtime`, `src.route.sim`. A second
+  forbidden contract makes `src.route_view` a module nothing imports (source modules `src.route`, `src.controller`,
+  `src.gui`, `src.main`, `src.vision`, `src.input`, `src.classes`, `src.rune_solver` once it exists). `walk.py`
+  starts the viewer as a child process by module name (`python -m src.route_view`), so the walk imports none of it
+  (decision RV1-D7 A, Hong's: `walk --view` starts it).
+
+### 5.9 Starting the viewer, and the end of a run (walk side)
+
+`walk --view` (it also sets `--record`, H48) does, in this order, after the leg log is open and before the countdown
+(`walk.py:285-301`):
+
+1. Copy the map to `map.csv`, write `minimap.png` (atomically, section 5.2), open `steps.jsonl` and put its `run`
+   header, write `session.json`.
+2. Start the viewer detached from the walk's console, so Hong's Ctrl+C stop (the console sends CTRL+C to every process
+   attached to it; "Detached processes are not affected", Microsoft,
+   https://learn.microsoft.com/en-us/windows/console/ctrl-c-and-ctrl-break-signals) and closing the console do not
+   end it, and its output does not print into the walk's console: `subprocess.Popen([sys.executable, "-m",
+   "src.route_view", "--follow", <run folder>, "--ready", <run folder>/view.ready], cwd=<repo root>,
+   creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, stdin=DEVNULL, stdout=<run folder>/view.log,
+   stderr=STDOUT)`. Both flags exist in the venv's `subprocess` (printed values 8 and 512). The walk never waits for
+   the process to exit and never kills it.
+3. Wait for the ready signal: the viewer writes `view.ready` (temporary name, then `os.replace`) after its window is
+   shown (section 5.7). The walk polls for it every 50 ms for at most 15 s. If it does not appear, or the process has
+   already exited, the walk prints one line ("route view did not start within 15 s; walking without it, see
+   view.log") and goes on: a viewer failure never stops a walk.
+4. Print "Focus the game window..." and count down, as today.
+
+At the end, the cleanup step of section 5.2 puts the `end` event with the `stop.json` reason (or null) and the exit
+code (or null when the walk left `main` by an exception before setting one); the viewer then switches to replay
+(section 5.4). The walk's cleanup does not touch the viewer process; Hong closes its window.
+
+Without `--view` none of this happens except `map.csv`, `minimap.png` and `steps.jsonl`, which every walk writes.
 
 ## 6. What must not change, and what does
 
@@ -430,8 +534,9 @@ exit codes and cleanup order apart from the added step; the stop guard (`walker.
 
 Changes: `src/route/walker.py` gets the optional observer (frozen file: RV1-D3);
 `src/route/walk.py` gets `--view` (RV1-D7), the observer and writer wiring, the snapshot, the `map.csv` copy, the new
-`_OUT_FILES` and one cleanup step; `src/route/sim/run.py` writes `steps.jsonl` and `map.csv` with `--out`; new
-`src/route/step_log.py`, `src/route/route_preview.py`, `src/route_view/`; `pyproject.toml` (one contract);
+`_OUT_FILES`, the viewer start and ready wait (section 5.9) and one cleanup step; `src/route/sim/run.py` writes
+`steps.jsonl` and `map.csv` with `--out`; new `src/route/step_log.py`, `src/route/route_preview.py`,
+`src/route_view/`; `pyproject.toml` (contract f gains the two new route modules; two new route_view contracts);
 `src/route/CLAUDE.md` (the new seam on the planner's private helpers, the observer). The plan (RV3) splits this into
 tasks of at most about three code files each (plan hard rule 7).
 
@@ -439,7 +544,11 @@ tasks of at most about three code files each (plan hard rule 7).
 
 Baseline measured for this spec at 5d1176a: `python -m src.route.sim.run --laps 20 --seed 1
 --min-single-error-legs 0` prints six PASS lines (20/20 laps, 141/141 legs reached, 379 moves) and its stdout has
-sha256 `d982184e54311493311110657d93992fe7f0af4963dc603617c5a0f4d09d8035`.
+sha256 `d982184e54311493311110657d93992fe7f0af4963dc603617c5a0f4d09d8035`. How the hash is taken: of the raw stdout
+bytes, which end lines with CRLF on Windows, through a bash pipe (Git Bash, from the repo root):
+`python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0 | sha256sum`. Re-measured by RV2 and again by
+RV2f with the venv's Python at f9dcf06 (same code as 5d1176a): the same hash. With the `\r` stripped the hash is
+`6574cac5...8d25` (RV2); PowerShell 5.1's `>` writes UTF-16 and gives neither, so do not hash a file written that way.
 
 Simulator-only checks (no game, no board; an agent runs them):
 
@@ -450,11 +559,31 @@ Simulator-only checks (no game, no board; an agent runs them):
   without, give identical `LegRecord`s, `LapRecord`s and report, and the generators end in the same state.
 - **S3 the preview agrees with the planner.** Over every `planned` event of a 20-lap sim run: the preview's cost to go
   equals the logged `cost_to_go_s` exactly, its `toward` equals the logged one, and its first move equals the logged
-  kind, direction and `walk_ms` (for a coin-flip down move, the logged choice is one of the two options).
+  kind, direction and `walk_ms` (for a coin-flip down move, the logged choice is one of the two options). The same
+  over every `planned` event of a 20-lap run with node offsets (`NoiseConfig(node_offset_px=2)`, as
+  `tests/route/test_sim_run.py:81` runs it; `sim/world.py:133`), whose off-graph reads the plain run lacks. One plain
+  run is not enough: measured by RV2 with `sys.settrace` on the seed-1 run's 379 moves, it never takes the planner's
+  single-option down (`planner.py:172`), clearly-cheaper down (`:178`), walk after a slope start (`:243-244`), an up or
+  down edge dropped by `_offered` because `_launch_x` returns None (`:152`), off-graph Failure (`:201`) or no path
+  (`:213`). So S3 also has an agreement table on small hand-built graphs, in a new test file (the frozen tests stay
+  untouched), with at least one case forcing each of those six; for the two Failures the preview gives a Failure with
+  the planner's message. Optional, by hand, not a test (the folder is gitignored): the 37 moves of `b21-test1`, which
+  RV2 found agree 37/37 on cost to go.
+- **S3b the later hops agree with the planner's next move.** For two `planned` events in a row in the same leg of the
+  S3 runs, where the first one's `settled` position is within `arrive_px` (`params.py:11`) in x and in y of where the
+  preview's hop 1 assumed the move lands: the preview's hop 2 of the first event equals the second event's logged
+  move (kind and direction; `walk_ms` within `1000 * arrive_px / walk_px_per_s` ms, 250 ms with today's params; for a
+  coin-flip down, the logged move is one of the two options), and the first event's remaining path (from hop 2's start
+  on) equals the path the preview gives for the second event. The test prints how many pairs it checked and fails if
+  none. A disagreement fails the check; if one turns out to be the planner's correct behaviour that the hop rules do
+  not model, the implementer raises it instead of loosening the check. The "route changed" line of section 5.4 uses the
+  same comparison.
 - **S4 the step log matches the leg log.** In a sim `--out` folder, the `planned`/`sent`/`settled` events map one to
-  one onto the `MoveEntry`s of `legs.jsonl` (same `t_ns`, `pos`, `kind`, `dir`, `walk_ms`, `cost_to_go_s`, `input`,
-  `settled`); every `leg` has a `leg_end` with the leg record's outcome and counts; the first line is a valid `run`
-  header.
+  one onto the `MoveEntry`s of `legs.jsonl` (the `planned` event's `t_ns`, `pos`, `kind`, `dir`, `walk_ms` and
+  `cost_to_go_s`, the `sent` event's `input`, the `settled` event's `pos` as `settled`; a move that ended the leg with
+  the link down has no `settled` event and `settled` null); every `leg` has a `leg_end` with the leg record's
+  `end_ns`, outcome and counts; the first line is a valid `run` header and the last an `end` event. `sent` and
+  `settled` times are not compared: the leg log has none (section 5.2).
 - **S5 the view model.** A pure (no Tk) model built from a sim folder at chosen steps gives: blue nodes numbered 1..n
   in file order, the right target highlighted per leg, the route polyline's points, the hop labels and keys, and the
   "why" lines; pinned by golden text for a handful of steps, including a coin-flip down, a teleport run and an
@@ -464,18 +593,37 @@ Simulator-only checks (no game, no board; an agent runs them):
 - **S7 following a live folder.** A test thread appends `steps.jsonl` lines (including half a line) and frame index
   lines while the follower polls: the view shows the newest complete step and frame, never a half line.
 - **S8 cost on the walker thread.** In a sim run, the walker thread's time per event with the observer is under
-  20 µs on the dev PC (median of a 20-lap run); the writer's queue is empty within 1 s of the run's end.
-- **S9 rules.** `python tools/check.py` passes (ruff, basedpyright with its baseline, import-linter with the new
-  contract, tests); the route import allowlist test still passes.
+  20 µs on the dev PC (median of a 20-lap run); the writer's queue is empty within 1 s of the run's end. This bounds
+  the cost in the simulator only; live, a `planned` event's cost comes out of the reaction wait (section 2) and the
+  others delay `_settle`'s start by that much, whose window is measured from its own start (`walker.py:284`).
+- **S9 rules.** `python tools/check.py` passes (ruff, basedpyright with its baseline, import-linter with contract f
+  widened and the two new contracts, tests); the route import allowlist test still passes.
+- **S10 walk wiring, no game.** Through `walk.py`'s seams (`walk.py:87-111`: fake capture, positions, link, clock and
+  stop control) and a new seam for starting the viewer: `--view` turns `--record` on; the walker gets the observer;
+  the run folder gets `steps.jsonl` (a `run` header first, an `end` event last with the stop reason and exit code),
+  `map.csv` byte-equal to `--map`, and `minimap.png` that decodes to the first frame; `_OUT_FILES` lists every new
+  file, so a second walk into the same folder is refused; the cleanup runs `release_all`, then `stop.json`, then the
+  step log; the viewer is started with the arguments of section 5.9 (module, `--follow`, `--ready`, the detached
+  creation flags, stdin closed, output to `view.log`); with a fake viewer that writes `view.ready` the countdown starts
+  after it, and with one that never does, the walk prints its one line and goes on after the bounded wait (patched
+  short in the test). Without `--view` no viewer is started.
 
 Checks with Hong (need the game; never run by an agent without his go, root `CLAUDE.md` safety rules):
 
 - **L1** A supervised 1-lap walk with `--view` (which turns `--record` on, RV1-D2 A): the window shows the nodes numbered, the
-  target ring moves leg by leg, the route line and hop moves appear before each move is sent, the "why" log reads
-  sensibly; F12 still stops the walk; closing the view does not stop the walk.
-- **L2** The walk's results are as without the view (same exit code path, legs reached), judged on that run only.
+  target ring moves leg by leg, each planned move and its route line appear within about 0.3 s of being planned (they
+  may show just after the keys are sent: the reaction wait is about 0.2 s, section 2), the "why" log reads
+  sensibly; F12 still stops the walk; closing the view does not stop the walk. A second short walk stopped with Ctrl+C
+  in the walk's console: the view stays open and switches to replay of that run.
+- **L2** The walk's results are as without the view (same exit code path, legs reached), judged on that run only. As a
+  cheap health measure, the gaps between frame times in `frames/index.jsonl` are reported next to those of an earlier
+  `--record` run without the view, if one exists.
 - **L3** Replay of the L1 folder and of `b21-test1` steps and scrubs to any move.
 - **L4** Focus: after the countdown, with the view open on the other monitor, the game keeps focus for the whole run.
+  Once from a cold start (the first `--view` walk after a reboot, when the viewer's imports are slowest): the
+  countdown starts only after the window is up, and the window's appearance does not take the foreground.
+
+Check with Hong or an idle PC (no game, no keys sent): **N1** the no-key check of section 5.7, before L1.
 
 ## 8. Open decisions
 
@@ -526,14 +674,14 @@ Why it matters: the walker (src/route/walker.py) is frozen (src/route/CLAUDE.md:
 Options:
   A. An optional observer argument to RouteWalker, called at the nine points of section 5.2, inside a guard that
      disables it after its first exception; default None — cost: about 30 lines in a frozen file plus tests; exact
-     events (the planner's messages, stalls, toward, the sent schedule); behaviour with None provably unchanged
-     (checks S1, S2); reversible (remove the argument).
+     events (the planner's messages, stalls, toward, the sent schedule); behaviour with None unchanged by the
+     code-shape rule of section 5.2 (checks S1, S2 are regression checks on top); reversible (remove the argument).
   B. No walker change: wrap the position source, the input layer (a subclass of InputLayer) and the leg sink in
      walk.py and sim/run.py, and infer the steps from the order of their calls (the planning read is the last
      successful read before a layer call, walker.py:141-169; the target from the leg count) — cost: no frozen edit;
      stalls and off-graph messages must be recomputed by the viewer; silently wrong if the walker's call order ever
      changes; more code.
-Decided: A, an optional observer argument to `RouteWalker`, default None, guarded (disabled after its first exception), about 30 lines in a frozen file. Orchestrator ruling, not Hong's: the walker's freeze is an orchestrator ruling (B14-inv-D1; `src/route/CLAUDE.md:23`), not his. Reason: exact events for the "why" log, and None is provably unchanged (checks S1, S2). The spec reviewer gets it as a verdict question. Cost if wrong: remove one argument. [fyi] the p1c-runes branch plans a `WalkerConfig.between_legs` hook in the same file, so the later merge needs care.
+Decided: A, an optional observer argument to `RouteWalker`, default None, guarded (disabled after its first exception), about 30 lines in a frozen file. Orchestrator ruling, not Hong's. The walker's freeze is not Hong's either: B14-inv-D1 (a Hong ruling, on the planner fix) froze these files only "until the fix lands" (`docs/decisions.md:1307`); the standing freeze wording came from Claude's docs commits fe51e9b and b5c7a48 (`src/route/CLAUDE.md:23`), and the orchestrator ruled it is not a Hong decision (`.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:85`). Reason: exact events for the "why" log, and with None the walker is unchanged by the code-shape rule (section 5.2; checks S1, S2 on top). The spec reviewer (RV2) agreed. Cost if wrong: remove one argument. The p1c-runes branch plans a `WalkerConfig.between_legs` hook in the same file; section 10 lists what the later merge must handle.
 Unblocks: the walk-side tasks of the plan · Option B is not part of the design.
 ```
 
@@ -551,7 +699,7 @@ Options:
      frozen-file edit; cleaner seam.
   C. Copy the planner's rules into the preview — cost: no seam, but the copy drifts silently if the planner changes;
      S3 would catch drift only in the simulator.
-Decided: A, a pure `src/route/route_preview.py` calling the planner's private helpers, pinned by S3; the seam is noted in `src/route/CLAUDE.md`. Orchestrator ruling, not Hong's. Reason: no frozen edit, and S3 fails loudly on drift. The spec reviewer gets it as a verdict question. Cost if wrong: a later public planner function.
+Decided: A, a pure `src/route/route_preview.py` calling the planner's private helpers, pinned by S3; the seam is noted in `src/route/CLAUDE.md`. Orchestrator ruling, not Hong's. Reason: no frozen edit, and S3 fails loudly on drift. The spec reviewer (RV2) agreed on condition that S3 is widened; it now covers a node-offset run and hand-built graphs for the planner branches one sim run misses, and S3b checks the later hops (section 7). Cost if wrong: a later public planner function.
 Unblocks: the preview task · Options B and C are not part of the design.
 ```
 
@@ -567,7 +715,7 @@ Options:
      loading; tkinter (standard library) is allowed; no new top-level package.
   C. In src/gui, opened from the main Helix window — cost: Hong asked for its own window, not the main Helix window;
      src/gui importing more of src.route is a module-boundary change (src/gui/CLAUDE.md:13).
-Decided: A, pure parts in `src/route`, the Tk app in a new top-level `src/route_view` with its own import-linter contract. Orchestrator ruling, not Hong's. Reason: it keeps GUI code out of the walk package and route out of `src/gui`. The spec reviewer gets it as a verdict question. Cost if wrong: moving one package.
+Decided: A, pure parts in `src/route`, the Tk app in a new top-level `src/route_view` with its own import-linter contract. Orchestrator ruling, not Hong's. Reason: it keeps GUI code out of the walk package and route out of `src/gui`. The spec reviewer (RV2) agreed; section 5.8 spells out the contracts. Cost if wrong: moving one package.
 Unblocks: file layout in the plan · Options B and C are not part of the design.
 ```
 
@@ -624,9 +772,70 @@ Unblocks: nothing was waiting · Option B is not part of the design.
 
 ## 9. Notes for the plan (RV3)
 
-- Order: step log and observer with checks S1, S2, S4; route preview with S3; the pure view model with S5; the Tk
-  window and replay with S6; live following with S7; walk and sim wiring; then the checks with Hong.
+- Order: step log and observer with checks S1, S2, S4; route preview with S3 and S3b; the pure view model with S5;
+  the Tk window and replay with S6; live following with S7; walk and sim wiring with S10; the no-key check N1; then
+  the checks with Hong.
+- The code-shape rule of section 5.2 is a plan-review item for the observer task: the reviewer reads the `walker.py`
+  diff and confirms every call site is guarded and builds its event inside the guard.
 - The view will never show a jump: the planner has no jump move (section 3.2). Hong was told this on 2026-10-27; if he
   later wants jumps, that is a planner question, not a view one.
 - Feature D wants "what the bot was doing — current leg, state" for its incidents
   (`docs/superpowers/specs/2026-10-21-p1d-watching-and-logging-design.md:13`); `steps.jsonl` can serve it later.
+
+## 10. Merge into `p1c-runes` (for the plan)
+
+This branch is to be merged into `p1c-runes` later (H47). Compared at `95641ca` against `5d1176a`, the two branches
+differ under `src/route`, `src/input` and `pyproject.toml` only in `pyproject.toml` (RV2), and the rune feature's
+walker hook (task C19) is not built yet. What the merge must handle:
+
+- **`src/route/walker.py`.** Both branches edit it. C19 adds a frozen `BetweenLegs(lap, leg, record)` dataclass, a
+  `WalkerConfig.between_legs` field (last, default None) and a call right after each `self._sink.write_leg(record)` in
+  `_run_laps` (`walker.py:248`, `:259`), plus one bullet in the module docstring's "Where the plan is silent" list
+  (`docs/superpowers/plans/2026-10-27-p1c-runes.md:2273-2280` on `p1c-runes`). This spec adds the observer
+  `Protocol`, the keyword-only `observer` constructor argument and the call sites in `walk_leg`. Expected text
+  conflicts: the docstring list, and the neighbourhood of `WalkerConfig` and `__init__`. Rules for resolving them: the
+  observer stays a constructor argument, not a `WalkerConfig` field; the event order at a leg boundary is `leg_end`
+  (in `walk_leg`) -> `write_leg` -> `between_legs` -> the next leg's `leg`.
+- **The view is blind during a rune trip.** The hook runs the trip on the walker thread and sends keys the observer
+  never sees, so the view shows a gap between `leg_end` and the next `leg`. A `trip` event is Feature C's follow-up,
+  not part of this spec.
+- **`src/route/CLAUDE.md:23`, the freeze line.** C19 rewrites it to state its status as ruled and its one exception,
+  `between_legs` (`p1c-runes.md:2329-2332`). After the merge it names two exceptions: `between_legs` and this spec's
+  observer, each with its `walker.py` line. This spec's other `src/route/CLAUDE.md` additions (the observer, the seam
+  on the planner's private helpers) go in the same "Traps" section.
+- **`pyproject.toml`.** `p1c-runes` adds contracts `"g route not rune_solver"` and `"h rune_solver not gui/main"`.
+  This spec's two contracts are named by what they do, not by a letter (section 5.8), so the names do not collide;
+  `src.rune_solver` is already in the route_view contracts' lists (section 5.8). Contract f is the same on both
+  branches.
+- **The rune CLI (C20)** builds its own `RouteWalker` and its own run folder. Because `observer` is keyword-only and
+  last, its construction stays valid; it passes no observer, so a rune run has no view unless C20 is wired for one
+  later (Feature C's follow-up).
+
+## 11. Review record (RV2, applied by RV2f)
+
+The spec review is `notes/RV2.md` (orchestrator workspace, `.superpowers/orchestrator/2026-10-21-phase1/`). Its
+verdict: approved with fixes, 0 Critical, 7 Important, 12 Minor; D3 and D5 agreed, D4 agreed on condition that S3 is
+widened. Every finding is applied; none is rejected.
+
+| Finding | Change |
+|---|---|
+| I1 focus race at start | Section 5.7 (window up before the countdown; non-activating first show with `SW_SHOWNOACTIVATE`), 5.9 step 3 (ready file, 15 s bounded wait, the walk goes on with one console line), L4 cold start |
+| I2 viewer shares the console | Section 5.9 step 2 (started with `DETACHED_PROCESS`, new process group, stdin closed, output to `view.log`); S10 checks the arguments; L1 adds the Ctrl+C case |
+| I3 no run-end signal, unguarded reads | `end` event (sections 5.2, 5.9; the simulator writes it too); live mode switches to replay on `end` and shows "still running or crashed" after 10 s without a line (5.4); `minimap.png` written with `os.replace`, failed decodes retried (5.2) |
+| I4 later hops unverified | New check S3b; section 5.3 says what the view adds and how it is pinned; the "route changed" line uses S3b's comparison |
+| I5 S3 misses planner branches | S3 widened: a node-offset run, a hand-built agreement table forcing each of the six branches, optional `b21-test1` by hand; D4 block updated |
+| I6 no no-game check of the walk wiring | New check S10 |
+| I7 L1 cannot pass | L1 reworded ("within about 0.3 s of being planned; it may show just after the keys"); section 2 states it is a consequence of H48, not a new decision |
+| m1 freeze citation | D3 block and `docs/decisions.md` H53 cite B14-inv-D1's "until the fix lands", commits fe51e9b and b5c7a48, and `ledger-C.md:85` |
+| m2 timestamps the walker lacks | Section 5.2: `sent` and `settled` call `now_ns()` inside the observer branch, `leg_end` uses the record's `end_ns`; each event's `t_ns` source is in the table. S4's "same `t_ns`" holds for `planned`, which is the only event it compares by time |
+| m3 "provably unchanged" | Replaced by the code-shape rule (section 5.2), a plan-review item (section 9); D3 block and H53 reworded |
+| m4 observer type and argument | Section 5.2: `Protocol` in `walker.py`; `observer=None` keyword-only and last; not a `WalkerConfig` field |
+| m5 contract f | Section 5.8: `step_log` and `route_preview` join contract f |
+| m6 "src.input beyond protocol" | Section 5.8 lists the allowed and forbidden modules, forbids `walker`, `walk`, `moves`, `runtime`, `sim`; section 5.7: ctypes only inside functions |
+| m7 how the hash is taken | Section 7 baseline paragraph (raw CRLF stdout through a bash pipe; re-measured by RV2f) |
+| m8 sim `map.csv` | Section 5.2: the CSV the graph was built from, the shifted copy with node offsets |
+| m9 which HWND, real window | Section 5.7: the style on the `wm frame` HWND; the no-key check uses the real viewer with slider and buttons |
+| m10 who clicks | Section 5.7: Hong, or an agent only with the PC idle; listed as N1 in section 7 |
+| m11 frame decoding, frame gaps | Section 5.4: only the newest frame decoded per poll; L2 reports frame gaps |
+| m12 merge into `p1c-runes` | New section 10 |
+| [fyi] for Hong: the view shows a move as or just after its keys are sent | Section 2; the orchestrator decides how Hong is told |
