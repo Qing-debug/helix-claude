@@ -1,8 +1,10 @@
 # Route view: see what the route walker plans and why (design spec)
 
-*Draft, 2026-10-27 (unit RV1). Belongs to route walking (Feature B); branch `p1-route-view`, cut from `p1b-route-walking`
-at 5d1176a. Every claim about today's code cites `file:line` at 5d1176a. Choices Hong would see, and choices that
-touch a frozen file or a module boundary, are open decisions in section 8; nothing in them is decided here.*
+*Draft, 2026-10-27 (unit RV1; decisions recorded by unit RV1b, same day). Belongs to route walking (Feature B); branch
+`p1-route-view`, cut from `p1b-route-walking` at 5d1176a. Every claim about today's code cites `file:line` at 5d1176a.
+The nine choices of section 8 are decided: Hong decided D1, D2 and D6-D9; the orchestrator ruled on D3-D5 (the spec
+reviewer gets those as verdict questions). Section 8 keeps each question, its options and the evidence, and says what
+was chosen; the rest of the spec describes only the chosen design.*
 
 ## 1. Summary
 
@@ -18,15 +20,15 @@ there." The route view is a window of its own that shows, on an enlarged copy of
 It works live while a walk runs and as a replay of a saved run (step or scrub through it), including old runs that
 saved no minimap frames and simulator runs.
 
-Recommended shape (each part is an open decision in section 8):
+Shape (each part was an open decision in section 8, now decided):
 
 - The walker reports each step (position read, move planned, move sent, settle, leg end) to an optional observer.
   The walk process writes those steps to a new file, `steps.jsonl`, in the run folder. Nothing else in the walk
   changes, and with no observer the walker behaves exactly as today.
 - The window is a separate program (its own process) that follows the run folder while the walk runs and replays it
-  afterwards. It recomputes the expected route from each logged position with the planner's own functions, so the
+  afterwards. `walk --view` starts it before the countdown and turns `--record` on. It recomputes the expected route from each logged position with the planner's own functions, so the
   planner is not changed.
-- The live minimap image comes from the frames the walk already records with `--record`.
+- The live minimap image comes from the frames the walk already records with `--record`, which `--view` turns on.
 
 ## 2. What Hong decided (binding)
 
@@ -36,10 +38,27 @@ From `ledger-RV.md`, `Decision (Hong): route view` (QB100-QB103):
   the map editor.
 - Live while a walk runs, and replay of a saved run afterwards (step or scrub through it).
 - It shows (1) the rotation nodes numbered in rotation order, the next target highlighted; (2) the planned route as a
-  line through the in-between nodes; (3) on each hop, the move (walk / teleport / jump / drop) and its keys; (4) a
+  line through the in-between nodes; (3) on each hop, the move (walk / teleport / jump / drop, as he listed them; the planner never plans a jump, so the view shows walk,
+  teleport and drop only, and Hong was told so on 2026-10-27) and its keys; (4) a
   "why it chose" text log: position, move sent, why it re-planned.
 - Built now; the B21 walk test and Feature C (runes) are paused meanwhile.
 
+Hong's answers to the open choices, 2026-10-27 (section 8 has each question and its options; `ledger-RV.md`; the
+decisions are `docs/decisions.md` H47-H52):
+
+- RV1-D1 and D2 (QB104), his pick "Separate, from saved (Recommended)": the view is its own program that follows the
+  run folder (D1 A), and `--view` turns on `--record`, about 0.5 GB an hour (D2 A).
+- RV1-D6 (QB105), "Can't take focus (Recommended)": the live window does not take focus when clicked, using
+  `WS_EX_NOACTIVATE` (B), with a warning line as the fallback if the no-key check shows it fails on a Tk window.
+- RV1-D7 (QB106), "walk --view (Recommended)": `walk --view` starts the viewer (A).
+- RV1-D8 (QB107), "4x, with 2x/3x/4x buttons (Recommended)": 4x by default (B).
+- RV1-D9 (QB108), "Yes, save one picture (Recommended)": every walk saves `minimap.png` at its start (A); old runs
+  draw on a dark canvas. He was asked twice because the first wording was unclear to him.
+- Told to him, not asked: the planner never plans a jump, so the view shows walk, teleport and drop only.
+
+The orchestrator ruled on three code-structure choices (not Hong's decisions; H53): RV1-D3 A (optional observer in the
+walker), RV1-D4 A (a pure preview module calling the planner's private helpers), RV1-D5 A (pure parts in `src/route`,
+the Tk app in a new `src/route_view`). The spec reviewer gets each as a verdict question.
 Brief constraints (RV1): the view must not change what the bot does (route tests and the sim smoke stay
 byte-identical) or slow the walker's loop or the vision thread; frozen files bind. Hong's standing facts
 (`docs/decisions.md:9-13`) apply, in particular "Fix real problems, not ones we don't know will happen. Make checks
@@ -94,6 +113,8 @@ Only the next move is returned, but the whole route is computed inside it and th
   walk; a recomputation must use its own generator or none.
 - Moves are `walk`, `teleport` and `drop` only (`MoveKind`, `planner.py:22-25`). The planner never plans a jump, so
   the view will never show one, although the input layer can send one (`input_layer.py:67-68`, `actions.py:105-106`).
+  Hong was told this on 2026-10-27, so the view's hop list is walk, teleport and drop only; showing jumps would be a
+  planner change, not a view change.
 
 How the view gets the expected route without changing the planner: it recomputes it, outside the walker, from the
 logged position and target with the planner's own functions and the same route graph (section 5.3, decision
@@ -196,7 +217,7 @@ The two processes share only files in the run folder. The same viewer code repla
 
 ### 5.2 Walk side: step events and `steps.jsonl`
 
-The walker gets an optional observer (decision RV1-D3). It is called at the points of `walk_leg` below, with values the
+The walker gets an optional observer (decision RV1-D3 A, orchestrator ruling). It is called at the points of `walk_leg` below, with values the
 walker already has; it never reads the position source, the clock's `sleep` or the random generator. With no observer
 (the default, and the simulator's smoke run) nothing is called.
 
@@ -242,18 +263,18 @@ Writing (walk process):
   for at most 2 s, then syncs and closes the file. Its cleanup step goes after `release_all` in `walk.py`'s cleanup
   order (`walk.py:342-367`), so a slow disk never delays releasing the keys.
 - The walk also copies the map file it loaded into the run folder as `map.csv` (so a later edit to `maps/` cannot
-  change a replay) and saves one minimap snapshot, `minimap.png`, from the first frame it already waits for
-  (`walk.py:255-262`). `steps.jsonl`, `map.csv` and `minimap.png` are added to `_OUT_FILES` (`walk.py:81`).
+  change a replay) and, in every walk (decision RV1-D9 A, Hong's), saves one minimap snapshot, `minimap.png`, from the
+  first frame it already waits for (`walk.py:255-262`). `steps.jsonl`, `map.csv` and `minimap.png` are added to `_OUT_FILES` (`walk.py:81`).
 - The simulator writes `steps.jsonl` and `map.csv` too, but only when `--out` is given (`sim/run.py:291-297`, `:394`);
   the smoke command has no `--out`, so its output cannot change. Only the run's own walker gets the observer, not the
   replay walkers of the recovery metric (`sim/run.py:188-198`).
 
 An observer bug must not end a walk: the walker calls it inside a guard that catches `Exception`, prints one line to
-stderr the first time and stops calling it for the rest of the run (decision RV1-D3 covers this).
+stderr the first time and stops calling it for the rest of the run (part of decision RV1-D3 A).
 
 ### 5.3 The expected route and the move on each hop (route preview)
 
-A new pure function computes, for a logged position and target, what the planner would do (decision RV1-D4):
+A new pure function computes, for a logged position and target, what the planner would do (decision RV1-D4 A, orchestrator ruling):
 
 1. **Start and path**: the same steps as `next_move` P1-P3 (`planner.py:190-218`): `attach`, `_offered`,
    `_on_slope_segment`, `_starts`, `cost_to` per start, cheapest start (ties left before right), `rg.path`. It also
@@ -310,7 +331,7 @@ refusal.
 ```
 
 Minimap panel: the newest frame (live) or the frame nearest before the step (replay), enlarged with nearest-neighbour
-scaling so pixels stay sharp, as the editor does (`map_editor.py:1073-1077`); the scale is decision RV1-D8. Blue nodes
+scaling so pixels stay sharp, as the editor does (`map_editor.py:1073-1077`); the scale is 4x by default with 2x, 3x and 4x buttons (decision RV1-D8 B, Hong's). Blue nodes
 use the editor's colours (`map_editor.py:1029-1030`) and are numbered 1..n in rotation order, which is the blue nodes'
 file order (root `CLAUDE.md`, "Map CSVs"; `controller.py:94`). Orange nodes are small dots without numbers, labelled
 `o<k>` in the side panel only.
@@ -347,12 +368,13 @@ folder, then steps by event, by move or by leg, scrubs with a slider, and plays 
 | `legs.jsonl` only (runs before this feature, e.g. `b21-test1`) | a dark canvas of the map's `# minimap_size=` (FF2: `162,82`, `tests/fixtures/fossil_foundry_2.csv:1`), or a snapshot if one exists | one `planned` + `settled` pair per `MoveEntry`, leg starts and ends from the leg record; no keys timing, no miss times; the expected route recomputed as in 5.3 |
 | simulator `--out` folder | dark canvas of `# minimap_size=` | every event, virtual times |
 
+Every walk from this feature on saves the snapshot (RV1-D9 A); the dark canvas is for older runs and the simulator.
 The legs-only reader is what lets Hong look at `b21-test1` today. Its map comes from `session.json`'s `map` path,
 checked against `map_sha256`; a mismatch gives the warning of section 5.3.
 
 ### 5.6 Threads, locks, and why the walk is not slowed
 
-With the recommended design (separate process, RV1-D1 A):
+The design (separate process, decision RV1-D1 A, Hong's):
 
 - **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). Events come at most about every
   50 ms (the poll interval, `params.py:24`) while the character is lost, and a handful per move otherwise. It takes
@@ -365,7 +387,7 @@ With the recommended design (separate process, RV1-D1 A):
 - **Simulator**: the observer reads values the walker already holds and the simulator clock without side effects
   (`sim/link.py:33-34`), so virtual time, random draws and every result are unchanged.
 
-With the in-process alternative (RV1-D1 B): a Tk thread in the walk process takes the frame reference under
+The in-process alternative, not chosen (RV1-D1 B; kept as evidence): a Tk thread in the walk process takes the frame reference under
 `minimap_frame_lock`, releases it, then scales and draws (never under the lock, unlike `map_editor.py:1069-1087`),
 and takes events from the same queue. Its redraws (scaling, `PhotoImage`, canvas items) share the GIL with the walker
 and the vision thread, so the walk can only be shown to be slowed little, by measurement, not by construction.
@@ -377,8 +399,10 @@ The board's keys go to whichever window has focus. Rules for the view during a l
 - The viewer starts before the walk's 5 s countdown (`walk.py:300-301`), so Hong focuses the game after it opened.
 - It never calls `focus_force`, `lift`, `-topmost`, or opens a message box or dialog while following a live run;
   errors go to its status line.
-- Clicking it during a live run would move focus to it and the bot's next moves would go nowhere. Decision RV1-D6 is
-  between a warning only and making the live window one that clicks do not activate. Microsoft's docs for
+- Clicking it during a live run would move focus to it and the bot's next moves would go nowhere. Decision RV1-D6 B
+  (Hong's): the live window is one that clicks do not activate; if the no-key check below shows that does not work on a
+  Tk window, the fallback is option A, a warning line ("clicking here takes focus from the game") with watch-only
+  controls while live. Microsoft's docs for
   `WS_EX_NOACTIVATE` (https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles): "A top-level
   window created with this style does not become the foreground window when the user clicks it." The docs speak of a
   window *created* with the style; whether setting it on an existing Tk window has the same effect is untested and
@@ -386,7 +410,7 @@ The board's keys go to whichever window has focus. Rules for the view during a l
 
 ### 5.8 Where the code lives
 
-Recommended (decision RV1-D5):
+Decided (decision RV1-D5 A, orchestrator ruling):
 
 - `src/route/step_log.py` (new): the observer, the event tuples, the writer thread and a reader of `steps.jsonl` and
   of the legs-only fallback. Standard library only, so it fits plan hard rule 6 (the route import allowlist,
@@ -396,7 +420,7 @@ Recommended (decision RV1-D5):
   `src.route`, `src.controller`, `src.classes`, `tkinter`, Pillow (already pinned, `requirements.txt:6`) and `cv2`; a
   new import-linter contract forbids it `src.gui`, `src.main`, `src.vision` and `src.input` beyond `protocol`, and
   nothing in `src` imports it. `walk.py` starts it as a child process by module name (`python -m src.route_view`),
-  so the walk imports none of it.
+  so the walk imports none of it (decision RV1-D7 A, Hong's: `walk --view` starts it).
 
 ## 6. What must not change, and what does
 
@@ -404,7 +428,7 @@ Must not change: the planner, moves, route graph, terrain, locate and params (fr
 their tests; the walker's behaviour with no observer; `legs.jsonl` / `laps.jsonl` and their pinned keys; `walk.py`'s
 exit codes and cleanup order apart from the added step; the stop guard (`walker.py:53`, `:223-239`).
 
-Changes (recommended options): `src/route/walker.py` gets the optional observer (frozen file: RV1-D3);
+Changes: `src/route/walker.py` gets the optional observer (frozen file: RV1-D3);
 `src/route/walk.py` gets `--view` (RV1-D7), the observer and writer wiring, the snapshot, the `map.csv` copy, the new
 `_OUT_FILES` and one cleanup step; `src/route/sim/run.py` writes `steps.jsonl` and `map.csv` with `--out`; new
 `src/route/step_log.py`, `src/route/route_preview.py`, `src/route_view/`; `pyproject.toml` (one contract);
@@ -446,7 +470,7 @@ Simulator-only checks (no game, no board; an agent runs them):
 
 Checks with Hong (need the game; never run by an agent without his go, root `CLAUDE.md` safety rules):
 
-- **L1** A supervised 1-lap walk with `--view` (and `--record` if RV1-D2 A): the window shows the nodes numbered, the
+- **L1** A supervised 1-lap walk with `--view` (which turns `--record` on, RV1-D2 A): the window shows the nodes numbered, the
   target ring moves leg by leg, the route line and hop moves appear before each move is sent, the "why" log reads
   sensibly; F12 still stops the walk; closing the view does not stop the walk.
 - **L2** The walk's results are as without the view (same exit code path, legs reached), judged on that run only.
@@ -458,8 +482,13 @@ Checks with Hong (need the game; never run by an agent without his go, root `CLA
 "Who" says who should decide: Hong for what he sees or does, the orchestrator for code structure (it may still send
 those to Hong).
 
+Status, 2026-10-27: all nine are decided (unit RV1b). The blocks below keep the question, the options and the cost
+evidence as written; each header now says who decided and what was chosen, and its last two lines say what the choice
+unblocks. The other options are not part of the design. Hong's words are quoted from `ledger-RV.md`; `docs/decisions.md`
+H47-H53 record them.
+
 ```
-DECISION NEEDED: RV1-D1 (Hong)
+DECIDED: RV1-D1 (Hong, 2026-10-27, QB104) -> A
 Question: Should the route view run as its own program next to the walk, or inside the walk program?
 Why it matters: decides whether the view can slow the walk at all, how live and replay share code, and how fresh the
   live picture is.
@@ -469,12 +498,12 @@ Options:
   B. A window thread inside the walk process reading the shared frame — cost: freshest picture; the view's drawing
      shares the walk's Python lock (GIL), so a slow-down can only be measured, not ruled out; a Tk failure happens
      inside the walk; replay still needs the file reader of A; moderate to reverse.
-Recommendation: A — the brief's "must not slow the walker or the vision thread" holds by construction.
-Paused meanwhile: the plan (RV3) · Continued: everything else in this spec works with either option.
+Decided: A, own program (process) that follows the run folder. Hong's pick: "Separate, from saved (Recommended)". Recommendation was A: the brief's "must not slow the walker or the vision thread" holds by construction.
+Unblocks: the plan (RV3) · Option B is not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D2 (Hong)
+DECIDED: RV1-D2 (Hong, 2026-10-27, QB104) -> A
 Question: In the separate-program design, where does the live minimap picture come from?
 Why it matters: the view needs the live minimap, and the separate program cannot read the walk's memory.
 Options:
@@ -485,12 +514,12 @@ Options:
      new cross-process code with its own tests; replay has no frames unless --record is also on.
   C. The view captures the screen itself — cost: a second full capture loop with its own minimap search, on the same
      GPU output as the walk's; whether two captures interfere is unknown (untested).
-Recommendation: A — tested code, and supervised runs are minutes long today.
-Paused meanwhile: frame handling in the plan · Continued: the snapshot and legs-only replay.
+Decided: A, `--view` also turns on `--record`. Hong's pick, one answer for D1 and D2: "Separate, from saved (Recommended)". Recommendation was A: tested code, and supervised runs are minutes long today.
+Unblocks: frame handling in the plan · Options B and C are not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D3 (orchestrator; touches a frozen file)
+DECIDED: RV1-D3 (orchestrator ruling, 2026-10-27; touches a frozen file) -> A
 Question: How should the walker's steps reach the step log?
 Why it matters: the walker (src/route/walker.py) is frozen (src/route/CLAUDE.md:23); the step log's accuracy depends
   on where the events come from.
@@ -504,12 +533,12 @@ Options:
      successful read before a layer call, walker.py:141-169; the target from the leg count) — cost: no frozen edit;
      stalls and off-graph messages must be recomputed by the viewer; silently wrong if the walker's call order ever
      changes; more code.
-Recommendation: A — exact data for the "why" log, small and behaviour-neutral when unused.
-Paused meanwhile: the walk-side tasks of the plan · Continued: the step-log format and the viewer design.
+Decided: A, an optional observer argument to `RouteWalker`, default None, guarded (disabled after its first exception), about 30 lines in a frozen file. Orchestrator ruling, not Hong's: the walker's freeze is an orchestrator ruling (B14-inv-D1; `src/route/CLAUDE.md:23`), not his. Reason: exact events for the "why" log, and None is provably unchanged (checks S1, S2). The spec reviewer gets it as a verdict question. Cost if wrong: remove one argument. [fyi] the p1c-runes branch plans a `WalkerConfig.between_legs` hook in the same file, so the later merge needs care.
+Unblocks: the walk-side tasks of the plan · Option B is not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D4 (orchestrator; touches a seam of a frozen file)
+DECIDED: RV1-D4 (orchestrator ruling, 2026-10-27; touches a seam of a frozen file) -> A
 Question: How is the expected route computed without changing the planner?
 Why it matters: the planner returns only the next move (planner.py:184-247); the route line and hop moves must match
   what it would do.
@@ -522,12 +551,12 @@ Options:
      frozen-file edit; cleaner seam.
   C. Copy the planner's rules into the preview — cost: no seam, but the copy drifts silently if the planner changes;
      S3 would catch drift only in the simulator.
-Recommendation: A — no frozen edit, and S3 fails loudly if the two ever disagree.
-Paused meanwhile: the preview task · Continued: everything else.
+Decided: A, a pure `src/route/route_preview.py` calling the planner's private helpers, pinned by S3; the seam is noted in `src/route/CLAUDE.md`. Orchestrator ruling, not Hong's. Reason: no frozen edit, and S3 fails loudly on drift. The spec reviewer gets it as a verdict question. Cost if wrong: a later public planner function.
+Unblocks: the preview task · Options B and C are not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D5 (orchestrator; module boundaries)
+DECIDED: RV1-D5 (orchestrator ruling, 2026-10-27; module boundaries) -> A
 Question: Where does the viewer's code live?
 Why it matters: import rules (plan hard rule 6, import-linter contracts in pyproject.toml) limit what src/route and
   src/gui may import.
@@ -538,12 +567,12 @@ Options:
      loading; tkinter (standard library) is allowed; no new top-level package.
   C. In src/gui, opened from the main Helix window — cost: Hong asked for its own window, not the main Helix window;
      src/gui importing more of src.route is a module-boundary change (src/gui/CLAUDE.md:13).
-Recommendation: A — keeps the walk's package free of GUI code and the GUI package out of route.
-Paused meanwhile: file layout in the plan · Continued: everything else.
+Decided: A, pure parts in `src/route`, the Tk app in a new top-level `src/route_view` with its own import-linter contract. Orchestrator ruling, not Hong's. Reason: it keeps GUI code out of the walk package and route out of `src/gui`. The spec reviewer gets it as a verdict question. Cost if wrong: moving one package.
+Unblocks: file layout in the plan · Options B and C are not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D6 (Hong)
+DECIDED: RV1-D6 (Hong, 2026-10-27, QB105) -> B
 Question: What should stop a click on the live view from taking the game's focus (and so the bot's keys)?
 Why it matters: keys go to the focused window; a click on the view mid-walk would send the bot's next moves to it.
 Options:
@@ -552,12 +581,12 @@ Options:
   B. Make the live window not activate on click (Windows' WS_EX_NOACTIVATE), with A as the fallback if a no-key check
      shows it does not work on a Tk window — cost: a small Windows-only piece in the viewer and a manual check; the
      window then cannot take typing (replay controls work after the run, or by mouse only).
-Recommendation: B — it removes the hazard instead of documenting it.
-Paused meanwhile: nothing (both fit the design) · Continued: everything.
+Decided: B, the live window does not activate on click (`WS_EX_NOACTIVATE`), with option A (warning) as the fallback if the no-key check shows it fails on a Tk window. Hong's pick: "Can't take focus (Recommended)". Recommendation was B: it removes the hazard instead of documenting it.
+Unblocks: nothing was waiting · Option A stays only as the fallback.
 ```
 
 ```
-DECISION NEEDED: RV1-D7 (Hong)
+DECIDED: RV1-D7 (Hong, 2026-10-27, QB106) -> A
 Question: How is the live view started?
 Why it matters: what Hong types, and whether the window is open before the countdown (focus, section 5.7).
 Options:
@@ -565,39 +594,39 @@ Options:
      switched to replay of that run — cost: one flag; a child process the walk does not wait for.
   B. Hong starts it himself in a second console (python -m src.route_view --follow <run folder>) — cost: two commands,
      and the run folder name must be known before the walk starts (or the viewer picks the newest folder).
-Recommendation: A — one command, and the order relative to the countdown is guaranteed.
-Paused meanwhile: CLI wording in the plan · Continued: everything else.
+Decided: A, `walk --view` starts the viewer before the 5 s countdown, and it keeps running after the walk ends, switched to replay of that run. Hong's pick: "walk --view (Recommended)". Recommendation was A: one command, and the order relative to the countdown is guaranteed.
+Unblocks: CLI wording in the plan · Option B is not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D8 (Hong)
+DECIDED: RV1-D8 (Hong, 2026-10-27, QB107) -> B
 Question: How big should the minimap be drawn?
 Why it matters: FF2's minimap is 162x82 pixels (fossil_foundry_2.csv:1); at the editor's 2x (map_editor.py:25) that
   is 324x164, small for numbered nodes and hop labels.
 Options:
   A. 2x, as the map editor — cost: same look as the editor; labels crowd.
   B. 4x by default (648x328), with 2x/3x/4x buttons — cost: a little more drawing; labels readable.
-Recommendation: B — the view exists to be read at a glance.
-Paused meanwhile: nothing · Continued: everything.
+Decided: B, 4x by default (648x328) with 2x/3x/4x buttons. Hong's pick: "4x, with 2x/3x/4x buttons (Recommended)". Recommendation was B: the view exists to be read at a glance.
+Unblocks: nothing was waiting · Option A is not part of the design.
 ```
 
 ```
-DECISION NEEDED: RV1-D9 (Hong)
+DECIDED: RV1-D9 (Hong, 2026-10-27, QB108) -> A
 Question: For runs without recorded frames, what is the replay drawn on?
 Why it matters: the brief asks for replay without frames; the first walk test (b21-test1) has none.
 Options:
   A. From now on every walk saves one minimap snapshot at the start (minimap.png), and replay draws on it; older runs
      draw on a dark canvas the size of the map's minimap — cost: one small PNG per run.
   B. Always a dark canvas when there are no frames — cost: nothing saved; less context (no platforms visible).
-Recommendation: A — the snapshot shows the platforms the route runs over, for almost no cost.
-Paused meanwhile: nothing · Continued: everything.
+Decided: A, every walk saves `minimap.png` at its start; replay draws on it; older runs draw on a dark canvas. Hong's pick: "Yes, save one picture (Recommended)". He was asked twice because the first wording was unclear to him. Recommendation was A: the snapshot shows the platforms the route runs over, for almost no cost.
+Unblocks: nothing was waiting · Option B is not part of the design.
 ```
 
 ## 9. Notes for the plan (RV3)
 
 - Order: step log and observer with checks S1, S2, S4; route preview with S3; the pure view model with S5; the Tk
   window and replay with S6; live following with S7; walk and sim wiring; then the checks with Hong.
-- The view will never show a jump: the planner has no jump move (section 3.2). If Hong expects jumps, that is a
-  planner question, not a view one.
+- The view will never show a jump: the planner has no jump move (section 3.2). Hong was told this on 2026-10-27; if he
+  later wants jumps, that is a planner question, not a view one.
 - Feature D wants "what the bot was doing — current leg, state" for its incidents
   (`docs/superpowers/specs/2026-10-21-p1d-watching-and-logging-design.md:13`); `steps.jsonl` can serve it later.

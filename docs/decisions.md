@@ -1943,3 +1943,122 @@ Cost if wrong: C10b is built later than it could have been, and it needs enough 
 Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-C.md:87`; question bank QB95; H40 parts 4 and 5.
+
+## H47 (2026-10-27): Build a route view now: a window that shows what the walker plans and why (QB100-QB103)
+
+Ids note: this entry starts at H47 because H43-H46 already exist on the `p1c-runes` branch and not on this one (`p1-route-view`); skipping them avoids a clash when the branches meet.
+
+Question: during the first in-game walk test Hong raised, unprompted, that he cannot see why the bot does what it does. The orchestrator then put four questions to him (QB100-QB103) on what the view should be.
+
+Ruling [Hong]: build a "Route view" now. His words (unprompted, mid walk test): "Runninng the test has made me realise thereneedsto be a way for me to  see why the botdoes what it does and  what its plannning to  do. For example, I need to see the rotation nodes on the map. I need to see the next node he's going to and the route that he thinks he will take and what skills/movement abilities he'll use to get there." The answers to QB100-QB103, as `ledger-RV.md:17` records them:
+- Its own "Route view" window: the live minimap enlarged like the map editor's, nothing drawn on the game.
+- Live while a walk runs, and replay of a saved run afterwards.
+- It shows the rotation nodes numbered with the next target highlighted, the planned route as a line, the move and its keys on each hop, and a "why it chose" text log (position, move sent, why it re-planned).
+- Build it now. His words: "Now, pause the walk" and "we can pause the runne stuff for now. Work on this new task for  now . It'll make debugging/understandinng what is going wrong  so  much easier". So the B21 walk test is paused (H37, H38; no valid run is confirmed so far, and `b21-test1` was spoiled and is kept), and Feature C (runes) is paused (`p1c-runes` at `95641ca`; the C10 merge waits).
+
+Told to him, not asked: the planner never plans a jump (`src/route/planner.py:22-25`), so the view shows walk, teleport and drop only. A view of jumps would be a planner change.
+
+Reason: his words above. The view is meant to make it much easier to see and understand what goes wrong in a walk.
+
+Affects: the new spec `docs/superpowers/specs/2026-10-27-route-view-design.md` (section 2 holds these answers; section 8 the nine open choices, decided in H48-H53); the order of work (route view first, B21 and Feature C paused). A new branch `p1-route-view` was cut from `p1b-route-walking` at `5d1176a` for it (orchestrator process ruling, `ledger-RV.md`), not built on `p1c-runes`, and is to be merged into `p1c-runes` later.
+
+Cost if wrong: the walk test and the runes work wait while the view is built. The branch can be rebased once if the choice of base proves wrong.
+
+Undo: Hong says so; the paused work resumes where it stopped.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:16` (his unprompted words), `:17` (his answers); question bank QB100-QB103.
+
+## H48 (2026-10-27): The route view is its own program that follows the run folder; `--view` turns on `--record` (RV1-D1, RV1-D2; QB104)
+
+Question: should the route view run as its own program next to the walk or inside it (RV1-D1), and where does its live minimap picture come from (RV1-D2)?
+
+Ruling [Hong]: D1 A and D2 A, one answer to both. His pick: "Separate, from saved (Recommended)". The view is a separate process that follows the run folder, and `walk --view` turns on `--record`, so the view reads the frames the walk already saves (about 0.5 GB an hour by the spec's estimate, which was not measured).
+
+Reason: not given beyond the pick. The spec's recommendation was the same: a separate process cannot slow the walker or the vision thread by construction, and one code path serves live and replay.
+
+Affects: the spec's sections 5.1, 5.6 and 5.8 and its RV1-D1/D2 blocks; the plan (RV3). Option B of D1 (a window thread inside the walk) and options B and C of D2 (shared memory, the view captures the screen itself) are not part of the design. The live picture lags about 0.1-0.3 s (file polling).
+
+Cost if wrong: a lag of up to about 0.3 s in the live picture, and about 0.5 GB of frames per walk hour. Both can be reversed in the viewer without touching the walker.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:24`; question bank QB104.
+
+## H49 (2026-10-27): The live route view cannot take focus when clicked (RV1-D6; QB105)
+
+Question: what should stop a click on the live view from taking the game's focus, and so the bot's keys?
+
+Ruling [Hong]: option B. His pick: "Can't take focus (Recommended)". The live window is made one that a click does not activate (`WS_EX_NOACTIVATE`). If a no-key check shows that this does not work on a Tk window, the fallback is option A: a warning line on the view and watch-only controls while a walk is live.
+
+Reason: not given beyond the pick. The spec's recommendation was the same: it removes the hazard instead of documenting it.
+
+Affects: spec section 5.7 and its RV1-D6 block. While live, the window cannot take typing (replay controls work after the run, or by mouse). The no-key check (open the window, click it, read the foreground window) is not run yet; the Microsoft docs speak of a window created with the style, and whether it works on an existing Tk window is untested.
+
+Cost if wrong: a small Windows-only piece in the viewer and one manual check.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:25`; question bank QB105.
+
+## H50 (2026-10-27): `walk --view` starts the route view (RV1-D7; QB106)
+
+Question: how is the live view started?
+
+Ruling [Hong]: option A. His pick: "walk --view (Recommended)". `walk --view` starts the viewer itself before the 5 s countdown. The viewer keeps running after the walk ends, switched to replay of that run.
+
+Reason: not given beyond the pick. The spec's recommendation was the same: one command, and the window is open before the countdown, so he can focus the game after it.
+
+Affects: spec sections 5.7, 5.8 and 6 (a `--view` flag on `src/route/walk.py`) and its RV1-D7 block; the plan's CLI wording. Option B (he starts the viewer in a second console) is not part of the design.
+
+Cost if wrong: one flag and a child process the walk does not wait for.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:26`; question bank QB106.
+
+## H51 (2026-10-27): The route view draws the minimap at 4x by default, with 2x/3x/4x buttons (RV1-D8; QB107)
+
+Question: how big should the minimap be drawn? Fossil Foundry 2's minimap is 162x82 pixels (`tests/fixtures/fossil_foundry_2.csv:1`); the map editor's 2x makes it 324x164.
+
+Ruling [Hong]: option B. His pick: "4x, with 2x/3x/4x buttons (Recommended)". The default is 4x (648x328) and the window has buttons for 2x, 3x and 4x.
+
+Reason: not given beyond the pick. The spec's recommendation was the same: the view exists to be read at a glance.
+
+Affects: spec section 5.4 and its RV1-D8 block.
+
+Cost if wrong: a little more drawing code.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:27`; question bank QB107.
+
+## H52 (2026-10-27): Every walk saves one minimap picture at its start for the replay (RV1-D9; QB108)
+
+Question: for a run without recorded frames, what is the replay drawn on? He was asked twice: the first wording was unclear to him, so the question was re-asked (QB108).
+
+Ruling [Hong]: option A. His pick: "Yes, save one picture (Recommended)". Every walk saves `minimap.png` at its start, and replay draws on it. Runs from before this feature (such as `b21-test1`) draw on a dark canvas the size of the map's minimap.
+
+Reason: not given beyond the pick. The spec's recommendation was the same: the picture shows the platforms the route runs over, for almost no cost.
+
+Affects: spec sections 5.2 and 5.5 and its RV1-D9 block; `walk.py`'s list of the files a run writes (`_OUT_FILES`). Option B (always a dark canvas) is not part of the design.
+
+Cost if wrong: one small PNG per run.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:28`; question bank QB108.
+
+## H53 (2026-10-27): Three route-view code-structure choices ruled by the orchestrator, not Hong (RV1-D3, RV1-D4, RV1-D5)
+
+Question: three choices in the route-view spec's section 8 touch a frozen file or a module boundary: how the walker's steps reach the step log (D3), how the expected route is computed without changing the planner (D4), and where the viewer's code lives (D5). Hong asked for none of them; they are code structure, which is the orchestrator's call (his standing rule that the codebase is Claude's).
+
+Ruling [local] (orchestrator rulings, not Hong's; each goes to the spec reviewer as a verdict question):
+- RV1-D3 A: an optional observer argument to `RouteWalker`, default None, called inside a guard that disables it after its first exception; about 30 lines in the frozen `src/route/walker.py`. Reason: exact events for the "why" log, and with None the walker is provably unchanged (spec checks S1 byte-identical simulator output, S2). The freeze itself is an orchestrator ruling (B14-inv-D1; `src/route/CLAUDE.md:23`), not Hong's. Cost if wrong: remove one argument. [fyi] the `p1c-runes` branch plans a `WalkerConfig.between_legs` hook in the same file (N3PC67-D5), so the later merge into `p1c-runes` needs care.
+- RV1-D4 A: a pure `src/route/route_preview.py` that calls the planner's private helpers the way `next_move` does, pinned by check S3 (the preview must agree with the planner over a 20-lap simulator run); the seam is noted in `src/route/CLAUDE.md`. Reason: no frozen edit, and S3 fails loudly if the two drift. Cost if wrong: a later public planner function.
+- RV1-D5 A: the pure parts (`step_log.py`, `route_preview.py`) in `src/route`; the Tk app in a new top-level `src/route_view` package with its own import-linter contract. Reason: it keeps GUI code out of the walk package and route out of `src/gui`. Cost if wrong: moving one package.
+
+Affects: spec sections 5.2, 5.3, 5.8 and 6 and the three blocks in section 8; the plan (RV3) and `pyproject.toml` (one contract).
+
+Undo: the spec reviewer's verdict, or the orchestrator's next ruling.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:21`, `:22`, `:23`.
