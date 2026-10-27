@@ -32,11 +32,13 @@ Where the plan is silent (decided here, each local and reversible):
 """
 
 import json
+import reprlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 STEPS_FILE = "steps.jsonl"
@@ -118,6 +120,19 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _int_pair(value: object) -> bool:
+    return isinstance(value, (tuple, list)) and len(value) == 2 and _is_int(value[0]) and _is_int(value[1])
+
+
+def _shape_error(name: str, value: object) -> str | None:
+    """Why `value` cannot be field `name` (the shapes `parse_line` accepts), or None when it can."""
+    if name in _POSITION_FIELDS and not (value is None or _int_pair(value)):
+        return f"{name} must be [x, y] ints or null, got {reprlib.repr(value)}"
+    if name == "keys" and not (isinstance(value, (tuple, list)) and all(_int_pair(pair) for pair in value)):
+        return f"keys must be a list of [delta, mask] int pairs, got {reprlib.repr(value)}"
+    return None
+
+
 def header_line(header: RunHeader) -> Result[bytes, str]:
     """One JSON line ending `b"\\n"` for the run header; `Failure` (never a raise) if it cannot be encoded."""
     try:
@@ -143,17 +158,22 @@ def header_line(header: RunHeader) -> Result[bytes, str]:
 
 def event_line(event: tuple) -> Result[bytes, str]:
     """One JSON line for `(ev, t_ns, *values in FIELDS[ev] order)`; `Failure` for an unknown `ev`, a wrong number of
-    values, a non-int `t_ns` (null only for `settled`), or a value that is not strict JSON. Never raises."""
+    values, a non-int `t_ns` (null only for `settled`), a position or `keys` that is not ints of the shape
+    `parse_line` takes, or a value that is not strict JSON. Never raises."""
     if not isinstance(event, (tuple, list)) or len(event) < 2:
         return Failure("an event is a tuple (ev, t_ns, *values)")
     ev, t_ns, *values = event
     fields = FIELDS.get(ev) if isinstance(ev, str) else None
     if fields is None:
-        return Failure(f"unknown event {ev!r}")
+        return Failure(f"unknown event {reprlib.repr(ev)}")  # reprlib: a plain repr of a deep value raises
     if len(values) != len(fields):
         return Failure(f"event {ev!r} takes {len(fields)} values ({', '.join(fields)}), got {len(values)}")
     if not _t_ns_ok(ev, t_ns):
-        return Failure(f"event {ev!r}: t_ns must be an int, got {t_ns!r}")
+        return Failure(f"event {ev!r}: t_ns must be an int, got {reprlib.repr(t_ns)}")
+    for name, value in zip(fields, values):
+        error = _shape_error(name, value)
+        if error is not None:
+            return Failure(f"event {ev!r}: {error}")
     obj: dict[str, Any] = {"ev": ev, "t_ns": t_ns}
     obj.update(zip(fields, values))
     return _encode(obj)
@@ -313,8 +333,11 @@ class StepTail:
         for raw in data[:end].split(b"\n")[:-1]:
             self._line_no += 1
             parsed = parse_line(raw)
-            item = parsed.value_or(None)
-            if item is None or (isinstance(item, RunHeader) and self._line_no != 1):
+            if not is_successful(parsed):
+                self.bad_lines += 1
+                continue
+            item = parsed.unwrap()
+            if isinstance(item, RunHeader) and self._line_no != 1:
                 self.bad_lines += 1  # a second `run` line counts as bad: one run per file
                 continue
             out.append(item)
@@ -353,7 +376,7 @@ def _read_legs(folder: Path) -> Result[RunSteps, str]:
         return Failure(f"{folder} has {_LEGS_FILE} but no {_SESSION_FILE}")
     try:
         session = json.loads(session_path.read_text(encoding="utf-8"), parse_constant=_reject_constant)
-    except (UnicodeDecodeError, ValueError) as e:
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # RecursionError: nested too deep
         return Failure(f"{session_path} is not valid JSON: {e}")
     if not isinstance(session, dict):
         return Failure(f"{session_path} is not a JSON object")
