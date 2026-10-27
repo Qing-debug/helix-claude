@@ -66,7 +66,7 @@ layers = [
     "src.route.sim",
     "src.route.position",
     "src.route.walker",
-    "src.route.moves",
+    "src.route.moves | src.route.route_preview",
     "src.route.planner",
     "src.route.locate",
     "src.route.route_graph",
