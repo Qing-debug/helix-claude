@@ -66,7 +66,7 @@ GOLDEN = {
         "why: 00:00.900 settled (68, 27): on the aim; plan again from there", "frame: none"],
     6: ["title: settled lap 0 leg 5 -> #6", "warnings: none", "target: #6", "character: 80,24", "aim: 79,24",
         "route: 68,27 79,24 98,24 101,24", "recent: 49,28>68,27",
-        "Target  #6 (101, 24)", "Position (80, 24), on o8", "Route   you -> o8 -> #6   4.6 s", "Hops",
+        "Target  #6 (101, 24)", "Position (80, 24), on o8", "Route   you -> o8 -> #6   4.4 s", "Hops",
         "  1 walk right 1.4 s   hold Right   SENT", "  2 teleport right   Right+E", "  3 walk right 0.4 s   hold Right",
         "why: 00:02.600 settled (80, 24): 1 px past the aim; plan again from there", "frame: none"],
     7: ["title: planned lap 0 leg 5 -> #6", "warnings: none", "target: #6", "character: 80,24", "aim: 99,24",
@@ -109,7 +109,8 @@ WHY_G = [
     "00:00.950 plan: walk right 1.4 s toward o8 (aim x 79)",
     "00:01.160 sent: Right down, Right up +1375 ms (waited 205 ms)",
     "00:02.600 settled (80, 24): 1 px past the aim; plan again from there",
-    "00:02.650 route changed: expected next teleport right toward #6, now walk right 2.6 s toward #6 (landed 1 px past)",
+    ("00:02.650 route changed: expected next teleport right toward #6, now walk right 2.6 s toward #6 "
+     "(landed 1 px past)"),
     "00:02.650 at (80, 24) on o8; start o8 (2.75 s); route o8 o9 #6",
     "00:02.650 plan: walk right 2.6 s toward #6 (aim x 99)",
     "00:02.850 sent: Right down, Right up +2625 ms (waited 190 ms)",
@@ -194,7 +195,16 @@ def test_2_stall_send_failed_and_stop_lines(tmp_path):
 
 def test_2_times_from_one_hour_have_hours(tmp_path):
     events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)), ("reached", 3601.5, (101, 24)), ("end", 3725.25, None, None)]
-    assert _load(make_folder(tmp_path, events)).why[1:] == ["1:00:00.500 reached #6", "1:02:04.250 run ended: no reason"]
+    model = _load(make_folder(tmp_path, events))
+    assert model.why[1:] == ["1:00:00.500 reached #6", "1:02:04.250 run ended: no reason"]
+
+
+def test_2_the_headers_settle_and_stall_values_are_the_ones_in_the_lines(tmp_path):
+    params = {**dataclasses.asdict(MovementParams()), "settle_timeout_s": 3.5, "stall_s": 7.25}
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)), ("stall", 2.0, None), ("settled", 3.0, None, False)]
+    folder = make_folder(tmp_path, events, default_header(params=params))
+    assert _load(folder).why[1:] == ["00:01.000 no progress for 7.25 s (no plan yet): stall counted",
+                                     "00:02.000 did not settle within 3.5 s"]
 
 
 # 3 ---------------------------------------------------------------------------------------------------------------
@@ -222,6 +232,26 @@ def test_3_a_target_with_no_node_is_named_by_its_position(tmp_path):
     assert model.why[1] == "00:00.100 at (49, 28): target (7, 7) is not on this map"
     assert model.why[2] == "00:00.100 plan: walk right 0.5 s"
     assert model.step(1).panel[0] == "Target  (7, 7)"
+
+
+def test_3_a_position_beyond_a_platform_end_is_left_of_the_right_end_and_right_of_the_left_end(tmp_path):
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)), ("settled", 2.0, (38, 28), False),
+              ("settled", 3.0, (140, 60), False)]
+    model = _load(make_folder(tmp_path, events))
+    assert model.step(1).panel[1] == "Position (38, 28), left of o6"
+    assert model.step(2).panel[1] == "Position (140, 60), right of o3"
+
+
+def test_3_recent_keeps_the_last_five_finished_moves(tmp_path):
+    xs = [50, 52, 54, 56, 58, 60, 62]  # seven moves on one platform: the pair is (planned pos, settled pos)
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24))]
+    for n, x in enumerate(xs):
+        events += [("planned", 2.0 + n, (x, 28), "walk", "RIGHT", 100.0, 4.0, (x + 1, 28)),
+                   ("settled", 2.5 + n, (x + 1, 28), False)]
+    events.append(("planned", 10.0, (63, 28), "walk", "RIGHT", 100.0, 4.0, (64, 28)))
+    model = _load(make_folder(tmp_path, events))
+    assert model.step(len(events) - 1).recent == tuple(((x, 28), (x + 1, 28)) for x in xs[2:])
+    assert len(model.step(len(events) - 2).recent) == 5
 
 
 # 4 ---------------------------------------------------------------------------------------------------------------
@@ -325,6 +355,26 @@ def test_5_a_map_that_cannot_be_parsed_is_a_warning_too(tmp_path):
     model = _load(folder)
     assert model.warnings[0] == WARN_MAP
     assert model.warnings[-1].startswith("route not shown: cannot load map") and model.nodes == ()
+
+
+def test_5_a_relative_map_path_is_joined_to_the_repo_root(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "maps").mkdir(parents=True)
+    (tmp_path / "run").mkdir()
+    (repo / "maps" / "x.csv").write_bytes(FF2.read_bytes())
+    folder = make_folder(tmp_path / "run", None, default_header(map="maps/x.csv"))
+    (folder / "map.csv").unlink()  # the folder holds no copy: only the repo's relative path can give the map
+    result = load_folder(folder, repo_root=repo, current_git_head=GIT_HEAD)
+    assert is_successful(result), result
+    model = result.unwrap()
+    assert model.warnings == () and len(model.nodes) == 21 and model.rg is not None
+
+
+def test_5_a_header_with_no_map_hash_gives_no_changed_map_warning(tmp_path):
+    folder = make_folder(tmp_path, None, default_header(map_sha256=None))
+    (folder / "map.csv").write_bytes(FF2.read_bytes() + b"# edited\n")
+    model = _load(folder)
+    assert model.warnings == () and model.rg is not None
 
 
 # 6 ---------------------------------------------------------------------------------------------------------------
@@ -514,6 +564,19 @@ def test_10_the_bracket_says_short_and_on_the_aim(tmp_path):
     assert short.why[4].endswith("(landed 3 px short)")
     exact = _two_plans(tmp_path / "b", ("settled", 2.0, (68, 27), False), walk_left)
     assert exact.why[4].endswith("(on the aim)")
+
+
+@pytest.mark.parametrize(("kind", "direction", "settle", "miss"), [
+    ("walk", "LEFT", (65, 28), 3), ("teleport", "UP", (68, 25), 2), ("teleport", "DOWN", (68, 29), 2),
+])
+def test_10_past_is_along_the_moves_direction_for_left_up_and_down(tmp_path, kind, direction, settle, miss):
+    # the first hop of the plan lands at (68, 27); all three settle `miss` px beyond it in the move's direction
+    first = ("planned", 1.1, (49, 28), kind, direction, 500.0 if kind == "walk" else None, 5.175, (66, 28))
+    second = ("planned", 2.1, settle, "walk", "LEFT", 100.0, 4.0, (66, 28))
+    model = _load(make_folder(tmp_path, [("leg", 1.0, 0, 5, (49, 28), (101, 24)), first,
+                                         ("settled", 2.0, settle, False), second]))
+    assert model.why[3] == f"00:01.000 settled {settle}: {miss} px past the aim; plan again from there"
+    assert model.why[4].endswith(f"(landed {miss} px past)")
 
 
 def test_10_no_line_when_the_plan_follows_a_reached_or_a_missed_plan(tmp_path):

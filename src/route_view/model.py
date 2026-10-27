@@ -688,7 +688,7 @@ class RunModel:
 
 
 def load_folder(folder: Path, *, repo_root: Path, current_git_head: str | None) -> Result[RunModel, str]:
-    """`read_run` + the frame index + `RunModel.open` + `extend` + `add_frames`; a Failure only when `read_run` fails."""
+    """`read_run` + the frame index + `RunModel.open` + `extend` + `add_frames`; Failure only when `read_run` fails."""
     folder = Path(folder)
     run = read_run(folder)
     if not is_successful(run):
