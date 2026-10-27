@@ -71,5 +71,5 @@ layers = [
     "src.route.locate",
     "src.route.route_graph",
     "src.route.terrain",
-    "src.route.params | src.route.leg_log | src.route.character",
+    "src.route.params | src.route.leg_log | src.route.character | src.route.step_log",
 ]
