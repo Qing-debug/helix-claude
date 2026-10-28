@@ -61,10 +61,14 @@ class FakeClock:
 
 class FakeWin:
     """The reads of `Win32`, scripted by the fake clock. `clicks[k]` is what Hong does at prompt k: "view",
-    "none", "elsewhere_then_view", "view_takes_fg" (the view stays the foreground) or "dialog_takes_fg"."""
+    "none", "elsewhere_then_view", "view_takes_fg" (the view stays the foreground), "dialog_takes_fg" or
+    "held_view_takes_fg" (the button is held 2 s and the view takes the foreground just after the release).
+    `back`: "never" is a console that Hong does not click when asked. After `end` the extended style reads
+    `end_style` (default: normal) from `style_delay` fake seconds on (live before)."""
 
     def __init__(self, clock: FakeClock, out: Path, *, clicks=("view",) * 4, title="changing", taskbar=True,
-                 ctrl_c="deliver", alive=True, fg_moves=(), extra=None, gone_after=None) -> None:
+                 ctrl_c="deliver", alive=True, fg_moves=(), extra=None, gone_after=None, back="click",
+                 end_style=None, style_delay=0.0) -> None:
         self.clock, self.out = clock, out
         self.clicks, self.title_mode, self.taskbar, self.ctrl_c, self.alive = list(clicks), title, taskbar, ctrl_c, alive
         self.fg_moves = list(fg_moves)  # (from, to, hwnd) in fake seconds
@@ -79,23 +83,29 @@ class FakeWin:
         self.back_at: float | None = None
         self.taskbar_at: float | None = None
         self.calls: list[str] = []
+        self.back, self.end_style, self.style_delay = back, end_style, style_delay
+        self.ended_seen: float | None = None
+        self.prompt_log: list[tuple[float, int]] = []  # (time, foreground) at each click prompt
 
     def on_say(self, text: str) -> None:
         t = self.clock.t
         if text.startswith("Click this console"):
-            self.back_at = t + 0.3
+            self.back_at = None if self.back == "never" else t + 0.3
         elif text.startswith("The route view now has a taskbar button"):
             self.taskbar_at = t + 0.5 if self.taskbar else None
         elif text.startswith("Click "):
             plan = self.clicks[self.prompts]
             self.prompts += 1
-            if plan in ("view", "view_takes_fg", "dialog_takes_fg", "elsewhere_then_view"):
+            self.prompt_log.append((t, self.foreground()))
+            if plan != "none":
                 self.presses.append((t + (1.0 if plan == "elsewhere_then_view" else 0.3),
-                                     t + (1.2 if plan == "elsewhere_then_view" else 0.5), VIEW))
+                                     t + {"elsewhere_then_view": 1.2, "held_view_takes_fg": 2.3}.get(plan, 0.5), VIEW))
             if plan == "elsewhere_then_view":
                 self.presses.append((t + 0.3, t + 0.5, CONSOLE))
-            if plan in ("view_takes_fg", "dialog_takes_fg"):
-                self.taken, self.back_at = (t + 0.5, VIEW if plan == "view_takes_fg" else DIALOG), None
+            if plan in ("view_takes_fg", "dialog_takes_fg", "held_view_takes_fg"):
+                self.taken = (t + (2.4 if plan == "held_view_takes_fg" else 0.5),
+                              DIALOG if plan == "dialog_takes_fg" else VIEW)
+                self.back_at = None
 
     def foreground(self) -> int:
         t = self.clock.t
@@ -137,7 +147,13 @@ class FakeWin:
 
     def ex_style(self, hwnd: int) -> int:
         ended = read_run(self.out).map(lambda run: run.ended).value_or(False)
-        return STYLE_NORMAL if ended else STYLE_LIVE
+        if not ended:
+            return STYLE_LIVE
+        if self.ended_seen is None:
+            self.ended_seen = self.clock.t
+        if self.clock.t - self.ended_seen < self.style_delay:
+            return STYLE_LIVE
+        return STYLE_NORMAL if self.end_style is None else self.end_style
 
     def process_alive(self, pid: int) -> bool:
         return self.alive
@@ -147,8 +163,8 @@ class FakeWin:
             signal.raise_signal(signal.SIGINT)
 
 
-def _fakes(win: FakeWin, out: Path, *, ready=True, start_fail=False, log=(FIRST_SHOW,)):
-    proc = SimpleNamespace(pid=999, poll=lambda: None)
+def _fakes(win: FakeWin, out: Path, *, ready=True, start_fail=False, log=(FIRST_SHOW,), poll=lambda: None):
+    proc = SimpleNamespace(pid=999, poll=poll)
 
     def start(folder: Path):
         if start_fail:
@@ -184,12 +200,12 @@ def _tools(win: FakeWin, clock: FakeClock, answers, ask_advance: float = 0.0):
 
 
 def drive(run_dir, *, answers=("n", ""), ask_advance=0.0, maple=lambda: MAPLE_OK, ready=True, start_fail=False,
-          log=(FIRST_SHOW,), left=None, **win_kw):
+          log=(FIRST_SHOW,), left=None, poll=lambda: None, **win_kw):
     """`left`: a function of the fake time giving what `Feeder.remaining` returns (None: the real one)."""
     out, lines = run_dir
     clock = FakeClock()
     win = FakeWin(clock, out, **win_kw)
-    start, wait = _fakes(win, out, ready=ready, start_fail=start_fail, log=log)
+    start, wait = _fakes(win, out, ready=ready, start_fail=start_fail, log=log, poll=poll)
     said, asked, say, ask = _tools(win, clock, answers, ask_advance)
     patched = mock.patch.object(Feeder, "remaining", lambda _self: left(clock.t)) if left else contextlib.nullcontext()
     with patched:
@@ -282,18 +298,32 @@ def test_3_dry_run_feeds_everything_and_reads_it_back_without_win32(tmp_path, mo
     assert "events fed and read back equal" in capsys.readouterr().out
 
 
-def test_3_usage_errors_exit_2(tmp_path, monkeypatch, template):
+def test_3_usage_errors_exit_2_with_their_message_before_anything_is_built(tmp_path, monkeypatch, template, capsys):
     data = tmp_path / "data"
     monkeypatch.setattr(view_check, "_DATA", data)
     monkeypatch.setattr(view_check, "_maple_check", lambda: MAPLE_OK)
-    assert view_check.main(["run", "--dry-run", "--out", str(tmp_path / "elsewhere")]) == 2  # outside data/
+
+    def not_built(*_args):
+        raise AssertionError("build_feed ran for a usage error")
+
+    monkeypatch.setattr(view_check, "build_feed", not_built)  # an exit 2 must come from the check, not a failed build
+
+    def run(*argv):
+        code = view_check.main(list(argv))
+        return code, capsys.readouterr().err
+
     used = data / "route_view" / "used"
     shutil.copytree(template[0], used)
-    assert view_check.main(["run", "--dry-run", "--out", str(used)]) == 2  # already holds steps.jsonl and source
+    code, err = run("run", "--dry-run", "--out", str(tmp_path / "elsewhere"))
+    assert code == 2 and "--out must be a folder inside" in err
+    code, err = run("run", "--dry-run", "--out", str(used))  # already holds steps.jsonl and source
+    assert code == 2 and "already exists" in err and "choose a new --out" in err
+    code, err = run("run", "--dry-run", "--laps", "0", "--out", str(data / "route_view" / "n3"))
+    assert code == 2 and "--laps must be at least 1, got 0" in err
     monkeypatch.setattr(view_check, "_on_windows", lambda: False)
-    assert view_check.main(["run", "--out", str(data / "route_view" / "n2")]) == 2  # not Windows, no --dry-run
-    assert view_check.main(["run", "--laps", "0", "--out", str(data / "route_view" / "n3")]) == 2
-    assert not (data / "route_view" / "n2").exists() and view_check.main(["nonsense"]) == 2
+    code, err = run("run", "--out", str(data / "route_view" / "n2"))  # not Windows, no --dry-run
+    assert code == 2 and "run it on Windows" in err and not (data / "route_view" / "n2").exists()
+    assert run("nonsense")[0] == 2
 
 
 # 4 ------------------------------------------------------------------------------------------------------------------
@@ -423,6 +453,7 @@ def test_11_the_tool_never_sends_input():
 
 # 12 -----------------------------------------------------------------------------------------------------------------
 
+@pytest.mark.slow  # starts a subprocess (hard rule 9)
 @pytest.mark.skipif(sys.platform != "win32", reason="reads the Windows desktop")
 def test_12_the_real_reads(tmp_path):
     win = Win32()
@@ -536,6 +567,7 @@ def test_15_a_dialog_of_another_program_during_the_first_show_is_not_done_not_fa
     seen = drive(run_dir, fg_moves=[(0.3, 0.5, DIALOG)])
     check = seen.by["first show kept the foreground"]
     assert check.passed is None and "Dialog" in check.detail and "#32770" in check.detail and "pid 999" in check.detail
+    assert "ConsoleWindowClass" not in check.detail  # the return to the console is not another window
     assert seen.by["no console window"].passed is True
 
 
@@ -544,6 +576,12 @@ def test_15_a_dialog_that_closed_again_is_still_named_from_the_change(run_dir):
     check = seen.by["first show kept the foreground"]
     assert check.passed is None and "'Dialog' (class #32770, pid 999)" in check.detail
     assert seen.by["no console window"].passed is True
+
+
+def test_15_a_return_to_the_console_inside_a_click_span_is_not_another_window(run_dir):
+    seen = drive(run_dir, fg_moves=[(0.3, 1.5, DIALOG)])  # the dialog goes away while the first click is awaited
+    assert seen.by["first show kept the foreground"].passed is None
+    assert seen.by[f"click on {CLICKS[0]} kept the foreground"].passed is True
 
 
 def test_15_another_window_of_the_viewers_process_fails_it(run_dir):
@@ -563,6 +601,60 @@ def test_15_a_click_span_with_only_another_programs_window_is_none_and_the_conso
     assert check.passed is None and "Dialog" in check.detail
     assert "Click this console to bring it back to the front" in seen.said
     assert seen.by[f"click on {CLICKS[2]} kept the foreground"].passed is True
+
+
+# RV-10 review m4: tests for the mutants that survived ------------------------------------------------------------------
+
+def test_5_a_foreground_still_on_the_view_from_an_earlier_click_fails_the_next_ones_and_the_wait_is_bounded(run_dir):
+    seen = drive(run_dir, clicks=("view", "view_takes_fg", "view", "view"), back="never")
+    for target in CLICKS[1:]:
+        check = seen.by[f"click on {target} kept the foreground"]
+        assert check.passed is False and "the route view took the foreground" in check.detail
+    times = [t for t, _fg in seen.win.prompt_log]
+    assert times[2] - times[1] >= view_check.CLICK_WAIT_S  # the console was never clicked: the wait ran its full length
+
+
+def test_5_the_next_prompt_waits_until_the_console_is_the_foreground_again(run_dir):
+    seen = drive(run_dir, clicks=("view", "view_takes_fg", "view", "view"))
+    assert [fg for _t, fg in seen.win.prompt_log] == [CONSOLE] * 4
+    times = [t for t, _fg in seen.win.prompt_log]
+    assert times[2] - times[1] < view_check.CLICK_WAIT_S
+
+
+def test_6_a_click_held_down_is_judged_after_the_button_is_up(run_dir):
+    seen = drive(run_dir, clicks=("view", "held_view_takes_fg", "view", "view"))
+    check = seen.by[f"click on {CLICKS[1]} kept the foreground"]
+    assert check.passed is False and "the route view took the foreground" in check.detail
+
+
+def test_10_a_viewer_whose_process_has_exited_fails_the_ctrl_c_check(run_dir):
+    seen = drive(run_dir, poll=lambda: 1)
+    check = seen.by["Ctrl+C in the parent's console did not reach the viewer"]
+    assert check.passed is False and "ended" in check.detail
+
+
+def test_14_a_title_that_changes_inside_the_update_wait_is_true(run_dir):
+    seen = drive(run_dir, title=("once", 2.5), left=lambda _t: 5)  # the change comes 1.5 s into the 3 s wait
+    assert seen.by["the view updates while live"].passed is True
+
+
+@pytest.mark.parametrize("end_style", [0x0, STYLE_LIVE, STYLE_LIVE | STYLE_NORMAL])
+def test_16_the_style_check_needs_the_appwindow_bit_and_no_noactivate_bit(run_dir, end_style):
+    seen = drive(run_dir, end_style=end_style)
+    check = seen.by["end clears the no-activate style"]
+    assert check.passed is False and check.detail == f"extended style {end_style:#x}"
+
+
+def test_16_the_style_is_polled_until_the_viewer_has_changed_it(run_dir):
+    seen = drive(run_dir, style_delay=1.5)
+    check = seen.by["end clears the no-activate style"]
+    assert check.passed is True and check.detail == f"extended style {STYLE_NORMAL:#x}"
+
+
+def test_16_no_taskbar_click_in_time_is_not_done(run_dir):
+    seen = drive(run_dir, taskbar=False)
+    check = seen.by["a taskbar click activates it after end"]
+    assert check.passed is None and "no taskbar click within 30 s" in check.detail
 
 
 def test_check_is_a_plain_record():
