@@ -16,6 +16,12 @@ MapleStory closed (the check is repeated before every click) and with Hong, or a
 doing the clicks. Start it with the venv's `python.exe`, so that its parent is what a walk's is (spec 5.9's job-object
 note).
 
+Run it in a console window of its own, started by hand and used for nothing else: its Ctrl+C check sends CTRL_C_EVENT
+to process group 0, which reaches every process attached to this console, and a process without a handler exits. So
+never run it through a pipe or `Tee-Object`, a `.bat` wrapper, an agent's shell tool, or the console of a walk (the
+`tee`, the wrapper, the shell or the walk would end, and the tool's next print would fail). The viewer is not on that
+console (`CREATE_NO_WINDOW`, `walk._start_viewer`): that is what the check shows. The tool does not test for this.
+
 Exit codes: 0 every check passed · 1 a check failed or was not done · 2 usage, an `--out` outside `data/` or already
 used, (without `--dry-run`) not Windows, or standard input closed so that its two questions cannot be asked (`n1.json`
 is still written, with the checks not made as "not done") · 3 MapleStory is running, or the process list cannot be read.
