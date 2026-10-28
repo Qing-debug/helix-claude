@@ -5,8 +5,9 @@ Two runs of the FF2 fixture map, seed 1, 20 laps: the plain run and the run with
 (`map.csv` and the header's params), as the viewer will, and every logged event is compared with `preview`.
 
 What these tests pin (pass/fail, `==` and `is`, no tolerance anywhere):
-- (1) the runs themselves: the folders read back whole, the move counts of spec 7, every leg target and logged `toward`
-  is a node of the rebuilt graph.
+- (1) the runs themselves: the folders read back whole, the move counts of spec 7, every leg target (checked in `_steps`,
+  where the previews are built, so a bad target fails the fixture with a message) and logged `toward` is a node of the
+  rebuilt graph.
 - (2) S3: for every `planned` event the preview's cost to go, `toward` and first move equal the logged ones (a coin-flip
   down is one of the two options); a `reached` event is an arrived preview; a `no_plan` event is a preview Failure with
   the logged message (none occurs in either run today).
@@ -88,7 +89,8 @@ def _steps(events, by_pos):
     target = None
     for i, ev in enumerate(events):
         if ev.ev == "leg":
-            target = by_pos[ev.data["to"]]
+            target = by_pos.get(ev.data["to"])
+            assert target is not None, f"event {i} (leg): its target {ev.data['to']} is not a node of the rebuilt graph"
         elif ev.ev in ("planned", "no_plan", "reached"):
             assert target is not None, f"event {i} ({ev.ev}) comes before any leg"
             yield i, ev, target
@@ -150,9 +152,7 @@ def test_1_the_runs_read_back_whole_with_the_planned_counts_and_every_position_a
         assert events[-1].ev == "end" and events[-1].data["reason"] == "max_laps", run.name
         counts = {ev: sum(e.ev == ev for e in events) for ev in ("planned", "no_plan", "reached")}
         assert counts["planned"] == run.report.moves == MOVES[run.name], (run.name, counts, run.report.moves)
-        legs = [e.data["to"] for e in events if e.ev == "leg"]
         toward = [e.data["toward"] for e in events if e.ev == "planned"]
-        assert all(pos in run.by_pos for pos in legs), run.name
         assert all(pos in run.by_pos for pos in toward), run.name
         coin = sum(len(pv.hops[0].options) == 2 for _, _, _, pv in _planned(run))
         print(f"inputs ({run.name}): planned {counts['planned']}, no_plan {counts['no_plan']}, "
