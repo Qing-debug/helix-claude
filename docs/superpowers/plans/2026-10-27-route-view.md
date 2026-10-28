@@ -2224,7 +2224,10 @@ python -m src.route.harness.view_check run [--out data/route_view/n1-<UTC stamp>
 python -m src.route.harness.view_check after --out <the run's folder>
 ```
 Exit codes: 0 every check passed · 1 a check failed or was not done · 2 usage, an `--out` outside `data/` or already
-used, or (without `--dry-run`) not Windows · 3 MapleStory is running, or the process list cannot be read.
+used, (without `--dry-run`) not Windows, or standard input closed so that its two questions cannot be asked (`n1.json`
+is still written, with `stopped_by_no_input` and the checks not yet made as "not done") · 3 MapleStory is running, or
+the process list cannot be read. (As built, RV-10 fix round, ruled final: a Ctrl+C that cannot be sent is a `FAIL`
+whose detail starts `GenerateConsoleCtrlEvent failed:`, exit 1.)
 
 - [ ] Read V1 (`read_run`, the file names), V6, V7, spec 5.7 (whole, the no-key check above all), 5.9 steps 2-3, RV3-D7,
   RV-8's `__main__` text (the viewer writes its pid into `view.ready`; its title starts `Route view`),
@@ -2522,9 +2525,13 @@ without Hong's go, except H-1 on an idle PC as its "Who" says. The root `CLAUDE.
 mouse input) and with MapleStory closed, using real mouse input. **Needs:** RV-1..RV-10 merged on `p1-route-view`; no
 board, no game. **Blocks:** H-2.
 
-1. Close MapleStory. From the repo root, in a console of its own, with the venv's interpreter (so the parent is
-   what a walk is): `.venv\Scripts\python.exe -m src.route.harness.view_check run`. It prints its folder
-   (`data/route_view/n1-<stamp>`).
+1. Close MapleStory. From the repo root, in a console window of its own, opened by hand and used for nothing else,
+   with the venv's interpreter (so the parent is what a walk is):
+   `.venv\Scripts\python.exe -m src.route.harness.view_check run`. It prints its folder (`data/route_view/n1-<stamp>`).
+   Never run it through a pipe or `Tee-Object`, a `.bat` wrapper, an agent's shell tool, or the console of a walk: its
+   Ctrl+C check sends CTRL_C_EVENT to every process on that console, and a process without a handler (the `tee`, the
+   wrapper, the shell, the walk) exits (`src/route/harness/view_check.py`, module docstring; the tool does not test
+   for this). An agent that runs H-1 opens a fresh console window for it.
 2. Do what it asks, in order: keep its console in front; answer the "did another window appear" question; answer
    whether the route view shows the map and changes as lines arrive; click the four parts of the route view it names
    (the map, the why log's text, the why log's scrollbar, the title bar without moving the mouse: RV3-D7 A + title
@@ -2555,8 +2562,12 @@ pass before the claim is missing or too late, RV6 I1). Only with `focus_error` N
 - a "click on ... kept the foreground" check → RV1-D6's fallback A (Hong's): RV-8's `__main__` calls
   `window.add_warning("clicking here takes focus from the game")` on every live show (the live window already has
   no controls, so it is already watch-only);
-- "ready within the walk's wait", "no console window", "Ctrl+C ... did not reach the viewer" or "the viewer outlived
-  its parent" (the spawn part) → stop: back to spec 5.9 step 2 before L1;
+- "ready within the walk's wait", "no console window", "the viewer outlived its parent", or "Ctrl+C ... did not reach
+  the viewer" as a `FAIL` whose detail is "the viewer ended" (the spawn part) → stop: back to spec 5.9 step 2 before
+  L1. The other two outcomes of the Ctrl+C check mean the check could not run, not that the spawn is wrong: the detail
+  "the Ctrl+C was not delivered", or one that starts `GenerateConsoleCtrlEvent failed:` → fix the launch (a fresh
+  console window of its own, step 1) and run H-1 again. So is an exit 2 that says standard input is closed
+  (`n1.json` has `stopped_by_no_input`);
 - "end clears the no-activate style" or "a taskbar click activates it after end" → raised to the orchestrator
   (replay after a live run; it does not touch focus during a walk).
 A `NOT DONE` check is run again, not passed.
