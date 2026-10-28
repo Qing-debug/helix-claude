@@ -464,8 +464,8 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
 
     def finish() -> None:
         if feeder is not None:
-            facts["lines_fed"] = feeder.fed
             feeder.stop()
+            facts.setdefault("lines_fed", feeder.fed)  # what the thread fed; step 6 has set it before `write_end`
             feeder.write_end()
         try:
             watch.sample()
@@ -539,6 +539,7 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
             wait_end = clock() + UPDATE_WAIT_S
             while clock() < wait_end and not any(left > 0 for _t, _title, left in watch.titles[1:]):
                 nap(WATCH_PERIOD_S)
+        feed_left = feeder.remaining()  # as the wait ends: Hong's answers below take time and must not decide it
         shows = ask("Does the route view show the map and change as lines arrive? [Y/n] ")
         watch.sample()
         said_no = shows.strip().lower().startswith("n")
@@ -552,7 +553,7 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
         update: bool | None
         if changed:
             update, how = (False, "answered n") if said_no else (True, "the title changed while lines were fed")
-        elif feeder.remaining() == 0:
+        elif feed_left == 0:
             update, how = None, "the feed finished before a title change was seen; run again with more --laps"
         else:
             update, how = False, "no title change while fed"
@@ -614,8 +615,8 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
 
         # step 6: end
         if feeder is not None:
-            facts["lines_fed"] = feeder.fed
             feeder.stop()
+            facts["lines_fed"] = feeder.fed
             feeder.write_end()
         style = win.ex_style(view)
         limit = clock() + STYLE_WAIT_S

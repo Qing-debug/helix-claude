@@ -4,6 +4,7 @@ no input and starts no process. Tests that call `main` without `--dry-run` patch
 (PF81 m16) so they run anywhere. Test 12 reads the real desktop (Windows only) and creates nothing."""
 
 import ast
+import contextlib
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from returns.result import Failure, Success
@@ -182,14 +184,17 @@ def _tools(win: FakeWin, clock: FakeClock, answers, ask_advance: float = 0.0):
 
 
 def drive(run_dir, *, answers=("n", ""), ask_advance=0.0, maple=lambda: MAPLE_OK, ready=True, start_fail=False,
-          log=(FIRST_SHOW,), **win_kw):
+          log=(FIRST_SHOW,), left=None, **win_kw):
+    """`left`: a function of the fake time giving what `Feeder.remaining` returns (None: the real one)."""
     out, lines = run_dir
     clock = FakeClock()
     win = FakeWin(clock, out, **win_kw)
     start, wait = _fakes(win, out, ready=ready, start_fail=start_fail, log=log)
     said, asked, say, ask = _tools(win, clock, answers, ask_advance)
-    checks, facts = run_checks(out, lines, win=win, start_viewer=start, wait=wait, ask=ask, say=say, clock=clock,
-                               sleep=clock.sleep, maple=maple)
+    patched = mock.patch.object(Feeder, "remaining", lambda _self: left(clock.t)) if left else contextlib.nullcontext()
+    with patched:
+        checks, facts = run_checks(out, lines, win=win, start_viewer=start, wait=wait, ask=ask, say=say, clock=clock,
+                                   sleep=clock.sleep, maple=maple)
     return SimpleNamespace(checks=checks, by={c.name: c for c in checks}, facts=facts, win=win, said=said, asked=asked,
                            out=out)
 
@@ -300,7 +305,7 @@ def test_4_all_pass(tmp_path, monkeypatch, template, capsys):
     assert len(record["checks"]) == 12 and all(c["passed"] is True for c in record["checks"]), record["checks"]
     facts = record["facts"]
     assert (facts["fg0"], facts["view_hwnd"], facts["viewer_pid"], facts["redirector_pid"]) == (CONSOLE, VIEW, 4321, 999)
-    assert facts["first_show_state"] == FIRST_SHOW and facts["focus_error"] is None and facts["lines_fed"] > 0
+    assert facts["first_show_state"] == FIRST_SHOW and facts["focus_error"] is None and facts["lines_fed"] >= 0  # real time
     assert len(facts["title_changes"]) > 1 and facts["fg_changes"][-1]["hwnd"] == VIEW
     assert read_run(ran.out).unwrap().ended
     out = capsys.readouterr().out
@@ -497,6 +502,27 @@ def test_14_a_feed_that_ran_out_is_not_done_never_false(run_dir, monkeypatch):
     seen = drive(run_dir, title="constant")
     check = seen.by["the view updates while live"]
     assert check.passed is None and "the feed finished" in check.detail
+
+
+def test_14_a_feed_that_ran_out_only_after_the_questions_is_judged_at_the_end_of_the_wait(run_dir):
+    # RV-10 review m2: the feed had 5 lines left when the wait ended and 0 after Hong's slow answers (plan step 3:
+    # "before the wait ended"), so a view whose title never changed is False, not NOT DONE.
+    seen = drive(run_dir, title="constant", ask_advance=30.0, left=lambda t: 5 if t < 40.0 else 0)
+    check = seen.by["the view updates while live"]
+    assert check.passed is False and check.detail.startswith("no title change while fed")
+
+
+def test_14_lines_fed_is_what_the_thread_fed_not_the_lines_write_end_added(run_dir, monkeypatch):
+    # RV-10 review m1: with a period no test waits for, the thread feeds nothing; `write_end` then appends them all.
+    monkeypatch.setattr(view_check, "FEED_PERIOD_S", 1000.0)
+    seen = drive(run_dir)
+    assert seen.facts["lines_fed"] == 0 and read_run(seen.out).unwrap().ended
+
+
+def test_14_lines_fed_is_also_recorded_when_the_viewer_was_not_ready(run_dir, monkeypatch):
+    monkeypatch.setattr(view_check, "FEED_PERIOD_S", 1000.0)
+    seen = drive(run_dir, ready=False)
+    assert seen.facts["lines_fed"] == 0 and read_run(seen.out).unwrap().ended
 
 
 def test_14_a_focus_call_failure_in_the_log_is_copied_into_the_facts(run_dir):
