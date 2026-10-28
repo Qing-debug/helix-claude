@@ -1,6 +1,6 @@
 # src/route_view: the route view
 
-Spec: `docs/superpowers/specs/2026-10-27-route-view-design.md` (5.4 the window, 5.7 focus, 5.8 where the code lives, 5.9 the walk's side). Plan: `docs/superpowers/plans/2026-10-27-route-view.md`. A window that shows what the route walker planned and why, from a run folder. It is a separate process: `python -m src.route.walk --view` starts it by module name, and the two share only files in the run folder. It sends no key and needs no board. The walk's side (the spawn, the wait, `steps.jsonl` and the other files it writes) is in `src/route/CLAUDE.md`.
+Spec: `docs/superpowers/specs/2026-10-27-route-view-design.md` (5.4 the window, 5.7 focus, 5.8 where the code lives, 5.9 the walk's side). Plan: `docs/superpowers/plans/2026-10-27-route-view.md`. A window that shows what the route walker planned and why, from a run folder. It is a separate process: `python -m src.route.walk --view` starts it by module name, and the two share only files in the run folder. It sends no key and needs no board. The walk's side (`steps.jsonl` and the other files it writes) is in `src/route/CLAUDE.md`; the spawn and the wait are below.
 
 ## Modules
 
