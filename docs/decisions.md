@@ -2064,3 +2064,21 @@ Spec review (RV2, 2026-10-27): agrees with all three; D4 on condition that check
 Undo: the spec reviewer's verdict, or the orchestrator's next ruling.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:21`, `:22`, `:23`.
+
+## H54 (2026-10-27): Tools that only open windows or move the mouse may run with MapleStory open; key-sending tools keep their check
+
+Question: may agents work while MapleStory is open, and does that cover the harness tools that send keys (`probe`, `soak`, `session_starts`) as well as tools that only open windows or move the mouse (the route viewer, the route view's no-key click check)? Asked during the route-view build, when a reviewer could not open the viewer by hand because MapleStory might be running.
+
+Ruling [Hong]: "From now on you can work wihle maplestory is open, i dont think its an issue." (spelling as he wrote it). The follow-up question, whether this means only tools that open windows or move the mouse, or also the key-sending tools, he did not answer: "okay just keep working".
+
+Ruling [local] (the orchestrator's reading of his line, orchestrator 87, not Hong's words): windows and mouse only. Agents may open the route viewer and run the route view's no-key click check (H-1) with MapleStory open, still only when nobody is using the PC (H15's idle rule). `probe`, `soak` and `session_starts` keep their MapleStory check (code and the root CLAUDE.md unchanged), because his line names no key-sending tool, taking the check out is a code and safety-docs change, and nothing in the route view needs it.
+
+Reason: his line says MapleStory being open is not an issue for working. The MapleStory check in the key-sending tools exists because the board's keys go to whichever window has focus (H15), and he did not say to drop it. The narrower reading keeps every safety rule and still lets agents open the viewer.
+
+Affects: who may run the route viewer and the no-key check (H-1) while MapleStory is open. The tools' code is not changed: `view_check` has its own MapleStory check, and `run`, even `run --dry-run`, exits 3 with MapleStory running (`src/route/harness/view_check.py:733-736`), so H-1 still needs MapleStory closed until that code is changed (`src/route/CLAUDE.md`, N1 tool). The viewer itself (`python -m src.route_view`) has no MapleStory check. The "Safety rules" in the root CLAUDE.md and H15 are unchanged.
+
+Cost if wrong: if he meant every tool, a later key-tool run waits for MapleStory to close (the orchestrator then asks him).
+
+Undo: ask Hong and widen the ruling. Letting `view_check` run with MapleStory open is a code change for a later unit.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:193` (Hong's line) and `:194` (the ruling); H15.

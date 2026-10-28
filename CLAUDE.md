@@ -35,8 +35,8 @@ pip install -r requirements-dev.txt
 Checks, from the repo root (wall times measured on the dev PC when this text was written):
 
 ```
-python tools/check.py            # ruff, basedpyright, lint-imports, pytest -m "not slow": about 31 s
-python tools/check.py --full     # the same with the slow tests: about 74 s; run it before you commit
+python tools/check.py            # ruff, basedpyright, lint-imports, pytest -m "not slow": about 60 s
+python tools/check.py --full     # the same with the slow tests: about 120 s; run it before you commit
 python -m pytest tests/route -q  # about 32 s (about 22 s without the slow tests; tests/route_view about 15 s, tests/controller about 3 s)
 python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0   # sim smoke: 6/6 PASS, same output every run
 ```

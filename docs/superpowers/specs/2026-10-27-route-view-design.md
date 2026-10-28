@@ -972,3 +972,156 @@ RV2g; none is rejected. The new mechanisms are verdict questions for the plan re
 | m16 section 10 omissions | Section 10: rune runs write no `minimap.png`/`map.csv`/`steps.jsonl` (flagged to Feature C, H52 not re-decided), root `CLAUDE.md` conflict, the basedpyright baseline; section 6 adds `src/route_view/CLAUDE.md` and the root `CLAUDE.md` lines |
 | m17 `view.log` buffering | Section 5.9 step 2: the viewer is started with `-u` (measured: stdout write-through with `-u`, block-buffered without); S10 asserts it |
 | m18 H53 "Affects" stale | `docs/decisions.md` H53: contract f widened plus two new contracts |
+
+## 12. As built (RV-11, written 2026-10-28)
+
+This section says what the code at `21040ce` (the tip of `p1-route-view` before this section) does, where that is not
+what sections 1-11 say. Where this section and an earlier one disagree, this section is right. Every `file:line` was
+read from the code at that commit. N1 and L1-L4 are not run yet (section 12.5).
+
+### 12.1 Commits (RV-1 to RV-10)
+
+| Task | Commit | Subject |
+|---|---|---|
+| RV-1 | `8bd6a74` | feat(route): step-log format and reader for the route view |
+| RV-1 | `48197b3` | fix(route): step-log reader review minors (Mapping import, leg `to`, test gaps) |
+| RV-4 | `0109062` | feat(route): route preview of the planner's route and hops, with no random draw |
+| RV-4 | `980cef9` | fix(route): route preview review minors and the two survived mutants |
+| RV-1 | `b1ca031` | fix(route): step-log reader and encoder never raise and refuse non-int positions (RV-1 judge 2 m1-m3) |
+| RV-2 | `17ad495` | feat(route): optional step observer in the walker and the step-log writer |
+| RV-2 | `7f2735d` | fix(route): step-log writer closes steps.jsonl when its last flush fails; a failed start leaves no file |
+| RV-3 | `195e5ad` | feat(route): the simulator writes steps.jsonl and map.csv with --out |
+| RV-3 | `360f1ae` | fix(route): RV-3 review minor: close the leg log even if ending the step log raises |
+| RV-6 | `495c24f` | feat(route-view): view model, why lines and the route_view import contracts |
+| RV-6 | `d45fa25` | fix(route-view): RV-6 review minors: tests for the unpinned rules, the real cost 4.375, wrap long lines |
+| RV-5 | `87080de` | test(route): route preview agrees with the planner over both 20-lap sim runs (S3, S3b) |
+| RV-7 | `57e29e2` | feat(route-view): the route view window and replay |
+| RV-7 | `5378cc1` | fix(route-view): RV-7 review fixes: pin the window's picture and geometry, clear a stale read status |
+| RV-8 | `c9b93b1` | feat(route-view): live following, the no-activate first show and the claim/ready handshake |
+| RV-8 | `7a9dd3b` | fix(route-view): RV-8 review minors m1-m4 (no lost lines on a failed tick, dead keyword, test name, two tests) |
+| RV-9 | `798f3e3` | feat(route): walk --view starts the route view; every walk writes steps.jsonl, map.csv and minimap.png |
+| RV-9 | `909efbc` | fix(route): walk records its exit state without sys.exc_info; tests for the walk's other claim OSError and the non-Windows spawn flags |
+| RV-8 (found by the RV-9 review) | `5f4e029` | fix(route-view): a rejected event is retried once then skipped; the follower's end runs at most once |
+| RV-10 | `1657526` | feat(route): N1 driver tool for the route view's no-key check |
+| RV-10 | `4b03b20` | fix(route): view_check records lines_fed as the thread fed it, and judges a ran-out feed at the end of the wait |
+| RV-10 | `ce9a6e3` | test(route): view_check tests for the 11 mutants the RV-10 review found alive; test 12 is slow |
+| RV-10 | `7ad61d3` | fix(route): view_check stops cleanly on a closed stdin and reports a Ctrl+C that could not be sent |
+| RV-10 | `75744de` | docs(route): view_check's docstring states the own-console rule for its Ctrl+C check |
+
+The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and the commit that adds this section.
+
+### 12.2 Where the build departs from the text above
+
+1. **`close` of the step log: the writer thread closes the file, not `close` (the plan's V3 text; RV-2-D1, ruled A;
+   the reviewer found it sound once the failing-last-flush finding I1 was fixed).** The plan's V3 text says `close` marks the log closed, joins
+   the thread for at most `join_s`, and only then flushes, fsyncs and closes the file. As built the writer thread does
+   the flush, the fsync and the close itself when it reaches its stop marker (`_drain`, `step_log.py:588`; the file is
+   closed in a `finally`, `step_log.py:607-613`; the class note is `step_log.py:32-38`). So `close` (`step_log.py:570-586`)
+   keeps its promise of waiting at most `join_s`, and it never touches a file that a slow writer still holds. After a
+   join timeout the thread still finishes the queue and closes the file; `close` returns the first write failure, else
+   "writer still busy after N s". The writer closes the file even when its last flush fails (a full disk, commit
+   `7f2735d`). Calls after `close` are dropped (RV3-D2 A2). The plan text is not edited; this is the correction.
+2. **What the view draws, bottom to top (RV-7 m4).** The plan lists: background, nodes with labels, target ring, route
+   line, hop numbers, recent moves, aim, character. `_draw` (`window.py:518`) draws: the minimap picture (`:524-526`),
+   the faint recent moves (`:528-530`), the route line (`:531-533`), the nodes and their labels (`_draw_nodes`, called at
+   `:534`, defined at `:551`), the target ring (`:537`), the hop numbers (`:540`), the aim (`:543`), the character
+   (`:547`). So the route line and the recent moves lie under the node dots, and the dots and their numbers stay
+   readable. The plan's list was not meant as a draw order. Only "the picture is the lowest item" is pinned by a test
+   (`tests/route_view/test_view_window.py:663`); how the whole looks is judged by eye (L2).
+3. **A stale docstring in a test (RV-3 minor, left as found).** `tests/route/test_sim_steps.py:6-7` says "The last
+   three tests pin what the plan leaves open: an unregistered character class, a walker that raises, a failing close".
+   Five tests follow test 10 (`:361`, `:371`, `:387`, `:406`, `:424`); the docstring names three of them. Not edited
+   here (docs only).
+4. **What N1 clicks (RV3-D7 A, plus the title bar).** Section 5.7 says to click "the viewer's canvas, a button and the
+   slider" (spec line 496). The button and slider exist only in the replay bar, which is hidden while live
+   (`set_live`, `window.py:234-240`; section 5.4 "Replay only"), so the no-key check clicks the controls the live
+   window has: the map, the why log's text, its scrollbar, and the title bar (`CLICKS`, `view_check.py:72`). For the
+   scale buttons this rests on item 6.
+5. **"Route changed" (RV3c, RV3-D8 B; judged in RV80-ADJ).** The test compares the move's kind and direction, not the
+   walk's length (`route_changed`, `model.py:218`), and the line names the move as well as the node: "route changed:
+   expected next <move> toward <node>, now <move> toward <node>" with the bracket from section 5.4 (`model.py:528`). Both
+   differ from section 5.4's table row ("expected next <node>, now <node>", spec line 402).
+6. **The scale buttons are in the replay bar, so they are hidden while live (RV80-ADJ-D1).** This is open with Hong
+   and may change on his answer.
+7. **A folder with no `end` follows live unless opened with `--replay` (RV4-D1 A).** A silent live view says so in its
+   status line and names `--replay` (`REPLAY_HINT`, `follow.py:39`, set at `follow.py:195`); `--replay` with `--ready`
+   is refused with exit 2 (`__main__.py:62-64`). Option B (the walk passes its process id) is not built.
+8. **The step-log header has two fields that section 5.2's example (spec lines 275-276) does not: `wall_ns` and
+   `perf_ns` (RV4-D2 A).** They are the wall clock and the run clock read back to back (`step_log.py:99-100`, written
+   at `:163-164`, optional on read at `:253`). They are null in simulator and legs-only headers. Nothing reads them yet.
+   This extends section 5.2 (RV3-D6's option C calls exactly this a spec change; RV6 m4).
+9. **Section 5.7's measurement that `wm frame` is `GetParent(winfo_id)` holds only after Tk's first idle pass (RV6 I1).**
+   Before it, `wm frame` is the root's own window. So the viewer runs `update_idletasks()` before the claim
+   (`__main__.py:91`) and `wrapper_hwnd` refuses with `Failure("no wrapper yet")` rather than return the inner window
+   (`win_focus.py:60-71`).
+10. **The N1 tool's exit codes and Ctrl+C outcomes (`view_check.py`, as built; ruled final).** Exit codes (module
+    docstring, `view_check.py:25-27`):
+    - 0: every check passed.
+    - 1: a check failed or was not done.
+    - 2: usage, an `--out` outside `data/` or already used, not Windows (without `--dry-run`), or standard input
+      closed at one of the tool's two questions (`view_check.py:752-755`). In that last case `n1.json` is still written
+      with `stopped_by_no_input` and the checks not yet made are "not done" (`view_check.py:663-667`).
+    - 3: MapleStory is running, or the process list cannot be read (`view_check.py:733-736`). This check runs before
+      `--dry-run` is looked at, so even `run --dry-run` exits 3 with MapleStory running (H54 in `docs/decisions.md`
+      does not change the tool).
+
+    The Ctrl+C check has three failing outcomes (`view_check.py:634-640`): a detail that starts
+    `GenerateConsoleCtrlEvent failed:` (the signal could not be sent; exit 1), "the Ctrl+C was not delivered", and
+    "the viewer ended". Only the last means the spawn is wrong, and only it goes back to section 5.9 step 2; the first
+    two mean the check could not run: fix the launch (a fresh console window of its own, `view_check.py:19-23`) and run
+    again, as for an exit 2 with standard input closed. A taskbar click that never comes is "not done", not a failure
+    (`view_check.py:659-661`).
+
+### 12.3 Rulings built, in plain words
+
+- **The step log imports only the standard library and `returns` (RV3-D1 A).** `step_log.py:7`, imports `:41-54`.
+- **A walk that cannot write its run files walks on without them (RV3-D2 A).** If `map.csv`, `minimap.png` or
+  `steps.jsonl` cannot be written, the walk prints one line and walks on with no step log and no viewer; exit codes do
+  not change (`walk.py:394-409`; the viewer starts only if the log is open, `walk.py:423`). A1: the step log is closed at once, no viewer is started and no `view.claim` is
+  made. A2: calls to the step log after `close` are dropped.
+- **`steps.jsonl` is opened with `"xb"` (RV3-D3 A, with A3).** A simulator `--out` folder that already has one is a
+  `run_sim` Failure and the run exits 2 (`step_log.py:494`, `sim/run.py:288-290`). A3: it is refused before anything in
+  the folder is touched. A `run` line anywhere but line 1 is a bad line (`step_log.py:353`).
+- **The preview applies its own copy of the planner's steps from each assumed landing (RV3-D4 A).** S3b pins it
+  (`route_preview.py:38-52`).
+- **S3b: each hop equals `next_move` at its assumed landing, and the preview from hop k-1's landing gives `hops[k:]`
+  (RV3-D5 A2).** `follows(path, hops)` (`tests/route/preview_checks.py:75`) is pinned to the nine FF2 pairs and only
+  reported on the simulator runs.
+- **The why line's time is elapsed `mm:ss.mmm` (RV3-D6 A, provisional).** `h:mm:ss.mmm` from one hour (`model.py:404-409`).
+  Open with Hong. The header's clock anchor is recorded and not read (item 8 above).
+- **The no-key check clicks what the live window has, plus the title bar (RV3-D7 A).** Item 4 above.
+- **"Route changed" compares kind and direction (RV3-D8 B).** Item 5 above.
+- **`--replay` is refused with `--ready`, and a silent live view names `--replay` (RV4-D1 A).** Item 7 above.
+- **The header carries `wall_ns` and `perf_ns` (RV4-D2 A).** Item 8 above.
+- **The scale buttons hidden while live (RV80-ADJ-D1) is open with Hong.** Item 6 above.
+
+### 12.4 Measured values
+
+- **S1:** the simulator's 20-lap report is unchanged: `python -m src.route.sim.run --laps 20 --seed 1
+  --min-single-error-legs 0` through a bash pipe has the SHA-256 `d982184e54311493311110657d93992fe7f0af4963dc603617c5a0f4d09d8035`
+  (section 7, baseline paragraph).
+- **S8:** the observer costs the walker thread a median of 0.90 us per event over 1566 events (limit 20 us), and `close`
+  returned in well under 1 s (commit `195e5ad`).
+- **S3 and S3b** (`tests/route/test_preview_sim.py`, commit `87080de`; FF2 map, seed 1, 20 laps). Plain run: 379 planned
+  steps, no `no_plan`, 705 hops, 0 mismatches. Node-offset run: 356 planned, 645 hops, 0 mismatches. Hops that leave
+  the planned route at an assumed landing: 0 of 379 and 0 of 356. At the real landing the preview agrees with the
+  earlier one in 204 of 239 pairs (plain) and 196 of 216 (offset); the view model's "route changed:" lines over the
+  same two folders number 35 and 20, which is 239 - 204 and 216 - 196.
+- **Test sizes** (2026-10-28, at `21040ce`): `python tools/check.py --full` 1921 passed, 10 skipped (pytest 112.8 s,
+  120.1 s with the other three checks); `python tools/check.py` 1857 passed, 10 skipped, 64 deselected (pytest 52.4 s,
+  59.7 s in all). `tests/route_view` is 136 tests and `tests/route` 890 (`tests/CLAUDE.md`, "Speed", has the times).
+
+### 12.5 The plan reviewer's answers, and what is not run yet
+
+- **Section 9's six mechanisms (plan review, `notes/RV4.md`, "Verdict questions" 1-4): yes to all six as asked.** The
+  reviewer's answers: the claim file is sound (`open(path, "x")` is an atomic create on local NTFS); the flags
+  `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` over `pythonw` are right; the every-hop S3b is right; `steps.jsonl`
+  after `stop.start()` is right (a walk that fails earlier has nothing to replay); `-u` is right; `FIRST_SHOW` as a
+  one-line switch to `"deiconify"` is right, with the caution that a misread `ShowWindow` return would push N1 onto
+  that fallback for the wrong reason. The style lifecycle (question 3) has no separate answer in the review; N1 checks
+  it. The two open cases (a viewer that stalls over 2 s between its claim and its show; a hidden viewer left running
+  after a hard-killed walk) are acceptable as open, to be reopened only if N1 ends on `FIRST_SHOW = "deiconify"`. The
+  15 s ready wait that ignores F12 and Ctrl+C is acceptable (it costs up to 15 + 2 + 5 s before the walk ends).
+- **N1: pending (H-1).** The tool is built and its dry run is covered by a test with no Win32 call
+  (`tests/route/test_view_check.py:294`); the check with real clicks has not been run.
+- **L1-L4: pending (H-2 to H-4).**
