@@ -17,8 +17,10 @@ from returns.result import Failure, Success
 from test_walk_cli import FIXTURE, _alive_names, _json, _lines
 
 from src.route import walk
+from src.route.harness.record_minimap import INDEX_NAME
 from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, VIEW_CLAIM, VIEW_LOG, VIEW_READY, StepLog, read_run
 from src.route.walker import RouteWalker, RunSummary
+from src.route_view import model
 
 sim = test_walk_cli.sim  # the B19 rig's fixture, reused as it is (bound by assignment, so no parameter shadows an import)
 
@@ -243,6 +245,12 @@ def test_5_no_step_log_before_the_stop_control_starts(sim, monkeypatch, failing,
 
 def test_6_out_files_are_the_five_old_names_then_the_six_new_ones():
     assert walk._OUT_FILES == OLD_NAMES + NEW_NAMES
+
+
+def test_6_the_viewer_reads_the_frames_folder_and_index_the_walk_writes():
+    """`route_view` may not import the harness, so `model.py` repeats the names `walk` (`_FRAMES`) and the recorder
+    (`INDEX_NAME`) use. A rename on the writer's side would leave the live view with no frames and nothing else red."""
+    assert (model.FRAMES_DIR, model.FRAME_INDEX) == (walk._FRAMES, INDEX_NAME) == ("frames", "index.jsonl")
 
 
 @pytest.mark.parametrize("name", NEW_NAMES)
