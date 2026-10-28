@@ -358,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     connected = stop_started = False
     stop_payload: dict | None = None
     run_log: tuple[StepLog, Clock] | None = None  # the step log and its clock, once step 1 started it
+    raised = False  # an exception is leaving main (not one its caller is handling: sys.exc_info() would see that)
     try:
         _start_capture(shared)
         first = _wait_first_frame(shared, _FIRST_FRAME_S)
@@ -466,8 +467,10 @@ def main(argv: list[str] | None = None) -> int:
         elif summary is not None:
             stop_payload = {"reason": summary.reason}
             code = 0
+    except BaseException:
+        raised = True
+        raise
     finally:
-        leaving = sys.exc_info()[0]  # first: set while an exception passes through (run_cleanup's excepts change it)
         steps: list[tuple[str, Callable[[], object]]] = []
         if timer is not None:
             def cancel_timer(t: threading.Timer = timer) -> None:
@@ -489,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             steps.append(("stop.json", write_stop))
         if run_log is not None:  # on the walker's thread, after run() returned (RV-2: calls racing close are dropped)
             def end_step_log(sl: StepLog = run_log[0], clk: Clock = run_log[1], payload: dict | None = stop_payload,
-                             exit_code: int | None = None if leaving is not None else code) -> None:
+                             exit_code: int | None = None if raised else code) -> None:
                 sl.end(clk.now_ns(), payload["reason"] if payload is not None else None, exit_code)
                 closed = sl.close()
                 if not is_successful(closed):
