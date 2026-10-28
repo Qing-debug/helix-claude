@@ -12,9 +12,10 @@ This repo is a Claude-only parallel of the main Helix repo. Remotes: `origin` = 
 
 - Never push to `upstream` (its push URL is `DISABLED`).
 - The harness tools that send keys (`probe`, `soak`, `session_starts` in `src/input/harness/`) need the board, a real Bluetooth link and the "Helix input test sink" window. Never run them with MapleStory open: each checks for a MapleStory process before sending a key and aborts if one is running, and `soak` and `probe` re-check every 60 s. Details are in `src/input/CLAUDE.md`.
-- That MapleStory check (`soak.maple_check`, `soak._process_names`, and `_check_processes` in `probe` and `session_starts`) is patched by name in the tests: never move or rename it (`src/input/CLAUDE.md`).
+- That MapleStory check (`soak.maple_check`, `soak._process_names`, and `_check_processes` in `probe` and `session_starts`) is patched by name in the tests: never move or rename it (`src/input/CLAUDE.md`). The route view's N1 tool has the same kind of check, `_maple_check` in `src/route/harness/view_check.py` (:155), patched by name in `tests/route/test_view_check.py` (:240): never move or rename it either (`src/route/CLAUDE.md`).
 - Because the listener logs every key pressed on the machine, `keys.jsonl` is effectively a keylog: it stays in the gitignored `data/` folder and is never committed or shared.
 - Nobody uses the keyboard on the soak PC during a soak; any key pressed there is an extra key event that fails `analyze`'s Delivery check.
+- Never open a route-view replay (`python -m src.route_view --follow <folder>` on a finished run, or with `--replay`) while a walk runs: a replay window takes focus when clicked, and the board's keys go to whichever window has focus (`src/route_view/CLAUDE.md`). The live view that `walk --view` starts never takes focus.
 - Hong's standing permission (H15 in `docs/decisions.md`, 2026-10-26): an agent may run `probe`, `soak` or `session_starts`, and may flash or reset the board, without asking him, when all three hold: the work needs it; MapleStory is not running (the tools' own check still applies and is never bypassed); and nobody is using the PC. Check the time since the last keyboard or mouse input, or ask Hong, because the board's keys go to whichever window has focus. Every rule above still holds.
 
 ## Running
@@ -36,7 +37,7 @@ Checks, from the repo root (wall times measured on the dev PC when this text was
 ```
 python tools/check.py            # ruff, basedpyright, lint-imports, pytest -m "not slow": about 31 s
 python tools/check.py --full     # the same with the slow tests: about 74 s; run it before you commit
-python -m pytest tests/route -q  # about 5 s (tests/controller about 1.5 s)
+python -m pytest tests/route -q  # about 32 s (about 22 s without the slow tests; tests/route_view about 15 s, tests/controller about 3 s)
 python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0   # sim smoke: 6/6 PASS, same output every run
 ```
 
@@ -51,6 +52,8 @@ python -m src.main
 ```
 
 `main.py` starts the minimap capture thread and then blocks in the Tk mainloop. The main window opens at once; its minimap area appears when the first frame arrives (the buttons that need it, including Open Map Editor, say "Minimap not found yet" until then), so the game must be visible on the captured monitor (`output_idx = 1` in `src/vision/vision.py`, i.e. the second monitor).
+
+The route view (a window that shows what the route walker planned and why) starts with `python -m src.route.walk ... --view`, or is opened on a run folder by hand with `python -m src.route_view --follow <folder> [--replay]` (see the Safety rules before opening one).
 
 ## Architecture
 
@@ -84,11 +87,13 @@ Reaction time is waited on the PC, from the stimulus to the send: with a `stimul
 
 **Route** (`src/route/`). Walks the map's rotation one leg at a time. `RouteGraph.build(path_graph, params)` adds inferred terrain and move costs to the controller's `PathGraph`; `RouteWalker.walk_leg` reads the character's position, asks `planner.next_move` for one move, plays it with `moves.execute` through `InputLayer`, waits for the character to settle and re-plans from the measured position. The simulator (`src/route/sim/`) and the supervised walk CLI (`python -m src.route.walk`, with `runtime.py`'s stop control) drive it. Seams, frozen files and traps: `src/route/CLAUDE.md`.
 
+**Route view** (`src/route_view/`). A Tk window that shows, step by step, what the route walker planned and why: the minimap with the route, the hops, the aim and the character, and a log of the planner's reasons. The walk writes a step log (`steps.jsonl`, with `map.csv` and `minimap.png`) into its run folder, and `walk --view` starts the viewer as a child process by module name (`python -m src.route_view`) and waits for its window before the countdown. The walk and the viewer share only files in the run folder; nothing else in `src` imports the viewer, and it imports no game-input, walker, simulator, GUI or vision module (two import-linter contracts). The live window never takes focus from the game; at the end of a run it becomes a replay with a slider. Replay a finished run with `python -m src.route_view --follow <folder>`. The viewer's seams, focus rules and traps: `src/route_view/CLAUDE.md`; the walk's side (the step log, the preview of the planner's route, the N1 check): `src/route/CLAUDE.md`.
+
 **Error handling.** Controller, parser, graph and route code return `returns.result` `Success`/`Failure` and check them with `is_successful`, rather than raising. Follow that pattern in those layers.
 
 ## Per-directory notes
 
-`src/input/CLAUDE.md`, `src/route/CLAUDE.md`, `src/controller/CLAUDE.md`, `src/gui/CLAUDE.md`, `src/vision/CLAUDE.md`, `tests/CLAUDE.md` and `firmware/CLAUDE.md` hold each package's seams, traps (with `file:line`) and commands. A fact lives in one file; the others point to it. The exception is the safety rules, which are deliberately repeated where an agent will act on them.
+`src/input/CLAUDE.md`, `src/route/CLAUDE.md`, `src/route_view/CLAUDE.md`, `src/controller/CLAUDE.md`, `src/gui/CLAUDE.md`, `src/vision/CLAUDE.md`, `tests/CLAUDE.md` and `firmware/CLAUDE.md` hold each package's seams, traps (with `file:line`) and commands. A fact lives in one file; the others point to it. The exception is the safety rules, which are deliberately repeated where an agent will act on them.
 
 ## Incomplete / experimental code
 

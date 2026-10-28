@@ -37,7 +37,7 @@ Plan: `docs/superpowers/plans/2026-10-23-p1b-route-walking.md` (hard rules at th
 
 ## Commands and fixtures
 
-`python -m pytest tests/route -q` (about 5 s); the sim smoke command is in the root CLAUDE.md. The sim defaults to `tests/fixtures/fossil_foundry_2.csv` and `tests/fixtures/ff2_terrain.json` (sim/run.py:477-478).
+`python -m pytest tests/route -q` (about 32 s; about 22 s without the slow tests); the sim smoke command is in the root CLAUDE.md. The sim defaults to `tests/fixtures/fossil_foundry_2.csv` and `tests/fixtures/ff2_terrain.json` (sim/run.py:477-478).
 
 Harness commands (repo root). The sim run, the detection check, the recorder and the N1 tool send no keys (the recorder only reads the screen); the walk CLI and the measurement tool send keys and are never run without Hong's go:
 

@@ -2,13 +2,13 @@
 
 ## Layout
 
-- Mirrors `src/`: `tests/controller`, `tests/input`, `tests/route`, plus `tests/test_smoke.py`; shared data in `tests/fixtures/` (`fossil_foundry_2.csv`, `ff2_terrain.json`).
+- Mirrors `src/`: `tests/controller`, `tests/input`, `tests/route`, `tests/route_view`, plus `tests/test_smoke.py`; shared data in `tests/fixtures/` (`fossil_foundry_2.csv`, `ff2_terrain.json`).
 - No `__init__.py` and no `conftest.py` anywhere under `tests/`. pytest puts each test file's directory on `sys.path`, so basenames must be unique across `tests/` (plan hard rule 8) and helpers are imported flat (`from input_fakes import ...`; the fakes are described in `src/input/CLAUDE.md`).
 
 ## Speed
 
-- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 43 today, 42 in `tests/input` and one in `tests/route` (`test_detection_check.py`, the `python -I` import proof). `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
-- `tests/controller` takes about 1.5 s and `tests/route` about 5 s; nearly all the rest of the full run is `tests/input`.
+- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 64 today: 42 in `tests/input`, 15 in `tests/route` (in `test_detection_check.py`, `test_preview_sim.py`, `test_route_preview.py`, `test_sim_steps.py`, `test_step_log.py`, `test_step_log_writer.py`, `test_view_check.py` and `test_walk_view.py`) and 7 in `tests/route_view`. `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
+- `tests/controller` takes about 3 s, `tests/route` about 32 s (about 22 s without its slow tests) and `tests/route_view` about 15 s (about 8 s without its slow tests); the rest of the full run is `tests/input`. Measured 2026-10-28 on the PC that ran the route view's docs check.
 
 ## Traps
 
