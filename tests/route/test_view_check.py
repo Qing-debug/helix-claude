@@ -5,6 +5,7 @@ no input and starts no process. Tests that call `main` without `--dry-run` patch
 
 import ast
 import contextlib
+import ctypes
 import json
 import os
 import shutil
@@ -159,6 +160,8 @@ class FakeWin:
         return self.alive
 
     def ctrl_c_own_console(self) -> None:
+        if self.ctrl_c == "fail":
+            raise OSError(6, "The handle is invalid.")
         if self.ctrl_c == "deliver":
             signal.raise_signal(signal.SIGINT)
 
@@ -194,7 +197,10 @@ def _tools(win: FakeWin, clock: FakeClock, answers, ask_advance: float = 0.0):
     def ask(prompt: str) -> str:
         asked.append(prompt)
         clock.t += ask_advance
-        return replies.pop(0) if replies else ""
+        reply = replies.pop(0) if replies else ""
+        if isinstance(reply, BaseException):  # e.g. EOFError: standard input closed
+            raise reply
+        return reply
 
     return said, asked, say, ask
 
@@ -655,6 +661,53 @@ def test_16_no_taskbar_click_in_time_is_not_done(run_dir):
     seen = drive(run_dir, taskbar=False)
     check = seen.by["a taskbar click activates it after end"]
     assert check.passed is None and "no taskbar click within 30 s" in check.detail
+
+
+# RV-10 review m7: GenerateConsoleCtrlEvent's return value -------------------------------------------------------------
+
+def test_10_a_ctrl_c_that_could_not_be_sent_fails_the_check_and_says_why(run_dir):
+    before = signal.getsignal(signal.SIGINT)
+    seen = drive(run_dir, ctrl_c="fail")
+    check = seen.by["Ctrl+C in the parent's console did not reach the viewer"]
+    assert check.passed is False
+    assert check.detail == "GenerateConsoleCtrlEvent failed: [Errno 6] The handle is invalid."
+    assert signal.getsignal(signal.SIGINT) is before
+    assert seen.by["end clears the no-activate style"].passed is True  # the procedure went on to its end
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ctypes.WinError exists on Windows only")
+def test_10_win32_ctrl_c_checks_the_return_of_generateconsolectrlevent(monkeypatch):
+    calls = []
+    win = Win32.__new__(Win32)  # no DLL loaded: the kernel is a fake, so no Ctrl+C is sent
+    win._kernel = SimpleNamespace(GenerateConsoleCtrlEvent=lambda *args: calls.append(args) or 1)
+    win.ctrl_c_own_console()
+    assert calls == [(0, 0)]  # CTRL_C_EVENT, process group 0
+    win._kernel = SimpleNamespace(GenerateConsoleCtrlEvent=lambda *args: 0)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5)
+    with pytest.raises(OSError, match="Access is denied") as raised:
+        win.ctrl_c_own_console()
+    assert raised.value.winerror == 5
+
+
+# RV-10 review m5: standard input closed ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(("answers", "done"), [((EOFError(),), 3), (("n", EOFError()), 4)])
+def test_5_a_closed_stdin_stops_the_run_with_the_rest_not_done_and_end_written(run_dir, answers, done):
+    seen = drive(run_dir, answers=answers)
+    assert len(seen.checks) == 12 and _passed(seen)[:done] == [True] * done and _passed(seen)[done:] == [None] * (12 - done)
+    assert "standard input is closed" in seen.checks[done].detail
+    assert "standard input is closed" in seen.facts["stopped_by_no_input"]
+    assert read_run(seen.out).unwrap().ended
+
+
+def test_5_main_with_a_closed_stdin_writes_n1_json_prints_why_and_exits_2(tmp_path, monkeypatch, template, capsys):
+    ran = drive_main(tmp_path, monkeypatch, template, answers=(EOFError(),))
+    record = json.loads((ran.out / "n1.json").read_text(encoding="utf-8"))
+    captured = capsys.readouterr()
+    assert ran.code == 2 and "standard input is closed" in captured.err and "console window of its own" in captured.err
+    assert record["checks"][2]["passed"] is True and record["checks"][3]["passed"] is None
+    assert "stopped_by_no_input" in record["facts"] and read_run(ran.out).unwrap().ended
+    assert "after --out" not in captured.out
 
 
 def test_check_is_a_plain_record():

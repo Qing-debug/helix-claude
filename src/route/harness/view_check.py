@@ -17,7 +17,8 @@ doing the clicks. Start it with the venv's `python.exe`, so that its parent is w
 note).
 
 Exit codes: 0 every check passed · 1 a check failed or was not done · 2 usage, an `--out` outside `data/` or already
-used, or (without `--dry-run`) not Windows · 3 MapleStory is running, or the process list cannot be read.
+used, (without `--dry-run`) not Windows, or standard input closed so that its two questions cannot be asked (`n1.json`
+is still written, with the checks not made as "not done") · 3 MapleStory is running, or the process list cannot be read.
 
 Win32 references (Microsoft Learn, learn.microsoft.com/en-us/windows/win32/...): inputdev/nf-winuser-getasynckeystate
 (`VK_LBUTTON` 0x01, the high bit is "down now"), winmsg/nf-winuser-getforegroundwindow, -enumwindows,
@@ -110,6 +111,10 @@ _ALL_NAMES = (_NAME_STARTED, _NAME_READY, _NAME_FIRST_SHOW, _NAME_CONSOLE, _NAME
               *(_click_name(t) for t in CLICKS), _NAME_CTRL_C, _NAME_STYLE, _NAME_TASKBAR)
 
 _Fg = tuple[float, int, int, str, str]  # (time, hwnd, pid, title, class) of one foreground change
+
+
+class _InputClosed(Exception):
+    """`ask` reached the end of standard input: nobody can answer the question (`str(exc)` is the question)."""
 
 
 @dataclass(frozen=True)
@@ -343,8 +348,10 @@ class Win32:
             self._kernel.CloseHandle(handle)
 
     def ctrl_c_own_console(self) -> None:
-        """One Ctrl+C to every process attached to this console (process group 0). No key is sent."""
-        self._kernel.GenerateConsoleCtrlEvent(_CTRL_C_EVENT, 0)
+        """One Ctrl+C to every process attached to this console (process group 0). No key is sent. Raises `OSError`
+        (`ctypes.WinError` of the last error) if the call fails; its return value is a BOOL."""
+        if not self._kernel.GenerateConsoleCtrlEvent(_CTRL_C_EVENT, 0):
+            raise ctypes.WinError(ctypes.get_last_error())
 
 
 # ---- the checks -------------------------------------------------------------------------------------------------------
@@ -458,6 +465,12 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
             sleep(min(WATCH_PERIOD_S, left))
             watch.sample()
 
+    def ask_hong(prompt: str) -> str:
+        try:
+            return ask(prompt)
+        except EOFError as exc:  # standard input is closed: an unanswered question must not read as an answer
+            raise _InputClosed(prompt) from exc
+
     def skip_rest(reason: str) -> None:
         have = {check.name for check in checks}
         checks.extend(Check(name, None, reason) for name in _ALL_NAMES if name not in have)
@@ -521,7 +534,7 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
         checks.append(Check(_NAME_FIRST_SHOW, verdict, detail))
         new = {h: info for h, info in win.visible_windows().items() if h not in before}
         others = [f"'{t}' (class {c}, pid {p})" for h, (p, t, c) in new.items() if h != view]
-        answer = ask("Did any other window (a console) appear when the route view opened? [y/N] ")
+        answer = ask_hong("Did any other window (a console) appear when the route view opened? [y/N] ")
         watch.sample()
         saw_console = answer.strip().lower().startswith("y")
         console_ok = set(new) == {view} and not saw_console
@@ -540,7 +553,7 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
             while clock() < wait_end and not any(left > 0 for _t, _title, left in watch.titles[1:]):
                 nap(WATCH_PERIOD_S)
         feed_left = feeder.remaining()  # as the wait ends: Hong's answers below take time and must not decide it
-        shows = ask("Does the route view show the map and change as lines arrive? [Y/n] ")
+        shows = ask_hong("Does the route view show the map and change as lines arrive? [Y/n] ")
         watch.sample()
         said_no = shows.strip().lower().startswith("n")
         changed = any(left > 0 for _t, _title, left in watch.titles[1:])
@@ -601,13 +614,20 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
         # step 5: Ctrl+C in this console
         hits: list[int] = []
         previous = signal.signal(signal.SIGINT, lambda signum, _frame: hits.append(signum))
+        send_error: OSError | None = None
         try:
-            win.ctrl_c_own_console()
-            nap(1.0)
+            try:
+                win.ctrl_c_own_console()
+            except OSError as exc:
+                send_error = exc
+            else:
+                nap(1.0)
         finally:
             if previous is not None:
                 signal.signal(signal.SIGINT, previous)
-        if not hits:
+        if send_error is not None:
+            checks.append(Check(_NAME_CTRL_C, False, f"GenerateConsoleCtrlEvent failed: {send_error}"))
+        elif not hits:
             checks.append(Check(_NAME_CTRL_C, False, "the Ctrl+C was not delivered"))
         else:
             alive = proc.poll() is None and win.process_alive(viewer_pid)
@@ -633,6 +653,10 @@ def run_checks(out: Path, lines: list[bytes], *, win: Any, start_viewer: Callabl
         checks.append(Check(_NAME_TASKBAR, True if activated else None,
                             "the view became the foreground window" if activated
                             else f"no taskbar click within {TASKBAR_WAIT_S:g} s"))
+        return checks, facts
+    except _InputClosed as closed:
+        facts["stopped_by_no_input"] = f"standard input is closed; could not ask: {str(closed).strip()}"
+        skip_rest("stopped: standard input is closed, so the question could not be asked")
         return checks, facts
     finally:
         finish()
@@ -719,6 +743,10 @@ def _run(args: argparse.Namespace) -> int:
     if "stopped_by_maple" in facts:
         print(facts["stopped_by_maple"], file=sys.stderr)
         return 3
+    if "stopped_by_no_input" in facts:
+        print("error: standard input is closed, so the two questions cannot be asked; run this tool in a console "
+              "window of its own (see the module docstring)", file=sys.stderr)
+        return 2
     print(f"Now let this tool exit, then run: python -m src.route.harness.view_check after --out {out}")
     return 0 if passed else 1
 
