@@ -19,9 +19,8 @@ What they only print, because spec S3b says "reported, not required" (RV3-D5 A2)
 - (5) the real-landing agreement rate: of two `planned` events in a row in a leg with a `settled` between them, how
   many times the second plan is what the first preview expected next, judged by the view's own `route_changed`
   (`src.route_view.model`, which compares `hop_route`s), so the printed rate and the view's "route changed" lines are
-  one comparison. The
-  one assertion on it is the exact-landing part: a pair that landed where the preview assumed must agree (by S3b), so a
-  failure there is a bug in `route_changed`, `hop_route` or the pairing, not planner behaviour.
+  one comparison. The one assertion on it is the exact-landing part: a pair that landed where the preview assumed must
+  agree (by S3b), so a failure there is a bug in `route_changed`, `hop_route` or the pairing, not planner behaviour.
 
 Run with `-s` to see the printed counts. The whole file is `slow`: two 20-lap runs and about 700 previews with their
 sub-previews.
