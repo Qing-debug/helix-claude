@@ -12,6 +12,8 @@ Where the plan is silent (each decided here, local and reversible):
 - "A new line" for the silence clock is a new step event (a bad line or a frame is not a step).
 - Leaving the silence clears the status line (the `--replay` hint) before the redraw, which sets any read error again.
 - An error is printed once per distinct message (a repeat of the last one is not printed again).
+- An event the model rejects is tried again on the next tick, then skipped, and the status line says how many were
+  skipped (RV-9 review m2, orchestrator ruling 88); the lines behind it go in.
 - Events read before any header (only possible when line 1 is bad) cannot be drawn and are dropped; frames read
   before the header are kept for the model.
 """
@@ -111,6 +113,8 @@ class LiveController:
         # Lines read but not yet in the model (RV-8 review m2): they stay here until they are, so an error later in
         # a tick loses none of them. Frames read before the header wait here for the model too.
         self._pending: list[StepEvent] = []
+        self._failed: StepEvent | None = None  # the event the model rejected last tick: one more try, then it is skipped
+        self._skipped = 0  # events skipped so far (RV-9 review m2)
         self._frames: list[tuple[int, str]] = []
         self._end_read = False  # an `end` line has been read (whether or not it reached the model)
         self._printed: str | None = None
@@ -170,7 +174,16 @@ class LiveController:
             done = 0
             try:
                 for event in self._pending:  # one at a time: after an error only the lines from it on stay pending
-                    model.extend((event,))
+                    try:
+                        model.extend((event,))
+                    except Exception as err:
+                        if event is not self._failed:  # the first rejection: it stays at the head for the next tick
+                            self._failed = event
+                            raise
+                        self._failed = None  # rejected again: skipped, so one bad event cannot freeze the view
+                        self._skipped += 1
+                        window.set_status(f"skipped {self._skipped} event{'s' if self._skipped != 1 else ''} the "
+                                          f"view could not read (last: {type(err).__name__}: {err})")
                     done += 1
             finally:
                 del self._pending[:done]
@@ -192,7 +205,10 @@ class LiveController:
             self._end()
 
     def _end(self) -> None:
-        """`end` read (spec 5.4, 5.7): stop following, give the window its normal styles back, show it, replay."""
+        """`end` read (spec 5.4, 5.7): stop following, give the window its normal styles back, show it, replay. Runs at
+        most once: if a call in it raises, `update`'s error path does not run it again (RV-9 review m3)."""
+        if self.ended:
+            return
         self.ended = True
         if self.styled_hwnd is not None:
             cleared = self._focus.set_live_style(self.styled_hwnd, False)

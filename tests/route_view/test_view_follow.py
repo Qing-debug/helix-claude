@@ -501,6 +501,60 @@ def test_m4_clearing_the_style_failing_at_end_is_reported_and_the_window_still_s
 
 
 
+def test_m2b_an_event_the_model_rejects_every_time_is_retried_once_then_skipped_and_said(tmp_path, roots, monkeypatch,
+                                                                                         capsys):
+    """RV-9 review m2 (orchestrator ruling 88): one event the model always rejects must not freeze the live view. It is
+    retried on the next tick, then skipped, and the status line says so; the lines behind it go in."""
+    folder = _live_folder(tmp_path, LINES[:3])
+    t = _live(roots, monkeypatch, folder)
+    t.live.tick()
+    model = t.window.model
+    assert model is not None and len(model.events) == 3
+    real = model.extend
+    bad_t = parse_line(LINES[4]).unwrap().t_ns
+    tries = []
+
+    def reject(events):  # LINES[4] fails every time
+        if any(e.t_ns == bad_t for e in events):
+            tries.append(True)
+            raise RuntimeError("x")
+        real(events)
+
+    monkeypatch.setattr(model, "extend", reject)
+    _append(folder / STEPS_FILE, b"".join(LINES[3:6]))
+    t.live.tick()  # LINES[3] goes in; LINES[4] raises the first time: it and LINES[5] stay pending
+    assert len(model.events) == 4 and len(tries) == 1 and _status(t.window) == "follow error: RuntimeError: x"
+    t.live.tick()  # LINES[4] is tried once more, rejected again and skipped; LINES[5] goes in behind it
+    assert len(tries) == 2 and len(model.events) == 5 and len(t.after) == 3 and not t.live.ended
+    assert [e.t_ns for e in model.events] == [parse_line(LINES[i]).unwrap().t_ns for i in (0, 1, 2, 3, 5)]
+    assert _status(t.window) == "skipped 1 event the view could not read (last: RuntimeError: x)"
+    _append(folder / STEPS_FILE, LINES[6])
+    t.live.tick()  # the view goes on: the skipped event is not tried a third time
+    assert len(tries) == 2 and len(model.events) == 6 and len(t.after) == 4
+    assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
+
+
+def test_m3_end_runs_at_most_once_even_if_a_call_inside_it_raises(tmp_path, roots, monkeypatch, capsys):
+    """RV-9 review m3: `set_live(False)` raising inside `_end` must not make `update`'s error path run `_end` again
+    (a second style clear, withdraw and deiconify)."""
+    folder = _live_folder(tmp_path, LINES[:25])
+    t = _live(roots, monkeypatch, folder, styled_hwnd=1234)
+    t.live.tick()
+    capsys.readouterr()
+
+    def boom(live):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(t.window, "set_live", boom)
+    _append(folder / STEPS_FILE, LINES[25])
+    t.live.tick()
+    assert t.live.ended and len(t.after) == 1
+    assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
+    assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
+    t.live.update()  # an ended controller does nothing more
+    assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
+
+
 # 9 ----------------------------------------------------------------------------------------------------------------
 
 
