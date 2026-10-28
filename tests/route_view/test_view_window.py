@@ -588,7 +588,9 @@ def test_the_canvas_draws_the_step_the_model_describes(tmp_path, make_window):
     (character,) = canvas.find_withtag("character")
     x0, y0, x1, y1 = canvas.coords(character)
     assert ((x0 + x1) / 2, (y0 + y1) / 2) == (view.character[0] * s, view.character[1] * s) == (320, 96)
+    assert canvas.itemcget(character, "fill") == "red"  # CHARACTER (plan: "red")
     assert view.aim is not None and len(canvas.find_withtag("aim")) == 2
+    assert {canvas.itemcget(i, "fill") for i in canvas.find_withtag("aim")} == {"magenta"}  # AIM
     assert len(canvas.find_withtag("hopnum")) == len(view.hops) > 0
     assert [canvas.itemcget(i, "text") for i in canvas.find_withtag("hopnum")] == [str(h.n) for h in view.hops]
     assert len(canvas.find_withtag("recent")) == len(view.recent)
@@ -597,6 +599,7 @@ def test_the_canvas_draws_the_step_the_model_describes(tmp_path, make_window):
     assert ((x0 + x1) / 2, (y0 + y1) / 2) == (101 * s, 24 * s) and canvas.itemcget(target, "outline") == "yellow"
     (route,) = canvas.find_withtag("route")
     assert canvas.coords(route) == [float(c * s) for p in view.route for c in p]
+    assert canvas.itemcget(route, "fill") == "cyan"  # ROUTE
     assert len(canvas.find_withtag("node")) == 21 and len(canvas.find_withtag("label")) == 7
     first = canvas.find_withtag("node")[0]
     assert canvas.itemcget(first, "fill") == "lightblue" and canvas.itemcget(first, "outline") == "blue"
