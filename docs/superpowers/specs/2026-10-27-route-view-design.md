@@ -1028,10 +1028,10 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
    (`:547`). So the route line and the recent moves lie under the node dots, and the dots and their numbers stay
    readable. The plan's list was not meant as a draw order. Only "the picture is the lowest item" is pinned by a test
    (`tests/route_view/test_view_window.py:663`); how the whole looks is judged by eye (L2).
-3. **A stale docstring in a test (RV-3 minor, left as found).** `tests/route/test_sim_steps.py:6-7` says "The last
-   three tests pin what the plan leaves open: an unregistered character class, a walker that raises, a failing close".
-   Five tests follow test 10 (`:361`, `:371`, `:387`, `:406`, `:424`); the docstring names three of them. Not edited
-   here (docs only).
+3. **A stale docstring in a test (RV-3 minor; fixed in RV-final-fix).** `tests/route/test_sim_steps.py:6-7` said "The
+   last three tests pin what the plan leaves open: an unregistered character class, a walker that raises, a failing
+   close". Five tests follow test 10 (`:361`, `:371`, `:387`, `:406`, `:424`); the docstring named three of them. It now
+   says "The last five tests" and names all five (`:6-8`).
 4. **What N1 clicks (RV3-D7 A, plus the title bar).** Section 5.7 says to click "the viewer's canvas, a button and the
    slider" (spec line 496). The button and slider exist only in the replay bar, which is hidden while live
    (`set_live`, `window.py:234-240`; section 5.4 "Replay only"), so the no-key check clicks the controls the live

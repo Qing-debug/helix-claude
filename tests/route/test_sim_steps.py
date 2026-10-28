@@ -4,7 +4,8 @@ Tests (1)-(10) are the plan's, numbered as in the plan: the report is unchanged 
 recording observer changes nothing, `--out` writes a `steps.jsonl` that matches `legs.jsonl` and a `map.csv` the route
 graph can be rebuilt from, a link-down run ends cleanly, `observer` and `out_dir` together are refused, a folder that
 already has `steps.jsonl` is refused untouched, and the observer costs the walker thread under 20 us per event. The last
-three tests pin what the plan leaves open: an unregistered character class, a walker that raises, a failing close.
+five tests pin what the plan leaves open: an unregistered character class, a step log that cannot start, a walker that
+raises, an `end` that raises, a failing close.
 """
 
 import ast
