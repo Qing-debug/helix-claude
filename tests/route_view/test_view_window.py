@@ -303,6 +303,23 @@ def test_5_a_missing_frame_file_is_a_read_failure_too(tmp_path, make_window):
     assert window._status.get().startswith("cannot read frame_000002.png: ")
 
 
+def test_5_a_loader_that_raises_value_error_is_a_read_failure_too(tmp_path, make_window, monkeypatch):
+    """`_update_background` catches `(OSError, ValueError)` (`_load_image` documents both); no other test raises the
+    ValueError, so dropping it from the `except` would go unseen."""
+    folder = make_folder(tmp_path)
+    _write_frames(folder)
+    window = make_window(folder)
+
+    def broken(path):
+        raise ValueError("x")
+
+    before, photo = window.shown_background, window.shown_photo  # what the window already shows stays
+    monkeypatch.setattr(window, "_load_image", broken)
+    window.show(6)
+    assert not window.background_ok and window.shown_background == before and window.shown_photo is photo
+    assert window._status.get() == "cannot read frame_000002.png: x; showing the last good picture"
+
+
 # 6 ---------------------------------------------------------------------------------------------------------------
 
 
