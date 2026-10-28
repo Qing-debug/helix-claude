@@ -91,7 +91,7 @@ class Follower:
 class LiveController:
     def __init__(self, root: Any, window: RouteViewWindow, folder: Path, *, repo_root: Path,
                  current_git_head: str | None, focus: Focus = win_focus, clock: Callable[[], float] = time.monotonic,
-                 hidden: bool, styled_hwnd: int | None, follower: Follower | None = None) -> None:
+                 hidden: bool, styled_hwnd: int | None) -> None:
         self._root = root
         self.window = window
         self._folder = Path(folder)
@@ -101,14 +101,18 @@ class LiveController:
         self._clock = clock
         self.hidden = hidden  # the walk took the claim: the window stays withdrawn until `end`
         self.styled_hwnd = styled_hwnd  # the wrapper that got the no-activate style; cleared at `end`
-        self.follower = follower if follower is not None else Follower(self._folder)
+        self.follower = Follower(self._folder)
         self.ended = False
         self.bad_lines = 0
         self._last_step = clock()
         self._silent = False
         self._background: str | None = None  # the newest frame file read so far
         self._retry = False  # the last redraw could not read its picture: try again next tick
-        self._early_frames: list[tuple[int, str]] = []
+        # Lines read but not yet in the model (RV-8 review m2): they stay here until they are, so an error later in
+        # a tick loses none of them. Frames read before the header wait here for the model too.
+        self._pending: list[StepEvent] = []
+        self._frames: list[tuple[int, str]] = []
+        self._end_read = False  # an `end` line has been read (whether or not it reached the model)
         self._printed: str | None = None
 
     def tick(self) -> None:
@@ -118,39 +122,58 @@ class LiveController:
             self._root.after(POLL_MS, self.tick)
 
     def update(self) -> None:
-        """One poll and redraw; never raises (hard rule 5): an error goes to the status line and stdout."""
+        """One poll and redraw; never raises (hard rule 5): an error goes to the status line and stdout. Lines the
+        failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window is
+        shown and its style cleared, RV-8 review m2): the walk is over, and the same error may come every tick."""
         if self.ended:
             return
         try:
             self._update()
         except Exception as err:
             self._report(f"follow error: {type(err).__name__}: {err}")
+            if self._end_read:
+                try:
+                    self._end()
+                except Exception as late:
+                    self._report(f"follow error: {type(late).__name__}: {late}")
 
     def _update(self) -> None:
         polled = self.follower.poll()
+        self._end_read = self._end_read or any(event.ev == "end" for event in polled.events)
+        self._pending.extend(polled.events)
+        if polled.frames:
+            self._background = polled.frames[-1][1]
         window = self.window
         changed = self._retry
         if polled.header is not None and window.model is None:
             model = RunModel.open(self._folder, polled.header, "steps", repo_root=self._repo_root,
                                   current_git_head=self._current_git_head)
-            model.add_frames(self._early_frames)
-            self._early_frames = []
+            model.add_frames(self._frames)
+            self._frames = []
             window.set_model(model)
             changed = True
         model = window.model
         now = self._clock()
         if polled.events:
             self._last_step = now
-            if model is not None:
-                model.extend(polled.events)
-                changed = True
+        self._frames.extend(polled.frames)
         if polled.frames:
-            if model is not None:
-                model.add_frames(polled.frames)
-            else:
-                self._early_frames.extend(polled.frames)
-            self._background = polled.frames[-1][1]
             changed = True
+        if model is not None and self._frames:
+            model.add_frames(self._frames)
+            self._frames = []
+            changed = True
+        if model is None:
+            self._pending.clear()  # events read before any header are dropped (only if line 1 is bad)
+        elif self._pending:
+            changed = True
+            done = 0
+            try:
+                for event in self._pending:  # one at a time: after an error only the lines from it on stay pending
+                    model.extend((event,))
+                    done += 1
+            finally:
+                del self._pending[:done]
         ended = model is not None and model.ended
         silent = not ended and now - self._last_step >= SILENT_S
         if silent != self._silent:

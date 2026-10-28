@@ -384,7 +384,7 @@ def test_6_at_end_a_hidden_window_is_only_shown(tmp_path, roots, monkeypatch):
     assert not t.window.live and t.root.title().startswith("Route view · ended: max_laps · ")
 
 
-def test_6_at_end_a_window_shown_by_the_fallback_is_left_as_it_is(tmp_path, roots, monkeypatch):
+def test_6_a_folder_that_ended_before_the_first_poll_touches_neither_style_nor_visibility(tmp_path, roots, monkeypatch):
     folder = _live_folder(tmp_path, LINES)
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
@@ -431,6 +431,74 @@ def test_8_an_error_inside_a_tick_goes_to_the_status_once_and_following_goes_on(
     _append(folder / STEPS_FILE, LINES[4])
     t.live.tick()  # the same error again: not printed again
     assert len(t.after) == 3 and capsys.readouterr().out == ""
+
+
+def test_m2_lines_read_in_a_failed_tick_go_into_the_model_on_the_next_one(tmp_path, roots, monkeypatch, capsys):
+    """RV-8 review m2: an error after the poll keeps the lines (and frames) it read for the next tick, without
+    adding twice the ones that went in before the error."""
+    folder = _live_folder(tmp_path, LINES[:3])
+    t = _live(roots, monkeypatch, folder)
+    t.live.tick()
+    model = t.window.model
+    assert model is not None and len(model.events) == 3
+    real = model.extend
+    bad_t = parse_line(LINES[4]).unwrap().t_ns
+    raised = []
+
+    def flaky(events):  # fails once, on the batch that holds LINES[4]
+        if not raised and any(e.t_ns == bad_t for e in events):
+            raised.append(True)
+            raise RuntimeError("x")
+        real(events)
+
+    monkeypatch.setattr(model, "extend", flaky)
+    _append(folder / STEPS_FILE, b"".join(LINES[3:6]))
+    _add_frame(folder, 0, 0.5)
+    t.live.tick()  # LINES[3] goes in, LINES[4] raises: LINES[4:6] and the frame stay pending
+    assert len(model.events) == 4 and _status(t.window) == "follow error: RuntimeError: x"
+    t.live.tick()  # nothing new on disk: the pending lines and the frame go in
+    assert [e.ev for e in model.events] == [parse_line(line).unwrap().ev for line in LINES[:6]]
+    assert [e.t_ns for e in model.events] == [parse_line(line).unwrap().t_ns for line in LINES[:6]]
+    assert len(model.frames) == 1 and len(t.after) == 3 and not t.live.ended
+    assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
+
+
+@pytest.mark.parametrize("styled", [False, True])
+def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roots, monkeypatch, capsys, styled):
+    """RV-8 review m2: a hidden viewer still shows, and a styled one still loses the no-activate style, when the tick
+    that reads `end` fails after its poll (the walk is over, and the same error may come every tick)."""
+    folder = _live_folder(tmp_path, LINES[:25])
+    t = _live(roots, monkeypatch, folder, hidden=not styled, styled_hwnd=1234 if styled else None)
+    t.live.tick()
+    assert t.log == [] and t.focus.calls == []
+
+    def boom(events):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(t.window.model, "extend", boom)
+    _append(folder / STEPS_FILE, LINES[25])
+    t.live.tick()
+    assert t.live.ended and len(t.after) == 1  # no further tick
+    if styled:
+        assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
+    else:
+        assert t.focus.calls == [] and t.log == ["deiconify"]
+    assert not t.window.live and "follow error: RuntimeError: x" in capsys.readouterr().out
+
+
+def test_m4_clearing_the_style_failing_at_end_is_reported_and_the_window_still_shown(tmp_path, roots, monkeypatch,
+                                                                                     capsys):
+    folder = _live_folder(tmp_path, LINES[:25])
+    focus = FakeFocus(style=Failure("denied"))
+    t = _live(roots, monkeypatch, folder, styled_hwnd=1234, focus=focus)
+    t.live.tick()
+    capsys.readouterr()
+    _append(folder / STEPS_FILE, LINES[25])
+    t.live.tick()
+    assert focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
+    assert capsys.readouterr().out == "focus call failed: denied\n" and _status(t.window) == "focus call failed: denied"
+    assert t.live.ended and not t.window.live
+
 
 
 # 9 ----------------------------------------------------------------------------------------------------------------
@@ -629,3 +697,26 @@ def test_9i_replay_on_a_finished_folder_is_the_same_as_without_it(tmp_path, root
     assert made.code == 0 and focus.calls == [] and log.count("deiconify") == 1
     assert not (folder / VIEW_CLAIM).exists()
     assert made.root.title().startswith("Route view · ended: max_laps · ")
+
+
+def test_m4_a_claim_failing_with_another_oserror_follows_hidden_as_a_lost_claim(tmp_path, roots, monkeypatch):
+    """RV-8 review m4: any OSError on the claim (here a PermissionError, not FileExistsError) is the safe side."""
+    folder = _live_folder(tmp_path, LINES[:5])
+    real_open = open
+
+    def denied(path, *args, **kwargs):
+        if Path(path).name == VIEW_CLAIM:
+            raise PermissionError(13, "denied", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "open", denied, raising=False)
+    log = []
+    focus = FakeFocus(log)
+    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
+                 folder)
+    assert made.code == 0 and focus.calls == [] and "deiconify" not in log
+    assert made.root.state() == "withdrawn" and not (folder / VIEW_READY).exists()
+    assert not (folder / VIEW_CLAIM).exists()
+    _append(folder / STEPS_FILE, b"".join(LINES[5:]))
+    made.after[-1][1]()  # the scheduled tick
+    assert log.count("deiconify") == 1 and focus.calls == []
