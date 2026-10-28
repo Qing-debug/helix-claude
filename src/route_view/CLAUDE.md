@@ -37,7 +37,7 @@ Spec: `docs/superpowers/specs/2026-10-27-route-view-design.md` (5.4 the window, 
 ## Rules enforced by tests
 
 - Two import-linter contracts in `pyproject.toml`: "route_view boundaries" (:77-85) forbids `src.gui`, `src.main`, `src.vision`, `src.rune_solver`, every `src.input` module but `protocol`, and the route modules that pull those in (`walker`, `walk`, `moves`, `runtime`, `sim`); "route_view is a leaf" (:87-93) means nothing in `route`, `controller`, `gui`, `main`, `vision`, `input`, `classes` or `rune_solver` imports `src.route_view`. What the package may import is spec 5.8. `tests/route_view/test_route_view_imports.py` pins the module lists in both contracts (:30), that every `src.input` module but `protocol` is forbidden (:41) and that importing the model pulls in no Tk, `input_layer`, walker or GUI (:50).
-- The viewer never takes focus and never rebuilds Tk's wrapper window (see the first trap): `tests/route_view/test_view_window.py:538` (`test_10_the_viewer_never_takes_focus_or_rebuilds_the_wrapper_window`; the banned names are `_FOCUS_ATTRS`, :507, and `_WRAPPER_CALLS`, :508; a planted sample at :545).
+- The viewer is built not to take focus (the design intent; the real-window check, H-1, has not run yet) and never rebuilds Tk's wrapper window (see the first trap); the test pins that it calls none of the banned names: `tests/route_view/test_view_window.py:538` (`test_10_the_viewer_never_takes_focus_or_rebuilds_the_wrapper_window`; the banned names are `_FOCUS_ATTRS`, :507, and `_WRAPPER_CALLS`, :508; a planted sample at :545).
 
 ## Traps
 
