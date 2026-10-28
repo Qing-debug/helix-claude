@@ -275,6 +275,24 @@ def test_5_a_corrupt_newer_frame_keeps_the_last_good_picture(tmp_path, make_wind
     assert window.shown_photo is not photo and window._status.get() == ""
 
 
+def test_5_a_new_scale_while_the_read_keeps_failing_rebuilds_the_last_good_picture(tmp_path, make_window):
+    """RV-7 re-review m-a: with the read failing, the old picture object stays, so only the scale says to rebuild it
+    (`window.py` `_photo`); else the nodes move to the new scale and the picture does not."""
+    folder = make_folder(tmp_path)
+    _write_frames(folder)
+    noisy = _noise_png(FRAME_COLOURS[1])
+    (folder / FRAMES_DIR / "frame_000001.png").write_bytes(noisy[: len(noisy) // 2])
+    window = make_window(folder)
+    window.show(1)  # frame 0, good
+    window.show(4)  # frame 1, corrupt: frame 0 stays
+    assert not window.background_ok and window.shown_background == "frames/frame_000000.png"
+    assert (window.shown_photo.width(), window.shown_photo.height()) == (648, 328)
+    window.set_scale(2)  # the read fails again
+    assert not window.background_ok and window.shown_background == "frames/frame_000000.png"
+    assert (window.shown_photo.width(), window.shown_photo.height()) == (324, 164)
+    assert window.canvas.bbox("bg") == (0, 0, 324, 164) and _canvas_size(window) == (324, 164)
+
+
 def test_5_a_missing_frame_file_is_a_read_failure_too(tmp_path, make_window):
     folder = make_folder(tmp_path)
     _write_frames(folder)
