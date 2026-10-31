@@ -1134,6 +1134,8 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-B.md:270` (decision
 
 ## H15 (2026-10-26): agents may run the live tools and flash the board when MapleStory is closed and the PC is idle
 
+Status: amended by H66 (Hong, 2026-10-31, RVT95-1): once the key-test tools ask "Is MapleStory closed? y/n" instead of listing programs (H60), an agent answers `y` only if Hong said in that same session that MapleStory is closed, and otherwise asks him first. The rest of H15 stands.
+
 Question: must an agent ask Hong before each run of the key-sending harness tools (`probe`, `soak`, `session_starts`) or each flash or reset of the board?
 
 Ruling [Hong]: no. Hong's decision (2026-10-26): "you dont nneed my explicit permission though. As long as maplestory isnt running annd if you need it to continue work, you may use the tools". Asked whether flashing or resetting the board falls under it: "Yes, same rule". Asked whether agents must also make sure nobody is using the PC: "Only when idle". An agent may therefore run `probe`, `soak` or `session_starts`, and flash or reset the board, without asking, when all three hold: (1) the work needs it; (2) MapleStory is not running (the tools' own check still applies and is never bypassed); (3) nobody is using the PC (check the time since the last keyboard or mouse input, or ask Hong).
@@ -1989,7 +1991,7 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:24`; question
 
 ## H49 (2026-10-27): The live route view cannot take focus when clicked (RV1-D6; QB105)
 
-Status: retired by H57 (Hong, 2026-10-31, RVT93-1, "Decision 2: Reture"). What happens when the app is clicked during a run is open (RVT93-2, re-asked as RVT94-2).
+Status: retired by H57 (Hong, 2026-10-31, RVT93-1, "Decision 2: Reture"), and replaced by H64 (Hong, 2026-10-31, RVT94-1, the re-ask of RVT93-2): a click on the app during a run stops the run, instead of the window refusing focus.
 
 Question: what should stop a click on the live view from taking the game's focus, and so the bot's keys?
 
@@ -2092,7 +2094,7 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:193` (Hong's 
 
 ## H55 (2026-10-31): The route view becomes a tab in the main app, with Start and Stop, live and replay, time-of-day why lines and no automatic focus check (QB114-QB117)
 
-Ids note: H55-H63 continue after H54 on this branch (`p1-route-tab`, cut from `p1-route-view`); H43-H46 are on `p1c-runes`.
+Ids note: H55-H67 continue after H54 on this branch (`p1-route-tab`, cut from `p1-route-view`); H43-H46 are on `p1c-runes`.
 
 Question: after the first route-view build Hong reshaped it: instead of a separate window that follows a command-line walk, a tab in the main app where he sets up, puts MapleStory in front, presses Start, and sees what the bot plans and does. The orchestrator then asked four questions (QB114-QB117).
 
@@ -2120,13 +2122,13 @@ Ruling [Hong]: a standing fact, added to "Hong's standing facts" above. Reading 
 
 Reason: his words: the anti-cheat flags such calls.
 
-Affects: the tab spec section 5.12 (no focus or process query in the app; no new window or style change during a run, an orchestrator ruling from the RVT94 finding that Tk itself calls `GetForegroundWindow` when a window is first shown or restyled); FG92's planned foreground check (dropped); the N1 click-check tool (removed with the tab, H57); a name-scan test the tab plan adds.
+Affects: the tab spec section 5.12 (no focus or process query in the app; no new window, style or icon change during a run, kept by Hong in H65; Tk itself calls `GetForegroundWindow` only when an already-shown window is restyled or made transient, not when a window is first shown, an icon is set or a window is made always on top, as corrected after RVT94); FG92's planned foreground check (dropped); the N1 click-check tool (removed with the tab, H57); a name-scan test the tab plan adds.
 
 Cost if wrong: features that would need a focus or process query (pause when the game loses focus, wait until the game is in front) are not built.
 
 Undo: Hong says so.
 
-Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:291`; `ledger-QA.md:60`; `notes/RVT94.md` (Tk's own call).
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:291`; `ledger-QA.md:60`; `notes/RVT94.md` (Tk's own call), corrected by `notes/q-20261031-162350-51bf.md` and `notes/q-20261031-162958-7708.md`.
 
 ## H57 (2026-10-31): The three route-view window decisions (H48-H50) are replaced by the tab design; the save-and-replay principle of H48 is kept (RVT93-1, QB118)
 
@@ -2134,7 +2136,7 @@ Question: retire the three decisions of 27 October that describe the separate vi
 
 Ruling [Hong]: option A, "Yes, replace all three with the tab design (Recommended)", with this note, verbatim: "Decision 1: we can keep the "save" mechanic, that way we can review old runs to see what went wrong/well, and also have its log so we know the reasoning behind the decision it made. Its implementation may have to differ to fit our new route view though but the general principle behind the first decision sounds good to me / Decision 2: Reture / Decision 3 Yes" (the slashes stand for his line breaks).
 
-So: H48's separate program and `--view` go; its principle stays: every run is saved with its step log, so an old run can be replayed with the reasons for each move (the implementation may differ). H49 is retired; what happens when he clicks the app during a run is open (RVT93-2, re-asked as RVT94-2). H50 is retired: the Start button replaces `walk --view`.
+So: H48's separate program and `--view` go; its principle stays: every run is saved with its step log, so an old run can be replayed with the reasons for each move (the implementation may differ). H49 is retired; what happens when he clicks the app during a run was asked again (RVT93-2, re-asked as RVT94-1) and is H64. H50 is retired: the Start button replaces `walk --view`.
 
 Reason: his note above.
 
@@ -2186,7 +2188,7 @@ Ruling [Hong]: option B, "Replace it with a question to you: 'Is MapleStory clos
 
 Reason: not given beyond the pick; the set's text for B was "The tools never ask Windows about programs again."
 
-Affects: `src/input/harness/soak.py`, `probe.py`, `session_starts.py` and their tests; the root CLAUDE.md "Safety rules" (the harness-tools and patched-names bullets, and how H15's "MapleStory is not running" is met by an agent), `src/input/CLAUDE.md` ("MapleStory guard" trap), `firmware/CLAUDE.md`, `tests/CLAUDE.md`. The exact text and test changes are in the tab spec section 6. H54's "key-sending tools keep their check" now means this question. Open with the orchestrator: how an agent answers the question under H15 (RTS95-D2), and confirming that only the 60 s re-check is lost (RTS95-D1).
+Affects: `src/input/harness/soak.py`, `probe.py`, `session_starts.py` and their tests; the root CLAUDE.md "Safety rules" (the harness-tools and patched-names bullets, and how H15's "MapleStory is not running" is met by an agent), `src/input/CLAUDE.md` ("MapleStory guard" trap), `firmware/CLAUDE.md`, `tests/CLAUDE.md`. The exact text and test changes are in the tab spec section 6. H54's "key-sending tools keep their check" now means this question. How an agent answers the question under H15: Hong's H66 (RVT95-1; the orchestrator's RTS95-D2 sent to him). That only the 60 s re-check is lost: the orchestrator's ruling RTS95-D1 (one ask at the start, no mid-run re-check).
 
 Cost if wrong: a key-test run started, or left running, with the game open types into the game; the listener's key blocking and the tools' sink-focus check remain.
 
@@ -2241,3 +2243,69 @@ Cost if wrong: moving Start and Stop into a shared bar later is a small layout c
 Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:66`; question bank QB125.
+
+## H64 (2026-10-31): If our app gets the keyboard during a run, the run stops; it does not begin if the app still has the keyboard when the countdown ends (RVT94-1, QB126)
+
+Question: what should happen if he clicks the app (or Alt-Tabs to it) during a run? Asked again because he asked back on RVT93-2 how the earlier recommended option would detect the click (it detected nothing). Options: A a fixed warning line only, nothing detects a click; B stop when our app gets the keyboard, from the message Windows sends to our own window (borderline, his call); C lock the whole app for the run, F12 the only stop.
+
+Ruling [Hong]: option B. His pick, verbatim: "Stop when our app gets the keyboard (Recommended)". Note: none.
+
+Reason: not given beyond the pick. The set's text for B: "When Windows tells our window it now has the keyboard, the bot stops at once, releases all keys and the tab says 'Stopped: you clicked the app'. The run also does not begin if the countdown ends while the app still has the keyboard. Nothing asks Windows which window is in front, but it is Windows telling us something about our own window's focus (borderline: you judge)."
+
+Affects: the tab spec section 9 (Tk's `<FocusIn>`/`<FocusOut>` on our own window and Tk's own `focus_get()`, no Windows query), 5.5 (sources `app_focus` and `countdown_focus`), 5.6 (`RunSession`'s `may_walk`, asked when the countdown ends), 5.12 rule 1 and section 8. Replaces H49 (status line there). Under H56 it asks Windows nothing; he judged the borderline case. Not covered, as the set said: a third program taking the keyboard.
+
+Cost if wrong: two bindings, one flag and one stop source; easy to reverse.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:118`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT94.json` (RVT94-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/RVT94.md` sections 2-3; question bank QB126.
+
+## H65 (2026-10-31): Tk's own foreground query when a shown window is restyled is fine; no new window, style or icon change during a run (RVT94-2, QB127)
+
+Question: is it OK that the window toolkit (Tk) itself asks Windows which window is in front in some window operations, which none of the RVT94-1 options causes during a run as long as no window opens or changes style then? Options: A fine as it is; B fine, but always open Helix (and the map editor) before MapleStory; C not OK, find a way to stop Tk doing it.
+
+Ruling [Hong]: option A. His pick, verbatim: "Fine as it is (Recommended)". Note: none.
+
+Reason: not given beyond the pick. The set's text for A: "It only happens when a window opens, never during a run." and "Keeps the rule 'nothing during a run' and changes nothing else."
+
+Correction (2026-10-31; the Q&A-page answers to his two follow-up questions told him): the set's issue text was wrong about when Tk asks. In Tk 8.6.15 (`win/tkWinWm.c`) the only such call is `GetForegroundWindow` in `UpdateWrapper` (:2018), skipped while a window has no wrapper yet, so a window's first show (:1909, :2388) and an icon set (:1059) make no query; `wm attributes -topmost` calls `SetWindowPos` directly (:3219-3229) and makes none. The query is made when an already-shown window is restyled (`resizable`, `overrideredirect`, `attributes -toolwindow`, full screen) or made transient. The app does none of these today, so it makes no such query, at start or when the map editor opens. His pick stands on the corrected facts: it keeps the rule, which is what A said.
+
+Affects: the tab spec section 2 (the rule and its corrected reason) and 5.12 rule 2 (no new window and no `wm` style, transient or icon call during a run); H56's "Affects" line (corrected).
+
+Cost if wrong: none now; a feature that wants a pop-up during a run shows it in the tab instead.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:118`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT94.json` (RVT94-2); `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261031-162350-51bf.md`, `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261031-162958-7708.md`; question bank QB127.
+
+## H66 (2026-10-31): An agent answers the key-test tools' "Is MapleStory closed?" with `y` only if Hong said in that same session that MapleStory is closed; otherwise it asks him first (RVT95-1, QB128)
+
+Question: with the program-list check replaced by the question "Is MapleStory closed? y/n" (H60), asked once at a tool's start, who may answer `y`? Options: A the agent, only if he said in that same session that MapleStory is closed, otherwise it asks him first; B agents never answer, he runs the key-test tools himself; C the agent answers after some sign the game is closed that needs no Windows call, such as the captured screen.
+
+Ruling [Hong]: option A. His pick, verbatim: "The agent answers 'y' only if you said in that same session that MapleStory is closed; otherwise it asks you first (Recommended)". Note: none, so the orchestrator's ruling RTS95-D1 (one ask at the start, no mid-run re-check), which the set said he could overturn in the note box, stands.
+
+Reason: not given beyond the pick. The set's text for A: "Your standing OK keeps working and nobody guesses."
+
+Affects: H15 (status line there); the tab spec 6.1 (point 4) and 6.3 (the H15 bullet text for the root CLAUDE.md, and `firmware/CLAUDE.md:5`); the root CLAUDE.md "Safety rules" when the plan's docs step lands. Option C (answering from the screen) is not part of the design.
+
+Cost if wrong: one short question to him per session that needs a key test.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:107`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT95.json` (RVT95-1); question bank QB128.
+
+## H67 (2026-10-31): The capture thread's separate "Minimap" window is removed; the capture itself is unchanged (RVT96-1, QB129)
+
+Question: the capture loop shows every frame in its own OpenCV window titled "Minimap" (`cv2.imshow` and `cv2.waitKey`, `src/vision/vision.py:83-84`). During a run a click on it sends the bot's keys there, and closing it makes the capture open a new one mid-run. Remove it, or keep it? Options: A remove it; B keep it and treat it like the app.
+
+Ruling [Hong]: option A. His pick, verbatim: "Remove it (Recommended)". Note: none.
+
+Reason: not given beyond the pick. The set's text for A: "The capture keeps working exactly as now. Only the extra "Minimap" window goes; the minimap stays visible in the app. You no longer see that separate window."
+
+Affects: the tab spec 5.9 (capture loop row), 5.12 rule 5 (no OpenCV window; the pair becomes `time.sleep(FRAME_DELAY_MS / 1000)`, and the name scan bans `imshow`, `namedWindow` and `waitKey`), 6.3 (`src/vision/CLAUDE.md`), 7 and 8. H58 (monitor capture as it is) stands: only the display window goes.
+
+Cost if wrong: one line back in `vision.py`.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:106`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT96.json` (RVT96-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/RTS95-R.md` finding I3; question bank QB129.
