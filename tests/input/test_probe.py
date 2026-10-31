@@ -224,7 +224,7 @@ def clock(monkeypatch):
     for mod in (soak, input_layer, probe):
         monkeypatch.setattr(mod, "_clock", fc.clock)
         monkeypatch.setattr(mod, "_sleep", fc.sleep)
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     monkeypatch.setattr(probe, "_board_list_json", lambda cli: Success(ONE_PORT))
     return fc
 
@@ -300,7 +300,7 @@ def test_board_list_json_runs_the_cli_and_reports_a_missing_exe():
 # ---- steps 1/2 and the foreground check: refusals ------------------------------------------------------
 
 def test_maplestory_running_is_blocked_before_any_link_listener_or_dir(tmp_path, clock, monkeypatch):
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["MapleStory.exe"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
     code, rig = _run(tmp_path, clock)
     assert code == probe.EXIT_BLOCKED
     assert rig.links == [] and rig.sinks == [] and not (tmp_path / "run").exists()
@@ -343,7 +343,7 @@ def test_each_probe_gets_its_own_link_listener_and_complete_run_dir(tmp_path, cl
         rows = _rows(d / "commands.jsonl")
         assert [r["seq"] for r in rows] == [0, 1] and all(r["stimulus_ns"] is not None for r in rows)
         s = _session(d)
-        assert s["seed"] == 5 and s["connected_ns"] is not None and s["process_check"] == "no MapleStory process"
+        assert s["seed"] == 5 and s["connected_ns"] is not None and s["process_check"] == "answered y: MapleStory closed"
         assert (d / "report.txt").read_text(encoding="utf-8") == f"{name} ran\n"
     out = capsys.readouterr().out
     assert "one ran" in out and "two ran" in out
@@ -444,8 +444,8 @@ def test_maplestory_appearing_mid_probe_aborts(tmp_path, clock, two_dummies, mon
 
     def names():
         calls["n"] += 1
-        return Success(["MapleStory.exe"] if calls["n"] > 2 else ["System"])  # 1 precheck, 2 probe start
-    monkeypatch.setattr(soak, "_process_names", names)
+        return Success("n" if calls["n"] > 2 else "y")  # 1 precheck, 2 probe start
+    monkeypatch.setattr(soak, "_read_answer", names)
 
     rig = Rig(clock)
     orig_new = rig.new_link
@@ -769,7 +769,7 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     monkeypatch.setattr(probe, "run_probes", boom)
     monkeypatch.setattr(probe, "_new_link", boom)
     monkeypatch.setattr(probe, "_start_sink", boom)
-    monkeypatch.setattr(soak, "_process_names", boom)
+    monkeypatch.setattr(soak, "_read_answer", boom)
     assert probe.main(["--run-sheet"]) == probe.EXIT_OK
     out = capsys.readouterr().out
     assert ('--probes delivery,m2,m4,m5,m6,m8,m7,release_mid_hold,release_ordering --run "$RUN" '

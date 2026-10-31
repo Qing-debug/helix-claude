@@ -85,7 +85,7 @@ def _setup(monkeypatch, tmp_path):
     for mod in (soak, input_layer):
         monkeypatch.setattr(mod, "_clock", clock.clock)
         monkeypatch.setattr(mod, "_sleep", clock.sleep)
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     monkeypatch.setattr(soak, "_new_link", lambda: link)
     monkeypatch.setattr(soak, "_start_sink", lambda run_dir: Sink())
 

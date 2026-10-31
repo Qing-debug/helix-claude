@@ -1,14 +1,15 @@
 """Pins the seams the MapleStory-guard tests patch, so the guard cannot move behind them unnoticed.
 
-The harness tools that send keys check for a MapleStory process first (hard rule 2). Their tests never run the real
-check: they replace `soak._process_names` with `monkeypatch.setattr`. That works only while `soak.maple_check` reads
-`_process_names` from the global names of `soak`. If the guard moved to another module and `soak` re-exported it, the
-patch would still be accepted, the guard tests would run the real `tasklist`, and they would pass or fail by what
-happens to be running. This file fails first. It pins where things are; it moves and changes nothing.
+The harness tools that send keys ask "Is MapleStory closed? y/n" first (hard rule 2, decision H60). Their tests never
+read the real console: they replace `soak._read_answer` with `monkeypatch.setattr`. That works only while
+`soak.maple_check` reads `_read_answer` from the global names of `soak`. If the guard moved to another module and `soak`
+re-exported it, the patch would still be accepted, the guard tests would block on real input (or read whatever stdin
+holds), and they would pass or fail by what happens to be typed. This file fails first. It pins where things are; it
+moves and changes nothing.
 
-Not run: no harness tool, no listener, no link, no board, no key. `_process_names` is patched in every test that calls
-`maple_check`, so `tasklist` never runs either. The harness modules import Windows-only code (ctypes `WinDLL`, winrt)
-at module level, so this file imports them inside a fixture and skips on other platforms (plan hard rule 9).
+Not run: no harness tool, no listener, no link, no board, no key. `_read_answer` is patched in every test that calls
+`maple_check`, so `input()` is never reached either. The harness modules import Windows-only code (ctypes `WinDLL`,
+winrt) at module level, so this file imports them inside a fixture and skips on other platforms (plan hard rule 9).
 """
 
 import ast
@@ -28,11 +29,11 @@ SOAK, PROBE, SESSION_STARTS, INPUT_LAYER = (
 
 # Every name a test in tests/input patches with `monkeypatch.setattr(<module>, "<name>", ...)` on these modules and
 # that a guard test relies on: the probe set is `PROBES, _board_list_json, _new_link, _start_sink, run_probes, _clock,
-# _sleep` (test_probe patches them on `probe`); soak's `_process_names` is patched by test_soak, test_probe,
+# _sleep` (test_probe patches them on `probe`); soak's `_read_answer` is patched by test_soak, test_probe,
 # test_session_starts and test_soak_v2_faults.
 PATCHED = {
     PROBE: ("PROBES", "_board_list_json", "_new_link", "_start_sink", "run_probes", "_clock", "_sleep"),
-    SOAK: ("_process_names", "_new_link", "_start_sink", "_clock", "_sleep", "check_focus"),
+    SOAK: ("_read_answer", "_new_link", "_start_sink", "_clock", "_sleep", "check_focus"),
     SESSION_STARTS: ("INJECTORS", "_new_link", "_start_sink", "_clock", "_sleep"),
     INPUT_LAYER: ("_clock", "_sleep"),
 }
@@ -67,14 +68,14 @@ def test_a_patched_name_is_defined_in_the_module_the_tests_patch(modules, module
 
 # ---- the guard itself, by name lookup -------------------------------------------------------------------------------
 
-def test_maple_check_lives_in_soak_and_reads_process_names_from_its_own_globals(modules):
+def test_maple_check_lives_in_soak_and_reads_the_answer_from_its_own_globals(modules):
     soak = modules[SOAK]
     assert soak.maple_check.__module__ == SOAK
-    assert "_process_names" in soak.maple_check.__code__.co_names
+    assert "_read_answer" in soak.maple_check.__code__.co_names
 
 
 def test_the_other_tools_call_the_guard_through_soak(modules):
-    """probe and session_starts read `soak.maple_check` at call time, so patching `soak._process_names` reaches them."""
+    """probe and session_starts read `soak.maple_check` at call time, so patching `soak._read_answer` reaches them."""
     for name in (PROBE, SESSION_STARTS):
         check = modules[name]._check_processes
         assert check.__module__ == name
@@ -89,38 +90,71 @@ def test_every_key_sending_entry_point_calls_its_check_processes(modules):
     assert "_check_processes" in modules[SESSION_STARTS].run_starts.__code__.co_names
 
 
-# ---- the guard with `_process_names` patched (no tasklist, no key) ---------------------------------------------------
+# ---- the guard with `_read_answer` patched (no console, no key) ------------------------------------------------------
 
-def test_maple_check_reports_the_game_when_process_names_lists_it(modules, monkeypatch):
+@pytest.mark.parametrize("answer, ok", [("", False), ("yes", False), ("n", False), ("N", False), (" n ", False),
+                                        ("y", True), (" Y ", True)])
+def test_maple_check_passes_only_y_after_stripping(modules, monkeypatch, answer, ok):
     soak = modules[SOAK]
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "MapleStory.exe"]))
-    ok, text = soak.maple_check()
-    assert ok is False
-    assert "MapleStory" in text
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success(answer))
+    passed, text = soak.maple_check()
+    assert passed is ok
+    if ok:
+        assert text == "answered y: MapleStory closed"
+    else:
+        assert text.startswith("refused: MapleStory not confirmed closed (answer:")
+        assert text == f"refused: MapleStory not confirmed closed (answer: {answer.strip()})"
 
 
-def test_maple_check_passes_a_list_without_the_game(modules, monkeypatch):
+def test_maple_check_refuses_when_there_is_no_answer(modules, monkeypatch):
     soak = modules[SOAK]
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
-    assert soak.maple_check() == (True, "no MapleStory process")
-
-
-def test_maple_check_is_closed_when_the_process_list_cannot_be_read(modules, monkeypatch):
-    soak = modules[SOAK]
-    monkeypatch.setattr(soak, "_process_names", lambda: Failure("tasklist failed: boom"))
-    ok, text = soak.maple_check()
-    assert ok is False
-    assert "boom" in text
+    monkeypatch.setattr(soak, "_read_answer", lambda: Failure("none"))
+    assert soak.maple_check() == (False, "refused: MapleStory not confirmed closed (answer: none)")
 
 
 @pytest.mark.parametrize("module_name, abort_name", [(PROBE, "ProbeAbort"), (SESSION_STARTS, "_Abort")])
 def test_the_patch_on_soak_reaches_the_other_tools_checks(modules, monkeypatch, module_name, abort_name):
-    """`_check_processes` aborts with the game listed and passes without it: the soak patch took effect, not `tasklist`."""
+    """`_check_processes` aborts on `n` and passes on `y`: the soak patch took effect, not the console."""
     module = modules[module_name]
     writer = types.SimpleNamespace(session={})
     args = (writer,) if module_name == PROBE else ()
-    monkeypatch.setattr(modules[SOAK], "_process_names", lambda: Success(["MapleStory.exe"]))
+    monkeypatch.setattr(modules[SOAK], "_read_answer", lambda: Success("n"))
     with pytest.raises(getattr(module, abort_name)):
         module._check_processes(*args)
-    monkeypatch.setattr(modules[SOAK], "_process_names", lambda: Success(["System"]))
+    monkeypatch.setattr(modules[SOAK], "_read_answer", lambda: Success("y"))
     assert module._check_processes(*args) is None
+
+
+# ---- no tool lists the running programs (Hong's anti-cheat standing fact, H56) -------------------------------------------
+
+PROCESS_LISTERS = ("tasklist", "get-process")
+
+
+def _process_lister_calls(source: str) -> list[int]:
+    """Line numbers of `subprocess.<anything>(...)` calls whose arguments hold a string naming a process lister."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        is_subprocess_call = (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                              and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess")
+        if is_subprocess_call:
+            strings = [n.value.lower() for arg in [*node.args, *(k.value for k in node.keywords)]
+                       for n in ast.walk(arg) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+            if any(lister in text for text in strings for lister in PROCESS_LISTERS):
+                found.append(node.lineno)
+    return found
+
+
+def test_no_tool_lists_processes(modules):
+    for name in (SOAK, PROBE, SESSION_STARTS):
+        source = Path(modules[name].__file__).read_text(encoding="utf-8")
+        assert "tasklist" not in source.lower(), name
+        assert _process_lister_calls(source) == [], name
+
+
+def test_the_process_lister_scan_can_fail():
+    listing = 'import subprocess\nsubprocess.run(["tasklist", "/FO", "CSV"])\n'
+    powershell = 'import subprocess\nsubprocess.run(["powershell", "-Command", "Get-Process"])\n'
+    harmless = 'import subprocess\nsubprocess.run(["git", "rev-parse", "HEAD"])\nx = "Get-Process"\n'
+    assert _process_lister_calls(listing) == [2]
+    assert _process_lister_calls(powershell) == [2]
+    assert _process_lister_calls(harmless) == []

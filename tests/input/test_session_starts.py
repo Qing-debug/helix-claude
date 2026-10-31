@@ -29,7 +29,7 @@ def clock(monkeypatch):
     for mod in (session_starts, soak):
         monkeypatch.setattr(mod, "_clock", fc.clock)
         monkeypatch.setattr(mod, "_sleep", fc.sleep)
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     return fc
 
 
@@ -301,7 +301,7 @@ def test_tap_seen_ignores_a_partly_written_line_and_a_missing_file(tmp_path):
 # ---- safety: MapleStory check, focus, abort path ------------------------------------------------------
 
 def test_maplestory_at_start_aborts_before_the_listener_any_reset_or_key(tmp_path, clock, monkeypatch):
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["MapleStory.exe"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
     code, link, sink, calls, run = _run(tmp_path, clock, monkeypatch)
     assert code == soak.EXIT_ABORT
     assert sink.started_in is None and calls == []
@@ -314,9 +314,9 @@ def test_maplestory_before_a_start_aborts_before_its_reset_and_releases(tmp_path
 
     def names():
         checks.append(1)
-        return Success(["MapleStory.exe"] if len(checks) == 10 else ["System"])  # 1 at start + 1 per start
+        return Success("n" if len(checks) == 10 else "y")  # 1 at start + 1 per start
 
-    monkeypatch.setattr(soak, "_process_names", names)
+    monkeypatch.setattr(soak, "_read_answer", names)
     code, link, sink, calls, run = _run(tmp_path, clock, monkeypatch)
     assert code == soak.EXIT_ABORT
     assert len(_rows(run)) == 8 and calls == []  # the check before attempt 9 (the first reset) found it

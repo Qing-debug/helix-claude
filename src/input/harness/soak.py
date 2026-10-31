@@ -25,9 +25,9 @@ sends nothing and pauses: once a second, at most 10 times, it repeats the bring-
 pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not back: the command's row is the
 `FOCUS_LOST` row and the caller takes the abort path (`release_all()`, close the writer, non-zero exit).
 
-Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (MapleStory check at start
-and every 60 s, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a clean
-abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
+Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (the one "Is MapleStory closed?
+y/n" question at the start, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a
+clean abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
 command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C; a command that
 fails NOT_CONNECTED or LINK_LOST outside the one command after an injected fault is an unplanned link loss and also
 aborts, since nothing reconnects it: A-H2-R-D2), `main` the CLI:
@@ -38,7 +38,6 @@ aborts, since nothing reconnects it: A-H2-R-D2), `main` the CLI:
 from __future__ import annotations
 
 import argparse
-import csv
 import datetime
 import json
 import logging
@@ -322,7 +321,7 @@ def check_focus(sink: Sink) -> FocusCheck:
 def wait_for_click(sink: Sink, tick: Callable[[], None] = lambda: None, timeout_s: float = START_WAIT_S) -> bool:
     """Before the first command: one bring-to-foreground try; if the sink is not in front, prompt the operator to
     click it and poll GetForegroundWindow() every START_POLL_S until it is, or `timeout_s` passed (False).
-    `tick()` runs on every poll (the driver's 60 s MapleStory check); an exception from it ends the wait."""
+    `tick()` runs on every poll; an exception from it ends the wait."""
     if sink.bring_sink_to_foreground():
         return True
     print(f"\n>>> CLICK the window titled '{listener.SINK_TITLE}' now, then press no keys. Waiting up to "
@@ -499,32 +498,33 @@ def fault_row(kind: str, stamps: faults.FaultStamps, link_faults: list[tuple[int
     return row
 
 
-# ---- MapleStory check (hard rule 2) ----------------------------------------------------------------
+# ---- MapleStory question (hard rule 2, decision H60) --------------------------------------------------
 
+PROMPT = "Is MapleStory closed? y/n "
+
+# RT-1 transitional: only probe.py and session_starts.py still read this, until their own pieces of RT-1 drop the
+# 60 s re-check (the last one deletes the constant, spec 6.2).
 PROCESS_CHECK_PERIOD_NS = 60 * 1_000_000_000
 
 
-def _process_names() -> Result[list[str], str]:
-    """Image names of every running process (`tasklist /FO CSV /NH`)."""
+def _read_answer() -> Result[str, str]:
+    """The operator's answer to `PROMPT`. A closed standard input (`EOFError`, `OSError`) is `Failure("none")`."""
     try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, errors="replace",
-                             timeout=30)
-    except (OSError, subprocess.SubprocessError) as e:
-        return Failure(f"tasklist failed: {e}")
-    if out.returncode != 0:
-        return Failure(f"tasklist exited {out.returncode}: {out.stderr.strip()}")
-    return Success([row[0] for row in csv.reader(out.stdout.splitlines()) if row])
+        return Success(input(PROMPT))
+    except (EOFError, OSError):
+        return Failure("none")
 
 
 def maple_check() -> tuple[bool, str]:
-    """(ok, result text). Not ok if a process name contains 'maple' (any case) or the list cannot be read."""
-    names = _process_names()
-    if not is_successful(names):
-        return False, f"process check failed: {names.failure()}"
-    found = [n for n in names.unwrap() if "maple" in n.lower()]
-    if found:
-        return False, f"MapleStory running: {found}"
-    return True, "no MapleStory process"
+    """(ok, result text). Ok only for the answer `y` or `Y` after stripping; any other answer, an empty line or no
+    answer is refused. The text is the refusal line, `<answer>` being `none` only when no input was read."""
+    answer = _read_answer()
+    if not is_successful(answer):
+        return False, f"refused: MapleStory not confirmed closed (answer: {answer.failure()})"
+    shown = answer.unwrap().strip()
+    if shown in ("y", "Y"):
+        return True, "answered y: MapleStory closed"
+    return False, f"refused: MapleStory not confirmed closed (answer: {shown})"
 
 
 # ---- the driver --------------------------------------------------------------------------------------
@@ -547,6 +547,10 @@ class _Abort(Exception):
     pass
 
 
+class _Refused(_Abort):
+    """The MapleStory question was not answered `y`; `run_soak` exits `EXIT_REFUSED` with the text."""
+
+
 class _SoakSink(Sink, Protocol):
     def stop(self) -> None: ...
 
@@ -555,7 +559,7 @@ def _check_processes(writer: RunWriter) -> None:
     ok, text = maple_check()
     writer.session["process_check"] = text
     if not ok:
-        raise _Abort(text)
+        raise _Refused(text)
 
 
 def _command(writer: RunWriter, sink: Sink, layer: InputLayer, seq: int, cmd: Command) -> CommandOutcome:
@@ -596,20 +600,12 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
     ended = False
     with RunWriter(cfg.out, link, seed=cfg.seed) as writer:  # opened before connect(): link.log gets its WARNINGs
         try:
-            _check_processes(writer)  # before the listener blocks any key and before connect (hard rule 2)
-            last_check_ns = _clock()
-
-            def periodic_check() -> None:  # every 60 s from the start check on, the start wait included
-                nonlocal last_check_ns
-                if _clock() - last_check_ns >= PROCESS_CHECK_PERIOD_NS:
-                    _check_processes(writer)
-                    last_check_ns = _clock()
-
+            _check_processes(writer)  # the one question, before the listener blocks any key and before connect
             try:
                 sink = start_sink(writer.run_dir)
             except OSError as e:
                 raise _Abort(f"listener did not start: {e}") from e
-            if not wait_for_click(sink, periodic_check):  # before connect: a timeout leaves the board untouched
+            if not wait_for_click(sink):  # before connect: a timeout leaves the board untouched
                 raise _Abort(f"the sink did not take the foreground within {START_WAIT_S:g} s (no click)")
             connected = link.connect()
             if not is_successful(connected):
@@ -623,7 +619,6 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
                         and last_done_ns - first_stimulus_ns < target_ns)
 
             while seq < cfg.commands or span_short():
-                periodic_check()
                 cmd = next(mix)
                 if seq in fault_at:
                     outcome = _fault_then_command(writer, sink, layer, link, seq, cmd, fault_at[seq])
@@ -648,6 +643,9 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
             ended = True
             print(f"soak done: {seq} commands -> {writer.run_dir}", flush=True)
             return EXIT_OK
+        except _Refused as e:
+            print(e, file=sys.stderr, flush=True)
+            return EXIT_REFUSED
         except _Abort as e:
             print(f"soak aborted: {e}", file=sys.stderr, flush=True)
             return EXIT_ABORT

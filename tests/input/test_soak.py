@@ -10,7 +10,6 @@ from collections import Counter
 
 import numpy as np
 import pytest
-from returns.pipeline import is_successful
 from returns.result import Failure, Success
 
 from src.input import actions, input_layer
@@ -255,13 +254,13 @@ def test_session_json_fields(tmp_path, fake_clock):
     with RunWriter(tmp_path / "r1", FakeLink(), seed=42, git_sha="deadbeef") as w:
         w.record_connect(SessionInfo("AA:BB", 247, _pong(itvl=12)))
         w.record_connect(SessionInfo("AA:BB", 185, _pong(itvl=24)))  # a reconnect does not overwrite
-        w.session["process_check"] = "no MapleStory process"
+        w.session["process_check"] = "answered y: MapleStory closed"
     s = _session(w.run_dir)
     assert s["run_id"] == "r1" and s["seed"] == 42 and s["git_sha"] == "deadbeef"
     assert s["mtu"] == 247 and s["ci_ms"] == 15.0  # 12 x 1.25 ms (C1 PONG itvl units)
     assert s["pong"] == {"itvl_units": 12, "latency": 0, "timeout_units": 100, "mtu": 247, "flags": 11,
                          "board_us": 123_456}
-    assert s["process_check"] == "no MapleStory process"
+    assert s["process_check"] == "answered y: MapleStory closed"
     assert s["start_ns"] < s["end_ns"] and s["focus_pauses"] == []
 
 
@@ -544,7 +543,7 @@ class DriverSink(FakeSink):
 def driver_clock(monkeypatch, fake_clock):
     monkeypatch.setattr(input_layer, "_clock", fake_clock.clock)
     monkeypatch.setattr(input_layer, "_sleep", fake_clock.sleep)
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["System", "python.exe"]))
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     return fake_clock
 
 
@@ -582,7 +581,7 @@ def test_driver_runs_n_commands_and_writes_the_c5_files(tmp_path, driver_clock):
     assert link.events == ["connect"] + ["play"] * 6 + ["close"]  # no release_all on a normal end
     assert sink.started_in == run and sink.stopped
     s = _session(run)
-    assert s["seed"] == 11 and s["mtu"] == 247 and s["process_check"] == "no MapleStory process"
+    assert s["seed"] == 11 and s["mtu"] == 247 and s["process_check"] == "answered y: MapleStory closed"
     assert len(_rows(run / "pongs.jsonl")) == 1
     for name in JSONL + ("link.log", "session.json"):
         assert (run / name).exists(), name
@@ -607,37 +606,40 @@ def test_session_connected_ns_is_null_without_a_connect(tmp_path, driver_clock):
     assert code == soak.EXIT_ABORT and _session(tmp_path / "run")["connected_ns"] is None
 
 
-def test_maplestory_at_start_aborts_before_connect(tmp_path, driver_clock, monkeypatch):
-    monkeypatch.setattr(soak, "_process_names", lambda: Success(["explorer.exe", "MapleStory.exe"]))
+def test_answer_n_refuses_before_the_listener_and_connect(tmp_path, driver_clock, monkeypatch, capsys):
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
     code, link, sink = _run(tmp_path, driver_clock)
-    assert code != 0
+    assert code == soak.EXIT_REFUSED
     assert "connect" not in link.events and "play" not in link.events
     assert sink.started_in is None  # the listener (which blocks the bot keys) was never started
     assert "release_all" in link.events
-    assert "MapleStory.exe" in _session(tmp_path / "run")["process_check"]
+    refusal = "refused: MapleStory not confirmed closed (answer: n)"
+    assert _session(tmp_path / "run")["process_check"] == refusal
+    assert capsys.readouterr().err.count(refusal) == 1  # printed once, by run_soak
 
 
-def test_process_list_failure_aborts(tmp_path, driver_clock, monkeypatch):
-    monkeypatch.setattr(soak, "_process_names", lambda: Failure("tasklist failed"))
-    code, link, _ = _run(tmp_path, driver_clock)
-    assert code != 0 and "play" not in link.events
+def test_no_answer_refuses(tmp_path, driver_clock, monkeypatch, capsys):
+    monkeypatch.setattr(soak, "_read_answer", lambda: Failure("none"))
+    code, link, sink = _run(tmp_path, driver_clock)
+    assert code == soak.EXIT_REFUSED
+    assert "play" not in link.events and sink.started_in is None
+    assert "refused: MapleStory not confirmed closed (answer: none)" in capsys.readouterr().err
 
 
-def test_maplestory_found_by_the_60_s_check_aborts_and_calls_release_all(tmp_path, driver_clock, monkeypatch):
-    checks = []
-
-    def names():
-        checks.append(driver_clock.now)
-        return Success(["MapleStory.exe"] if len(checks) >= 2 else ["System"])
-
-    monkeypatch.setattr(soak, "_process_names", names)
-    code, link, _ = _run(tmp_path, driver_clock, commands=200)
-    assert code != 0
-    assert len(checks) == 2 and checks[1] - checks[0] >= 60 * S
-    rows = _rows(tmp_path / "run" / "commands.jsonl")
-    assert 30 < len(rows) < 200  # ~1.3 s per command: the second check came after about 60 s
-    assert link.events[-2:] == ["release_all", "close"]
-    assert link.events.count("play") == len(rows)
+@pytest.mark.parametrize("case", ["a long run", "a long start wait"])
+def test_read_answer_is_called_once_per_run(tmp_path, driver_clock, monkeypatch, case):
+    """The old 60 s re-check would call the question again; both cases pass 60 s of fake time, so a left-in re-check
+    shows as a second call."""
+    calls = []
+    monkeypatch.setattr(soak, "_read_answer", lambda: calls.append(1) or Success("y"))
+    if case == "a long run":  # ~1.3 s per command: 200 commands is well past 60 s
+        code, link, _ = _run(tmp_path, driver_clock, commands=200)
+        assert link.events.count("play") == 200
+    else:  # the sink is clicked 100 s into the start wait
+        sink = ClickSink(driver_clock, click_ns=driver_clock.now + 100 * S)
+        code, link, _ = _run(tmp_path, driver_clock, sink=sink)
+        assert "connect" in link.events and link.events.count("play") == 5
+    assert code == 0 and len(calls) == 1
 
 
 def test_focus_never_back_aborts_with_release_all_and_no_play(tmp_path, driver_clock):
@@ -751,22 +753,6 @@ def test_start_wait_returns_at_once_when_the_sink_is_already_in_front(tmp_path, 
     code, link, sink = _run(tmp_path, driver_clock, commands=2)
     assert code == 0 and len(sink.brings) == 1
     assert driver_clock.sleeps.count(soak.START_POLL_S) == 0
-
-
-def test_maplestory_during_the_start_wait_aborts_before_connect(tmp_path, driver_clock, monkeypatch):
-    checks = []
-
-    def names():
-        checks.append(driver_clock.now)
-        return Success(["MapleStory.exe"] if len(checks) >= 2 else ["System"])
-
-    monkeypatch.setattr(soak, "_process_names", names)
-    sink = ClickSink(driver_clock, click_ns=driver_clock.now + 100 * S)
-    code, link, _ = _run(tmp_path, driver_clock, sink=sink)
-    assert code == soak.EXIT_ABORT
-    assert len(checks) == 2 and 60 * S <= checks[1] - checks[0] < 61 * S  # the 60 s check runs during the wait
-    assert "connect" not in link.events and "release_all" in link.events
-    assert "MapleStory.exe" in _session(tmp_path / "run")["process_check"]
 
 
 # ---- --min-hours: H3's connected span (K3) --------------------------------------------------------
@@ -1030,7 +1016,25 @@ def test_cli_refuses_more_faults_than_commands_after_the_first(tmp_path, cli):
     assert soak.main(argv) != 0 and cli == []
 
 
-def test_process_names_lists_this_process():
-    names = soak._process_names()
-    assert is_successful(names)
-    assert any("python" in n.lower() for n in names.unwrap())
+def test_read_answer_y_and_closed_input(monkeypatch):
+    prompts = []
+
+    def answers_y(prompt):
+        prompts.append(prompt)
+        return "y"
+
+    monkeypatch.setattr("builtins.input", answers_y)
+    assert soak._read_answer() == Success("y")
+    assert prompts == [soak.PROMPT] == ["Is MapleStory closed? y/n "]
+
+    def closed(prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", closed)
+    assert soak._read_answer() == Failure("none")
+
+    def unreadable(prompt):
+        raise OSError("reading from stdin while output is captured")
+
+    monkeypatch.setattr("builtins.input", unreadable)
+    assert soak._read_answer() == Failure("none")
