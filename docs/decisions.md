@@ -11,8 +11,9 @@ Facts and principles Hong would give the same way every time (his answer to Q7, 
 - Hong's keyboard and mouse are wired. The minimap finder works on his client.
 - Fix real problems, not ones we don't know will happen. Make checks only as strict as they need to be.
 - Inputs must still look human generated. Bad map files must be obvious, with how to fix them.
+- Anti-cheat: "we can't interact with memory/windows API else the anticheat flags it" (Hong, 2026-10-31). While MapleStory runs, nothing of ours may read or write its memory, open, query or enumerate its process or window, or ask Windows which window is in front (H56).
 
-Sources: `.superpowers/orchestrator/2026-10-21-phase1/notes/QA60-page/index.html`, section "The proposal" (the five bullets, copied in plain sentences); `notes/QA60-a.md` section 5f (the questions behind them: Q13, Q27, Q36, Q57, Q40, Q30, Q35, Q55, Q29); ledger-B.md:610 (Hong's yes to writing them down).
+Sources: `.superpowers/orchestrator/2026-10-21-phase1/notes/QA60-page/index.html`, section "The proposal" (the five bullets, copied in plain sentences); `notes/QA60-a.md` section 5f (the questions behind them: Q13, Q27, Q36, Q57, Q40, Q30, Q35, Q55, Q29); ledger-B.md:610 (Hong's yes to writing them down). The anti-cheat bullet: `ledger-RV.md:291` (his words, 2026-10-31) and H56.
 
 ## H1 (2026-10-21): Phase 1 specs approved
 
@@ -1970,6 +1971,8 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:16` (his unpr
 
 ## H48 (2026-10-27): The route view is its own program that follows the run folder; `--view` turns on `--record` (RV1-D1, RV1-D2; QB104)
 
+Status: replaced by H57 (Hong, 2026-10-31, RVT93-1): the separate program and `--view` are replaced by the Route tab in the main app. The principle he kept: every run is saved and can be replayed with the log of why the bot chose each move; recording is now always on (H62).
+
 Question: should the route view run as its own program next to the walk or inside it (RV1-D1), and where does its live minimap picture come from (RV1-D2)?
 
 Ruling [Hong]: D1 A and D2 A, one answer to both. His pick: "Separate, from saved (Recommended)". The view is a separate process that follows the run folder, and `walk --view` turns on `--record`, so the view reads the frames the walk already saves (about 0.5 GB an hour by the spec's estimate, which was not measured).
@@ -1986,6 +1989,8 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:24`; question
 
 ## H49 (2026-10-27): The live route view cannot take focus when clicked (RV1-D6; QB105)
 
+Status: retired by H57 (Hong, 2026-10-31, RVT93-1, "Decision 2: Reture"). What happens when the app is clicked during a run is open (RVT93-2, re-asked as RVT94-2).
+
 Question: what should stop a click on the live view from taking the game's focus, and so the bot's keys?
 
 Ruling [Hong]: option B. His pick: "Can't take focus (Recommended)". The live window is made one that a click does not activate (`WS_EX_NOACTIVATE`). If a no-key check shows that this does not work on a Tk window, the fallback is option A: a warning line on the view and watch-only controls while a walk is live.
@@ -2001,6 +2006,8 @@ Undo: Hong says so.
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:25`; question bank QB105.
 
 ## H50 (2026-10-27): `walk --view` starts the route view (RV1-D7; QB106)
+
+Status: retired by H57 (Hong, 2026-10-31, RVT93-1, "Decision 3 Yes"): the Start button in the app replaces `walk --view`.
 
 Question: how is the live view started?
 
@@ -2082,3 +2089,155 @@ Cost if wrong: if he meant every tool, a later key-tool run waits for MapleStory
 Undo: ask Hong and widen the ruling. Letting `view_check` run with MapleStory open is a code change for a later unit.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:193` (Hong's line) and `:194` (the ruling); H15.
+
+## H55 (2026-10-31): The route view becomes a tab in the main app, with Start and Stop, live and replay, time-of-day why lines and no automatic focus check (QB114-QB117)
+
+Ids note: H55-H63 continue after H54 on this branch (`p1-route-tab`, cut from `p1-route-view`); H43-H46 are on `p1c-runes`.
+
+Question: after the first route-view build Hong reshaped it: instead of a separate window that follows a command-line walk, a tab in the main app where he sets up, puts MapleStory in front, presses Start, and sees what the bot plans and does. The orchestrator then asked four questions (QB114-QB117).
+
+Ruling [Hong]: his answers, verbatim:
+- QB114, start the bot from the main app: "Yes, start from the app (Recommended)".
+- QB115, live and replay: "Live and replay (Recommended)".
+- QB116, what the bot does if MapleStory loses focus mid-run: first "how would you know to pasue until the game is back?", then "would will you check if its the window in focus? Remember, we can't interact with memory/windows API else the anticheat flags it"; final pick on the re-ask (A compare the front window, B watch our own app only, C no automatic check): "C: no automatic check". The bot is stopped by F12 or the Stop button only.
+- QB117, why-log times: "show time of day, not since run starteed".
+
+Reason: his own reshaping; QB116's reason is his anti-cheat rule (H56).
+
+Affects: the new spec `docs/superpowers/specs/2026-10-31-route-tab-design.md` (sections 2 and 5.2-5.10); H48-H50 (replaced, H57); the route-view spec's open item RV3-D6 (why-line time) is closed by QB117.
+
+Cost if wrong: the tab and run driver are a rebuild of the viewer's host; the pure parts (step log, preview, model) carry over.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:284`, `:285`, `:290`, `:292`; question bank QB114-QB117.
+
+## H56 (2026-10-31): Anti-cheat standing fact: nothing of ours may interact with MapleStory's memory or ask Windows about its process or window
+
+Question: none; Hong stated it while answering QB116: "Remember, we can't interact with memory/windows API else the anticheat flags it." He restated it on the Q&A page (RVT93-2, his question back): "Remember, we are aiming to avoid any bot detection by the anticheat so using the windows API (checking which window is in focus) while the game is running is offlimits etc".
+
+Ruling [Hong]: a standing fact, added to "Hong's standing facts" above. Reading (the orchestrator's, from his two lines): while MapleStory runs, nothing of ours may read or write its memory, open, query or enumerate its process or window, or ask Windows which window is in front. What he accepted case by case under it: monitor capture (H58) and the F12 keyboard hook (H59); the key-test tools stop listing programs (H60).
+
+Reason: his words: the anti-cheat flags such calls.
+
+Affects: the tab spec section 5.12 (no focus or process query in the app; no new window or style change during a run, an orchestrator ruling from the RVT94 finding that Tk itself calls `GetForegroundWindow` when a window is first shown or restyled); FG92's planned foreground check (dropped); the N1 click-check tool (removed with the tab, H57); a name-scan test the tab plan adds.
+
+Cost if wrong: features that would need a focus or process query (pause when the game loses focus, wait until the game is in front) are not built.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:291`; `ledger-QA.md:60`; `notes/RVT94.md` (Tk's own call).
+
+## H57 (2026-10-31): The three route-view window decisions (H48-H50) are replaced by the tab design; the save-and-replay principle of H48 is kept (RVT93-1, QB118)
+
+Question: retire the three decisions of 27 October that describe the separate viewer (H48 its own program following the run folder, with `--view` turning on recording; H49 the live window cannot take focus; H50 `walk --view` starts it)? Options: A replace all three with the tab design; B replace H48 and H50 but keep "clicking can never take focus" as a requirement for the app.
+
+Ruling [Hong]: option A, "Yes, replace all three with the tab design (Recommended)", with this note, verbatim: "Decision 1: we can keep the "save" mechanic, that way we can review old runs to see what went wrong/well, and also have its log so we know the reasoning behind the decision it made. Its implementation may have to differ to fit our new route view though but the general principle behind the first decision sounds good to me / Decision 2: Reture / Decision 3 Yes" (the slashes stand for his line breaks).
+
+So: H48's separate program and `--view` go; its principle stays: every run is saved with its step log, so an old run can be replayed with the reasons for each move (the implementation may differ). H49 is retired; what happens when he clicks the app during a run is open (RVT93-2, re-asked as RVT94-2). H50 is retired: the Start button replaces `walk --view`.
+
+Reason: his note above.
+
+Affects: the tab spec sections 2, 5.11 and 5.13 (spawn, claim/ready, `win_focus`, the N1 tool `view_check` and their tests removed); H48, H49 and H50 carry a "Status" line pointing here. H51 (4x scale), H52 (`minimap.png`), H53 and H54 stand.
+
+Cost if wrong: the separate-viewer code is on `p1-route-view` (61455a7) and can come back from there.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:59`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT93.json` (RVT93-1); question bank QB118.
+
+## H58 (2026-10-31): Second-monitor screen capture stays as it is (RVT93-3, QB120)
+
+Question: under the anti-cheat fact (H56), is grabbing the picture of the whole second monitor (Windows desktop duplication, `src/vision/vision.py`) OK? It reads monitor pixels only and does not name, open or query the game or its window. Options: A fine, keep it; B not fine.
+
+Ruling [Hong]: option A, "Fine, keep the monitor capture as it is (Recommended)".
+
+Reason: not given beyond the pick. The set said the whole bot depends on it and that only he can judge whether any anti-cheat flags screen capture.
+
+Affects: nothing changes in the code; the tab spec 5.6 reuses the app's one capture thread for a run (no second capture).
+
+Cost if wrong: none now.
+
+Undo: Hong says so (the set said a replacement would likely need a window query, which H56 forbids).
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:61`; question bank QB120.
+
+## H59 (2026-10-31): The F12 keyboard hook stays as it is (RVT93-4, QB121)
+
+Question: to hear F12 while the game is in front, the walk installs a Windows low-level keyboard hook in our own program (`src/route/runtime.py`); it looks only at F12 and passes other keys on. Is that OK? Options: A keep it; B switch to a narrower F12-only registration after a test (untested); C no hook, Stop button only.
+
+Ruling [Hong]: option A, "Fine, keep the F12 hook as it is (Recommended)". His note, verbatim: "Is this a risky? What's the likelihood this gets flagged by the anticheat?" (a question, routed to the Q&A page's question box; it does not change the pick).
+
+Reason: not given beyond the pick.
+
+Affects: nothing changes; the tab spec 5.5 keeps F12 as the stop while the game is in front, beside the new Stop button.
+
+Cost if wrong: none now; his question may reopen it.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:62`; question bank QB121.
+
+## H60 (2026-10-31): The key-test tools ask "Is MapleStory closed? y/n" instead of reading the program list (RVT93-5, QB122)
+
+Question: `probe`, `soak` and `session_starts` (run only with the game closed) ask Windows for the list of running programs (`tasklist`) before the first key and every 60 s, and stop if a name contains "maple". Under H56, is that OK? Options: A keep it (recommended); B replace it with a question to him, "Is MapleStory closed? y/n" (the set's cost: tests change, and "the 60-second re-check that catches the game being opened during a long soak run is lost; you would be the safety net"); C remove the check.
+
+Ruling [Hong]: option B, "Replace it with a question to you: 'Is MapleStory closed? y/n'". Not the recommendation.
+
+Reason: not given beyond the pick; the set's text for B was "The tools never ask Windows about programs again."
+
+Affects: `src/input/harness/soak.py`, `probe.py`, `session_starts.py` and their tests; the root CLAUDE.md "Safety rules" (the harness-tools and patched-names bullets, and how H15's "MapleStory is not running" is met by an agent), `src/input/CLAUDE.md` ("MapleStory guard" trap), `firmware/CLAUDE.md`, `tests/CLAUDE.md`. The exact text and test changes are in the tab spec section 6. H54's "key-sending tools keep their check" now means this question. Open with the orchestrator: how an agent answers the question under H15 (RTS95-D2), and confirming that only the 60 s re-check is lost (RTS95-D1).
+
+Cost if wrong: a key-test run started, or left running, with the game open types into the game; the listener's key blocking and the tools' sink-focus check remain.
+
+Undo: Hong says so; the `tasklist` check is in git history.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:63`; question bank QB122.
+
+## H61 (2026-10-31): After Start, a countdown in the tab, default 5 s, adjustable (RVT93-6, QB123)
+
+Question: Start is a click in our app, so the app is in front; how does the bot wait until he has clicked the game, without asking Windows which window is in front? Options: A a countdown in the tab, default 5 s, adjustable; B Start only arms the bot and a second key (say F11) starts it.
+
+Ruling [Hong]: option A, "A countdown in the tab, default 5 seconds, adjustable (Recommended)".
+
+Reason: not given beyond the pick; the set said it is the same as the walk command today (`src/route/walk.py:429-430`).
+
+Affects: the tab spec 5.2, 5.3 (a countdown field, 1-60 s, default 5) and 5.6.
+
+Cost if wrong: if he is slower than the countdown, the first keys go to the app until he clicks the game or presses F12.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:64`; question bank QB123.
+
+## H62 (2026-10-31): Every run records its minimap pictures (RVT93-7, QB124)
+
+Question: before Start the tab shows laps (empty: until stopped) and an optional time limit in minutes, with the seed hidden; should runs also record the minimap pictures many times a second (about 0.5 GB per hour, an estimate) so a replay shows the moving minimap? Options: A a tick box, off by default (recommended); B always record ("you delete old runs by hand"); C never record.
+
+Ruling [Hong]: option B, "Always record". Not the recommendation.
+
+Reason: not given beyond the pick; the set's text for B was "Every run can be replayed with the moving minimap."
+
+Affects: the tab spec 5.3, 5.6 and 5.11: no tick box; every run, from the tab and from the walk command, saves its frames into `data/route/<stamp>/frames/`; old runs are deleted by hand; Start refuses with less than 2 GB free (a choice in the spec, not his words). He did not object to the laps, minutes and hidden seed described in the question.
+
+Cost if wrong: about 0.5 GB of disk per hour of running.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:65`; question bank QB124.
+
+## H63 (2026-10-31): Two tabs, "Setup" (today's screen) and "Route" (run view, settings, Start and Stop) (RVT93-8, QB125)
+
+Question: where do the route view, the run settings and Start/Stop go? Options: A two tabs, Setup and Route, with Start and Stop on the Route tab; B the same tabs with Start and Stop in a bar above both.
+
+Ruling [Hong]: option A, "Two tabs: 'Setup' (today's screen) and 'Route' (run view, settings, Start and Stop on it) (Recommended)".
+
+Reason: not given beyond the pick.
+
+Affects: the tab spec 5.1, 5.2 and 5.9 (`ttk.Notebook` in `src/gui/gui.py`, new `src/gui/route_tab.py`).
+
+Cost if wrong: moving Start and Stop into a shared bar later is a small layout change.
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:66`; question bank QB125.
