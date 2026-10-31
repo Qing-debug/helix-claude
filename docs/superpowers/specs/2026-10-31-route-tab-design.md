@@ -217,9 +217,9 @@ Ways a run ends, each a `StopControl.trigger(source)` except the natural end:
 | How | Source in `stop.json` | Status line |
 |---|---|---|
 | F12 (game in front) | `hotkey` (as today, `runtime.py:81`) | "Ended: you pressed F12." |
-| Stop button | `button` (new) | "Ended: you pressed Stop." |
+| Stop button | `button` (new) | "Ended: you pressed Stop." (waits for Hong: RTP96-RA3-D1) |
 | Minutes reached | as `walk` today (the timer) | "Ended: the time limit was reached." |
-| Laps done | none (natural end, exit 0) | "Ended: all laps done." |
+| Laps done | none (natural end, exit 0; `stop.json` reason `max_laps`, also when a stop lands as the last lap ends) | "Ended: all laps done." |
 | Character lost (B19-D1) | `off_graph` / `no_position` | "Ended: the character was lost (exit 10)." |
 | App window closed | `window_close` (new) | none (the app closes after the cleanup) |
 | App got the keyboard while walking (section 9) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." |
@@ -778,7 +778,9 @@ How the tab uses it:
   between two of our own widgets gives a `<FocusOut>` and a `<FocusIn>` in a row; the re-read after both still sees
   the app has the keyboard, so it is not taken for a click. [inferred from Tk's source, not run: when the app loses
   the keyboard Tk clears its focus record, so `focus_get()` returns `None`; the plan's first tab step confirms this
-  before building on it, and Hong's manual check below covers it on this PC.] At Start the flag is read once from
+  before building on it with a committed test that sends Windows' own focus messages (`WM_SETFOCUS`, `WM_KILLFOCUS`)
+  to one of the app's widgets in a hidden window, and Hong's manual check below covers, on this PC, that Windows sends
+  that message when another program takes the keyboard.] At Start the flag is read once from
   `focus_get()`.
 - When the flag rises (it was clear, the app now has the keyboard) while the run is in its countdown or walking, the
   tab calls `session.stop("app_focus")`. While walking this is a `trigger`, like the Stop button: the walker stops,
