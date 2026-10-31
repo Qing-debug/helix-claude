@@ -276,27 +276,84 @@ class RunSession:
         self._may_walk = may_walk
         self._sleep = sleep
         self._sigint = sigint
+        # Spec 5.6: one lock for the cancel flag (its stamp and source), the "started" bit and the hand-over of the
+        # walker to `_on_stop`. Reentrant: `run()` triggers the stop control under it, and a stop control whose
+        # `trigger` calls `on_stop` on the caller's thread (the tests' fake) then re-enters it from `_on_stop`.
+        self._stop_lock = threading.RLock()
+        self._cancel: tuple[int, str] | None = None        # (perf_counter_ns, source) of the first stop() before start
+        self._control: runtime.StopControl | None = None   # the "started" bit: the stop control once start() succeeded
+        self._stop_asked = False                           # the stop control's on_stop has run
+        self._walking: RouteWalker | None = None           # the walker, once the walk begins
+        self._stopped: tuple[str, str | None] | None = None  # stop.json's reason and trigger source, once written
 
     def stop(self, source: str) -> None:
-        raise NotImplementedError("RT-3 adds the two stop paths")
+        """Ask the run to stop; any thread, returns at once (spec 5.6). Before `StopControl.start()` has succeeded
+        this sets the cancel flag (first call only: its source and `perf_counter_ns` stamp), which `run()` checks
+        after each step; from then on it is `trigger(source)` on the started stop control. Both under one lock, so a
+        call never falls between the two paths."""
+        with self._stop_lock:
+            control = self._control
+            if control is None:
+                if self._cancel is None:
+                    self._cancel = (time.perf_counter_ns(), source)
+                return
+        control.trigger(source)
+
+    def _flagged(self) -> bool:
+        with self._stop_lock:
+            return self._cancel is not None
+
+    def _on_stop(self) -> None:
+        """The stop control's `on_stop`. It stops the walker only once `_begin_walk` has handed it over:
+        `walker.stop_now()` starts a guard thread that ends only when `walker.run()` has finished (walker.py:278-287),
+        and a run cancelled before the walk never calls `walker.run()`."""
+        with self._stop_lock:
+            self._stop_asked = True
+            walker = self._walking
+        if walker is not None:
+            walker.stop_now()
+
+    def _begin_walk(self, walker: RouteWalker) -> bool:
+        """Hand `walker` to `_on_stop`; `False` (cancel, do not walk) if `on_stop` ran after the countdown's checks."""
+        with self._stop_lock:
+            if self._stop_asked:
+                return False
+            self._walking = walker
+            return True
+
+    def _stop_stamp(self, stop: runtime.StopControl | None) -> tuple[int | None, str | None]:
+        """stop.json's `trigger_ns` and `trigger_source`: the cancel flag's if it was set (spec 5.6), else the stop
+        control's as they read now."""
+        with self._stop_lock:
+            flag = self._cancel
+        if flag is not None:
+            return flag
+        if stop is None:
+            return None, None
+        return stop.trigger_ns, stop.trigger_source
 
     def run(self) -> int:
+        """Everything from the route load to the cleanup; returns the walk's exit code. Posts exactly one `ended`
+        event, after the cleanup: with the code and `"<stop.json reason, or none>/<trigger source, or empty>"` (plan
+        choice 3), or with `code=None` and the exception's text when one leaves `run()`, which re-raises it."""
+        code: int | None = None
+        text = ""
+        try:
+            code = self._run()
+            reason, source = self._stopped if self._stopped is not None else ("none", None)
+            text = f"{reason}/{source or ''}"
+            return code
+        except BaseException as exc:
+            code = None
+            text = f"the run stopped unexpectedly: {type(exc).__name__}: {exc}"
+            raise
+        finally:
+            self._on_event(RunEvent("ended", text, code=code))
+
+    def _run(self) -> int:
         s = self._settings
         out = s.out
         shared = self._shared
-        character = CLASSES[s.character]()
-        route = _load_route(s.map_csv, character)
-        if not is_successful(route):
-            print(f"error: {route.failure()}", file=sys.stderr)
-            return 5
-        rg, rotation = route.unwrap()
-        seed = s.seed if s.seed is not None else secrets.randbits(64)
-        rng_timing, rng_planner = (np.random.default_rng(x) for x in np.random.SeedSequence(seed).spawn(2))
-        positions = self._make_positions(shared)
-        if isinstance(positions, Failure):
-            print(f"error: {positions.failure()}", file=sys.stderr)
-            return 5
-
         code = 0
         link = layer = log = stop = walker = timer = rec_thread = rec_stop = None
         connected = stop_started = False
@@ -304,43 +361,80 @@ class RunSession:
         run_log: tuple[StepLog, Clock] | None = None  # the step log and its clock, once step 1 started it
         raised = False  # an exception is leaving run() (not one its caller is handling: sys.exc_info() would see that)
         try:
+            # A stop() before StopControl.start() (the cancel flag) is checked after each step; it ends the run with
+            # exit 0 and the cancel payload, unless the step itself failed (spec 5.6).
+            character = CLASSES[s.character]()
+            route = _load_route(s.map_csv, character)
+            if not is_successful(route):
+                print(f"error: {route.failure()}", file=sys.stderr)
+                return 5
+            rg, rotation = route.unwrap()
+            seed = s.seed if s.seed is not None else secrets.randbits(64)
+            rng_timing, rng_planner = (np.random.default_rng(x) for x in np.random.SeedSequence(seed).spawn(2))
+            positions = self._make_positions(shared)
+            if isinstance(positions, Failure):
+                print(f"error: {positions.failure()}", file=sys.stderr)
+                return 5
+            if self._flagged():
+                stop_payload = {"reason": "cancelled"}
+                return 0
+
             if self._start_capture is not None:
                 self._start_capture(shared)
             first = self._wait_first_frame(shared, FIRST_FRAME_S)
             if not is_successful(first):
                 print(f"error: no first frame: {first.failure()}", file=sys.stderr)
                 return 3
+            if self._flagged():
+                stop_payload = {"reason": "cancelled"}
+                return 0
             first_frame = shared_frames(shared)()  # the frame just waited for, held for minimap.png (spec 5.2)
             found = positions.read()
             if not is_successful(found):
                 print(f"error: character not found on the minimap: {found.failure()}", file=sys.stderr)
                 return 3
+            if self._flagged():
+                stop_payload = {"reason": "cancelled"}
+                return 0
 
             self._on_event(RunEvent("status", "Connecting to the board..."))
             link = self._make_link()
-            connect = link.connect()
+            connect = link.connect()  # not interrupted: a stop() meanwhile takes effect when it returns
             if not is_successful(connect):
                 print(f"error: connect failed: {connect.failure()}", file=sys.stderr)
                 return 4
             connected = True
             layer = InputLayer(link, TimingModel(rng_timing))
+            if self._flagged():  # after `connected` and `layer`, so the cleanup releases the keys first
+                stop_payload = {"reason": "cancelled"}
+                return 0
             opened = JsonlLegLog.open(out)
             if not is_successful(opened):
                 print(f"error: {opened.failure()}", file=sys.stderr)
                 return 2
             log = opened.unwrap()
+            if self._flagged():
+                stop_payload = {"reason": "cancelled"}
+                return 0
             sink = _LostLegSink(log)
             config = WalkerConfig(use_stimulus=True, leg_timeout_s=LEG_TIMEOUT_S, max_laps=s.laps)
             clock = self._make_clock()
             step_log = StepLog()  # no I/O; every walk passes it (V7 step 3)
             walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log)
-            stop = self._make_stop(walker.stop_now)
+            stop = self._make_stop(self._on_stop)
             sink.arm(stop.trigger, walker.stop_now)
+            if self._flagged():
+                stop_payload = {"reason": "cancelled"}
+                return 0
             stop_started = True
             started = stop.start(sigint=self._sigint)
             if not is_successful(started):
                 print(f"stop control failed: {started.failure()}", file=sys.stderr)
                 return 9
+            with self._stop_lock:  # the "started" bit; a stop() after the last flag check reaches the countdown
+                self._control = stop
+                if self._cancel is not None:
+                    stop.trigger(self._cancel[1])
 
             # Spec 5.9 step 1 (V7 step 4); from here on the only return is `return code`.
             head = _git_head()
@@ -373,6 +467,13 @@ class RunSession:
                 pause = min(1.0, remaining)
                 self._sleep(pause)
                 remaining -= pause
+                if stop.trigger_source is not None:
+                    break
+            if stop.trigger_source is None and self._may_walk is not None and not self._may_walk():
+                stop.trigger("countdown_focus")  # section 9: the app still had the keyboard
+            if stop.trigger_source is not None or not self._begin_walk(walker):
+                stop_payload = {"reason": "cancelled"}  # stopped before the walk: no recorder, timer or walk
+                return 0
 
             rec_stop = threading.Event()
             rec_thread = threading.Thread(target=_record_frames, args=(shared, out / _FRAMES, rec_stop),
@@ -429,10 +530,12 @@ class RunSession:
                     ev.set()
                     th.join(RECORD_JOIN_S)
                 steps.append(("record", stop_recorder))
-            if stop_payload is not None and stop is not None:
-                def write_stop(payload: dict = stop_payload, sc=stop) -> None:
-                    source = sc.trigger_source
-                    _write_json(out / _STOP, {**payload, "trigger_ns": sc.trigger_ns, "trigger_source": source})
+            if stop_payload is not None:
+                def write_stop(payload: dict = stop_payload, sc: runtime.StopControl | None = stop) -> None:
+                    trigger_ns, source = self._stop_stamp(sc)
+                    out.mkdir(parents=True, exist_ok=True)  # a cancel can come before the leg log made the folder
+                    _write_json(out / _STOP, {**payload, "trigger_ns": trigger_ns, "trigger_source": source})
+                    self._stopped = (payload["reason"], source)
                     print(f"stopped: {payload['reason']}" + (f" ({source})" if source is not None else ""))
                 steps.append(("stop.json", write_stop))
             if run_log is not None:  # on the walker's thread, after run() returned (RV-2: calls racing close are dropped)
