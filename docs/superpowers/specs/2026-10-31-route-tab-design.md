@@ -95,8 +95,10 @@ resuming a run; a settings file; deleting old runs automatically; the runes feat
 
 ### 5.1 The Setup tab
 
-Today's `MapleGUI` content, moved as is into the first tab of a `ttk.Notebook` that fills the window. Nothing on it
-changes look or behaviour outside a run. During a run (from Start until the run's cleanup has finished) these are
+Today's `MapleGUI` content, moved as is into the first tab of a `ttk.Notebook` that fills the window. Its widgets and
+their behaviour do not change outside a run. The one visible difference: the window is 120 px wider (1120x1000
+instead of 1000x1000, `gui.py:144`) so the Route tab's 4x view fits (5.2), and the Setup tab shows that extra width as
+empty space beside its column; its scrollbar and mousewheel scrolling stay (5.7 scopes the wheel to this tab). During a run (from Start until the run's cleanup has finished) these are
 disabled: Load Map, the character picker, Open Map Editor, and the dev buttons (`gui.py:198-215`), because they change
 the graph or open a window (section 5.12). The draw-node, clear-console and clear-drawn-nodes buttons stay usable.
 
@@ -127,7 +129,12 @@ the graph or open a window (section 5.12). The draw-node, clear-console and clea
 
 The view area and its panel are `RouteViewWindow`'s widgets (section 5.9), unchanged in look except the time column
 (section 5.10). The window grows to 1120x1000 so the 4x view (648x328 canvas plus the 450 px panel, `window.py:51`)
-fits beside nothing else; the Setup tab keeps its own scrollbar.
+fits beside nothing else; the Setup tab keeps its own scrollbar (5.1).
+
+Hosting: `RouteViewWindow(parent, folder, model, *, live)` is built for one folder (`window.py:69`). The tab keeps one
+container Frame for the view and, for each new live run and each replay it opens, destroys the old `RouteViewWindow`
+(and stops its `LiveController`) and builds a new one in the container. It never re-targets a built view to another
+folder. Rebuilding packs plain widgets into an existing Frame, so it opens no window (5.12).
 
 States of the top area:
 
@@ -138,8 +145,8 @@ States of the top area:
 | Connecting | "Connecting to the board..." | Stop |
 | Countdown | "Click the game now. Starting in 5 ... 4 ... 3 ... 2 ... 1. F12 stops." | Stop |
 | Running | "Running. F12 or Stop ends the run." plus the line section 9 settles | Stop |
-| Stopping | "Stopping: releasing keys..." | none |
-| Ended | "Ended: <reason in words> (<run folder name>). Replay is open." | settings, Start, saved runs |
+| Stopping | "Stopping: releasing keys..."; if Stop was pressed while connecting, "Stopping: waiting for the board connection attempt to end (up to 30 s)..." (5.6) | none |
+| Ended | "Ended: <reason in words> (<run folder name>). Replay is open." (texts in 5.5, including a worker that ended without saying so) | settings, Start, saved runs |
 
 At the end of a run the view switches to replay of that run (as the old viewer did at `end`, `follow.py:207-221`
 minus the focus calls). Error texts per exit code are in 5.5.
@@ -157,7 +164,8 @@ minus the focus calls). Error texts per exit code are in 5.5.
 An invalid field turns Start off and the status line names the field ("Laps must be a whole number of 1 or more").
 Settings live for the app session only; there is no settings file. Map and class come from the Setup tab (the loaded
 CSV path `controller.agent.CSVParser.CSV_file` and `controller.agent.characterClass`; `src/gui/CLAUDE.md` notes the GUI
-already reaches past the facade).
+already reaches past the facade). The class goes to the run as its key in `session.CLASSES` (e.g. `"kanna"`), not as
+the class or its name (5.6).
 
 ### 5.4 Start: checks, then the worker
 
@@ -172,7 +180,15 @@ line (never a message box, 5.12):
 4. The character is found on the current frame (`MapleGUI._findCharacter`, `gui.py:240`).
 5. At least 2 GB free on the drive that holds `data/route` (`shutil.disk_usage`), because every run records about
    0.5 GB per hour (H62): "Less than 2 GB free on C:. Delete old runs in data/route, then press Start."
-6. A new run folder `data/route/<UTC stamp>` that does not exist yet (`runtime.check_out`, as `walk._check_out`).
+6. A new run folder `data/route/<UTC stamp>` that does not exist yet (`runtime.check_out`, as `walk._check_out`). The
+   stamp has 1 s resolution, so a second Start in the same second as a run that wrote its folder is refused: "A run
+   folder for this second already exists. Press Start again."
+
+The route is loaded on the worker by `walk._load_route`'s code (`walk.py:220-234`), which silences the CSV parser with
+`contextlib.redirect_stdout` (:222). That swaps `sys.stdout` for the whole process for the load's duration, so in the
+app it also swallows other threads' prints for that moment (e.g. the capture thread's "Minimap frame is detected to be
+black"). Accepted: the load is one CSV parse and graph build, and those lines are informational; the plan does not
+change it.
 
 Then the tab disables the controls (5.1, 5.2), shows "Connecting to the board..." and starts the run worker thread
 (5.6), which does the rest: build the route graph from the CSV file on disk (as `walk._load_route` does, so the run
@@ -193,10 +209,20 @@ Ways a run ends, each a `StopControl.trigger(source)` except the natural end:
 | Character lost (B19-D1) | `off_graph` / `no_position` | "Ended: the character was lost (exit 10)." |
 | App window closed | `window_close` (new) | none (the app closes after the cleanup) |
 
-Other exit codes (same numbers as `walk.py:6-9`): 1 "Ended: the board link was lost.", 3 "Could not start: no minimap
-frame or character found.", 4 "Could not start: the board did not connect.", 5 "Could not start: the map, route or
-character icon did not load.", 6 and 7 "Ended: the walker failed; see <run folder>.", 9 "Could not start: the F12
-stop key could not be installed." A run that never reached the walk still leaves its folder (as `walk` does).
+| Stop before the walk (route load, connect or countdown) | `button` or `window_close`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." |
+
+Other exit codes (same numbers as `walk.py:6-9`): 1 "Ended: the board link was lost.", 2 "Could not start: the run
+folder could not be written." (on the worker this is the leg log failing to open, `walk.py:376-379`), 3 "Could not
+start: no minimap frame or character found.", 4 "Could not start: the board did not connect.", 5 "Could not start:
+the map, route or character icon did not load.", 6 and 7 "Ended: the walker failed; see <run folder>.", 9 "Could not
+start: the F12 stop key could not be installed." An `ended` event with `code=None` (an exception left `run()`, 5.6)
+shows "Ended: the run stopped unexpectedly: <error>. See the console and <run folder>." A run that got as far as the
+leg log (after connect) leaves its folder, as `walk` does; a cancel always leaves one with its `stop.json` (5.6).
+
+The tab never stays in Running or Stopping without a live worker: its 100 ms queue drain also checks
+`worker.is_alive()`; a worker that has ended with no `ended` event seen (after one more drain of the queue) is treated
+as ended with the text "Ended: the run stopped unexpectedly; see the console and <run folder>.", and the controls come
+back as for any end.
 
 The cleanup is `walk`'s, in its order (timer, release_all, recorder, `stop.json`, step log `end`, leg log,
 `link.close`, stop control close; `walk.py:473-507`), now inside `RunSession` (5.6) so the CLI and the tab share it.
@@ -217,38 +243,92 @@ same exit codes, files and cleanup order (the existing walk tests are the oracle
 @dataclass(frozen=True)
 class RunSettings:
     map_csv: Path
-    character: type[CharacterClass]
+    character: str              # the class key of CLASSES below, e.g. "kanna"; written to session.json and RunHeader
     laps: int | None
     minutes: float | None
-    countdown_s: float          # H61; the CLI passes 5.0
+    countdown_s: float          # H61; the tab passes 1-60, the CLI passes walk._countdown_s (5.0; tests set 0)
     seed: int | None            # None: drawn from the OS, written to session.json
     out: Path
+
+CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}   # moved from walk._CLASSES (walk.py:84)
 
 @dataclass(frozen=True)
 class RunEvent:                 # posted by the worker; the tab drains a queue.SimpleQueue with `after`
     kind: Literal["status", "countdown", "running", "warning", "ended"]
     text: str
     seconds_left: int | None = None
-    code: int | None = None     # set on "ended": the walk exit code
+    code: int | None = None     # set on "ended": the walk exit code; None when an exception ended run()
 
 class RunSession:
     def __init__(self, settings: RunSettings, shared: SharedFrame, *,
                  on_event: Callable[[RunEvent], None],
-                 make_link: Callable[[], Link] = ..., make_stop: Callable[..., StopControl] = ...,
-                 clock: Clock = ..., sleep: Callable[[float], None] = ..., sigint: bool = False) -> None: ...
+                 make_positions: Callable[[SharedFrame], PositionSource | Failure[str]] = runtime.make_positions,
+                 wait_first_frame: Callable[[SharedFrame, float], Result[None, str]] = runtime.wait_first_frame,
+                 make_link: Callable[[], Link] = ..., make_clock: Callable[[], Clock] = ...,
+                 make_stop: Callable[[Callable[[], None]], StopControl] = ...,
+                 sleep: Callable[[float], None] = time.sleep, sigint: bool = False) -> None: ...
     def run(self) -> int        # blocking: everything from loading the route to the cleanup; returns the exit code
-    def stop(self, source: str) -> None   # any thread; = stop_control.trigger(source), or a pre-walk cancel flag
+    def stop(self, source: str) -> None   # any thread; a cancel flag before StopControl.start(), trigger(source) after
 ```
+
+Seams and the walk tests (the oracle). `walk.main` keeps its module-level seams `_make_positions`, `_wait_first_frame`,
+`_make_link`, `_make_clock`, `_make_stop_control` and `_countdown_s` (`walk.py:103-131`) and passes them to
+`RunSession` at call time (`make_positions=_make_positions`, and so on, read from walk's globals when `main` runs), and
+keeps `_start_capture` for the capture thread it starts itself. So every `monkeypatch.setattr(walk, ...)` in
+`tests/route/test_walk_cli.py` (:464-470, :555, :575) still reaches the run unchanged, and those tests keep their
+assertions and their patches; `tests/route/test_session.py` passes the same fakes (the simulator's `SimPositionSource`
+and `SimLink`, as `test_walk_cli.py:25`, :314, :446) as constructor arguments. The patches of `walk._start_viewer`,
+`walk._wait_for_viewer` and `walk.open` live in tests that 5.13 removes. The tab passes only `settings`, `shared`,
+`on_event` and `sigint=False`, so it gets `runtime.make_positions` (the real `MinimapPositionSource`); the in-app timing
+measurement (5.7) builds the session with `make_positions` and `make_link` from the simulator, as `test_session.py`
+does.
+
+Order inside `run()`, with the exit code of each early end (as `walk.main` today, `walk.py:343-397`): `make_clock()`;
+load the route from the CSV (5); `make_positions(shared)` (5); `wait_first_frame(shared, 30 s)` (3, "no minimap
+frame"); the character read on that frame (3); connect (4); open the leg log, which creates the run folder (2); build
+the walker; `StopControl.start(sigint)` (9); write the run files; countdown; recorder; timer; walk; cleanup. The first
+frame wait and the character check are inside `run()`, not in the tab or the CLI: the tab's own check 4 (5.4) only
+refuses Start early, and `run()` checks again on the frame it will start from.
+
+Class key: the tab holds a class instance (`controller.agent.characterClass`, `gui.py:349`); it looks up
+`type(instance)` among `CLASSES`' values and passes the key, so `session.json`'s `class` and `RunHeader.character` stay
+`"kanna"` as the CLI writes them (`walk.py:399`, `:421`), never `"Kanna"`. A class with no key refuses Start at check 1
+("This character cannot walk a route yet."). `run()` builds `CLASSES[settings.character]()`.
 
 - `shared` is the app's `SharedInfo` (it has the two attributes `runtime.SharedFrame` names, `runtime.py:245-250`).
   `RunSession` never starts a capture thread; the CLI starts one (`runtime.start_capture`) and passes its frame
   holder in. There is never a second capture of the same monitor (H58 unchanged).
 - `on_event` is called on the worker thread; the tab passes `queue.put`. The worker never touches Tk.
-- `stop()` before the walker exists (during connect or the countdown) sets a cancel flag that `run()` checks between
-  its steps and in the countdown; the run then cleans up and ends with exit 0 and the source in `stop.json`.
-- The countdown is `countdown_s` one-second steps, each posting a `countdown` event and checking the cancel flag.
-- Recording is always on (H62): `run()` starts the frame recorder (`_record_frames`, `walk.py:303-307`) after the
-  countdown, as `--record` does today. A recorder failure posts a `warning` event and the walk goes on.
+- `stop(source)` has two paths, split at `StopControl.start()`:
+  - Before it (route load, first frame, character check, connect, leg log, walker build) `stop()` sets a cancel flag
+    and records `source` and the session clock's `now_ns()`; `run()` checks the flag after each of those steps. A
+    connect in progress is not interrupted: `BleLink.connect` waits up to its 30 s timeout (`link.py:143`), so a Stop
+    pressed while connecting takes effect when the connect returns. The status line says so ("Stopping: waiting for
+    the board connection attempt to end (up to 30 s)...").
+  - From `StopControl.start()` on, the countdown included (the walker and the started `StopControl` exist before the
+    countdown, `walk.py:390-397` vs `:429-430`), `stop()` is `stop_control.trigger(source)`. The countdown checks
+    `trigger_source` after each one-second step; if set, `run()` skips the recorder, the timer and `walker.run()` and
+    goes to the cleanup.
+- A run stopped before the walk (either path) ends with exit 0 and this cleanup payload, written by the same
+  `stop.json` step of the cleanup (5.5): `{"reason": "cancelled", "trigger_ns": <StopControl.trigger_ns, or the
+  session clock's ns at stop() before StopControl existed>, "trigger_source": <source>}`. The `stop.json` step creates
+  the run folder if a cancel came before the leg log created it, so the source is always on disk. The step log's `end`
+  line (only if the step log was started, i.e. from the countdown on) gets reason `"cancelled"` and exit code 0. The
+  tab's Ended line reads "Ended: cancelled before the walk (you pressed Stop)." (`button`) or nothing (`window_close`).
+- The countdown is `countdown_s` one-second steps, each posting a `countdown` event and then checking for a stop.
+- Recording is always on (H62): `run()` starts the frame recorder after the countdown, as `--record` does today. The
+  recorder thread's target is a wrapper around `record` (today `_record_frames`, `walk.py:303-307`, which catches
+  nothing) that catches every exception (`except Exception`, e.g. `OSError` from `index.write`,
+  `record_minimap.py:99-100`, on a full disk) as well as a `Failure` return, posts a `warning` event ("Recording
+  stopped: <reason>. The walk goes on.") and ends; the walk goes on. The wrapper also stops recording when free space
+  on the run folder's drive falls below a floor, checked with `shutil.disk_usage` every 600 frames (1 minute at 10 fps):
+  "Recording stopped: less than 1 GB free on C:. The walk goes on." The floor (1 GB) and the Start refusal (2 GB, 5.4)
+  are provisional until the plan's measurement step (section 11) has the real MB per hour.
+- `run()` never ends without telling the tab: it posts the `ended` event from a `finally` around its whole body, with
+  the exit code, or with `code=None` and the exception text ("the run stopped unexpectedly: <type>: <message>") when an
+  exception is leaving `run()`. `run()` still re-raises (the CLI keeps today's behaviour, including a held
+  `KeyboardInterrupt` re-raised by `runtime.run_cleanup`, `walk.py:469-471`). The tab's worker thread target wraps
+  `run()` in `try/except BaseException` and prints the traceback to the console, so no exception leaves the worker.
 - `StopControl.start(sigint: bool = True)` gains the flag; `RunSession` passes `sigint` through. The CLI runs on the
   main thread and passes `True` (Ctrl+C as today); the tab passes `False`, since there is no console and
   `signal.signal` fails off the main thread.
@@ -271,7 +351,8 @@ CLI walk records (H62); `--record` stays accepted and does nothing, so older com
 | Tk main | mainloop, both tabs, drains the run event queue every 100 ms, `LiveController` poll | yes |
 | capture (existing) | `capture_and_process_minimap` on `SharedInfo` | no |
 | run worker (new, daemon) | `RunSession.run()` | no |
-| `BleLink-loop`, `stop-hook`, `stop-control`, `step-log`, `record`, `walk-timer`, `route-stop-guard` | as in the walk today | no |
+| `BleLink-loop`, `stop-hook`, `stop-control`, `step-log`, `record`, `walk-timer`, `route-stop-guard` | as in the walk today (`record` runs the catching wrapper of 5.6) | no |
+| `saved-run-sizes` (new, daemon) | sums the saved runs' folder sizes for the list (5.11) | no |
 
 While a run is live the Setup tab's `_updateCanvas` keeps its 10 ms loop but skips building the picture when the Setup
 tab is not shown, so the walker shares the interpreter with one redraw (the Route tab's) instead of two. The cost of
@@ -330,7 +411,11 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
   frames in `frames/` (`frame_%06d.png` plus `index.jsonl`, 10 per second). This keeps H57's kept principle: every run
   can be replayed later with the log of why the bot chose each move.
 - Size: about 0.5 GB per hour (the route-view spec's estimate, not measured). Start refuses with less than 2 GB free
-  (5.4 step 5).
+  (5.4 step 5); at that rate 2 GB lasts about 4 h, and laps and minutes may both be empty ("until stopped"), so during
+  the run the recorder checks free space every 600 frames and stops recording below 1 GB free, with a warning on the
+  status line, while the walk goes on (5.6). A recorder error of any kind (e.g. a full disk) does the same. `data/route`
+  is under the repo, on C:, so this guards the system drive. Both numbers are provisional: the plan measures the real
+  MB per hour (section 11) and sets them from it.
 - Old runs: kept until Hong deletes them by hand, as the RVT93-7 option he picked said ("you delete old runs by
   hand"). Nothing deletes runs automatically. The saved-run list shows each run's size so the big ones are easy to find.
 - Picking a run: the "Saved runs" list in the Route tab is a `tk.Listbox` with a scrollbar (no file dialog and no
@@ -514,22 +599,39 @@ separate process, no claim/ready, no `win_focus`).
 
 The planner, walker, moves and input layer behaviour; `steps.jsonl` format V1; the run folder's file names; the walk's
 exit codes and cleanup order; the simulator's output for a seed (sim smoke 6/6 PASS, same output); the F12 hook
-(H59); monitor capture (H58); the Setup tab's look and behaviour outside a run.
+(H59); monitor capture (H58); the Setup tab's widgets and behaviour outside a run (the window is 120 px wider, 5.1).
 
 ## 8. Tests
 
 New:
-- `tests/route/test_session.py`: `RunSession` with the simulator's `SimLink`, a fake stop control and a fake clock
-  and sleep: the events in order (status, countdown 5..1, running, ended); `stop("button")` during connect, during the
-  countdown and while walking, each ending with `release_all` first and `stop.json` naming the source; window-close
-  source; exit codes 0/1/4/5/9/10 as `walk`'s tests have them; recording always on (frames written); no Tk import.
+- `tests/route/test_session.py`: `RunSession` built with the simulator's `SimPositionSource` (`make_positions`) and
+  `SimLink` (`make_link`), a fake `wait_first_frame`, a fake stop control and a fake clock and sleep: the events in
+  order (status, countdown 5..1, running, ended); `stop("button")` during connect (cancel flag; `stop.json` is
+  `{"reason": "cancelled", "trigger_ns": <clock ns at stop()>, "trigger_source": "button"}`, exit 0, `walker.run`
+  never called), during the countdown (`trigger`; same payload with `StopControl.trigger_ns`; the step log's `end`
+  has reason `"cancelled"`, exit 0) and while walking, each ending with `release_all` first when connected; the
+  window-close source; exit codes 0/1/2/3/4/5/9/10 as `walk`'s tests have them (3 from the fake `wait_first_frame`
+  and from a character not found, both inside `run()`); recording always on (frames written); no Tk import.
+- `tests/route/test_session.py`, failure paths: an exception raised inside `walker.run` (a fake walker) still posts
+  exactly one `ended` event, with `code` 7 as today; an exception raised outside the walk body (e.g. by a fake
+  `make_clock` or the leg log) posts `ended` with `code=None` and the error text, and `run()` re-raises it; the
+  recorder wrapper turns an `OSError` from `index.write` (patched) into one `warning` event and the walk goes on; with
+  `shutil.disk_usage` patched below the 1 GB floor, recording stops after the next 600-frame check with the low-space
+  warning and the walk goes on.
+- `tests/route/test_walk_cli.py`: its existing `setattr(walk, ...)` patches (:464-470, :555, :575) reach the run
+  through `RunSession`'s arguments unchanged (5.6), and every existing assertion holds.
 - `tests/route/test_walk_cli.py`: unchanged expectations for exit codes and files; `--view` rejected with exit 2;
   `--record` accepted.
 - `tests/route/test_walk_cli.py` (where `StopControl` is tested today): `start(sigint=False)` off the main thread succeeds
   and installs no handler.
 - `tests/controller/test_route_tab.py` (beside `test_gui_startup.py`, whose real withdrawn Tk root it reuses): Start's six refusals and their
   texts; controls disabled during a run and back after; the countdown text; events drained into the status line;
-  the saved-run list (order, size, disabled while live); the close handler calls `stop("window_close")` and destroys
+  the saved-run list (a `tk.Listbox`; order; sizes filled in from the size thread through the queue, never summed on
+  the Tk thread; disabled while live); the class key passed to the session is `"kanna"` for a `Kanna` instance, and a
+  class with no key refuses Start; a worker that ends without an `ended` event (a fake worker thread that just
+  returns) brings the tab to Ended with the "stopped unexpectedly" text and the controls back; the worker wrapper
+  keeps an exception from `run()` off the thread (no traceback escapes, controls back); a view rebuilt per
+  run/replay (the old `RouteViewWindow` destroyed); the close handler calls `stop("window_close")` and destroys
   only after the worker ends or 10 s; no message box, Toplevel, `wm` style or icon call and no focus call during a
   run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called).
 - `tests/test_anti_cheat_names.py`: the name scan of 5.12-4 over `src/**/*.py` and `tools/**/*.py`, exempting
@@ -631,5 +733,9 @@ Rough order (RVT92 section 5, adjusted): (1) `session.py` from `walk.main`, walk
 (4) `RouteViewWindow`/`LiveController` on a parent Frame, focus/claim code removed; (5) Notebook and Setup tab;
 (6) Route tab: settings, Start checks, worker, event queue, close handler; (7) live background from `SharedInfo`, time
 of day; (8) saved-run list; (9) contracts, anti-cheat name test, removals; (10) docs and safety text (section 6.3);
-(11) the in-app timing measurement (5.7); then section 9's choice once Hong answers. Hong then checks an in-app 1-lap
+(11) the in-app timing measurement (5.7); (12) the recording size measurement: record frames for a timed stretch
+with no keys sent (the recorder over `SharedInfo` with the game's minimap visible, or a simulator run with recording
+on), compute MB per hour from the `frames/` folder size, and set Start's free-space refusal (2 GB) and the recorder's
+floor (1 GB) from it (5.11), with the measured rate replacing "about 0.5 GB per hour" in the tab's Recording line; then
+section 9's choice and the "Minimap" window choice (5.12) once Hong answers. Hong then checks an in-app 1-lap
 walk from Start (F12 and Stop) and a replay; agents never press Start.
