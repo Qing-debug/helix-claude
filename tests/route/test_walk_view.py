@@ -62,12 +62,12 @@ def test_2_every_walk_writes_the_three_files_and_the_walker_gets_the_observer(si
     out = sim.out
     run = read_run(out).unwrap()
     assert (run.origin, run.ended, run.bad_lines) == ("steps", True, 0)
-    session = _json(out / "session.json")
+    session_json = _json(out / "session.json")
     head = run.header
     assert (head.source, head.clock, head.map, head.character) == ("walk", "perf_counter_ns", "map.csv", "kanna")
-    assert head.map_sha256 == session["map_sha256"] and dict(head.params) == session["params"]
+    assert head.map_sha256 == session_json["map_sha256"] and dict(head.params) == session_json["params"]
     assert head.rotation == tuple(n.minimap_position for n in sim.rotation)
-    assert head.git_head == session["git_head"]
+    assert head.git_head == session_json["git_head"]
     assert isinstance(head.wall_ns, int) and wall_before <= head.wall_ns <= wall_after
     events = run.events
     first_t = events[0].t_ns

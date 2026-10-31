@@ -4,8 +4,10 @@ Every run here uses the simulator's `SimPositionSource` and `SimLink`, a fake fi
 `SimClock` and a recording `sleep`; the autouse `_no_real_blelink` fails any test that would build a real `BleLink`.
 The small fakes are imported flat from test_walk_cli.py (RTB-PF m8)."""
 
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -31,6 +33,8 @@ from src.classes.classes import Kanna
 from src.input import input_layer
 from src.input.link import BleLink
 from src.route import runtime, session
+from src.route.harness import record_minimap
+from src.route.harness.record_minimap import INDEX_NAME
 from src.route.session import RunEvent, RunSession, RunSettings
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
 from src.route.sim.world import NoiseConfig, SimParams, SimWorld, load_terrain
@@ -386,3 +390,74 @@ def test_exception_outside_the_walk_posts_ended_none_and_reraises(env):
     ended = _ended(env.events)
     assert ended.code is None and ended.text == "the run stopped unexpectedly: RuntimeError: boom"
     assert env.log == ["release_all", "link.close"]  # the cleanup still ran, keys first
+
+
+# ---- the recorder wrapper (spec 5.6 "Recording is always on") --------------------------------------------------------
+
+def _warnings(events: list[RunEvent]) -> list[str]:
+    return [event.text for event in events if event.kind == "warning"]
+
+
+def _low_space_text(out_dir) -> str:
+    """Built from the constant, as C1 says, so RT-13 part B changes the constant only."""
+    return (f"Recording stopped: less than {session.RECORD_FLOOR_BYTES / 2**30:g} GB free on "
+            f"{session.drive_name(out_dir)}. The walk goes on.")
+
+
+class NewFrames:
+    """A `shared` whose `minimap_frame` is a new array on every read, so `record` saves a frame at every poll."""
+
+    def __init__(self) -> None:
+        self.minimap_frame_lock = threading.Lock()
+
+    @property
+    def minimap_frame(self) -> np.ndarray:
+        return np.zeros((4, 6, 3), np.uint8)
+
+
+def test_recorder_oserror_is_one_warning(env, monkeypatch):
+    def full_disk(*args, **kwargs) -> bool:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(record_minimap.cv2, "imwrite", full_disk)  # the env's frame is set: record saves at once
+    assert env.run() == 0
+    assert _warnings(env.events) == ["Recording stopped: OSError: disk full. The walk goes on."]
+    assert env.walks == 1
+
+
+def test_record_guarded_failure_is_one_warning(tmp_path):
+    out_dir = tmp_path / "frames"
+    out_dir.mkdir()
+    (out_dir / INDEX_NAME).write_text("", encoding="utf-8")  # record refuses to overwrite: a Failure
+    events: list[RunEvent] = []
+    session._record_guarded(NewFrames(), out_dir, threading.Event(), events.append)
+    assert len(events) == 1 and events[0].kind == "warning"
+    assert events[0].text.startswith("Recording stopped: ") and events[0].text.endswith(". The walk goes on.")
+    assert "already exists" in events[0].text
+
+
+def test_record_guarded_stops_below_the_floor(monkeypatch, tmp_path):
+    monkeypatch.setattr(session, "DISK_CHECK_FRAMES", 3)
+    monkeypatch.setattr(session, "RECORD_FPS", 1000.0)
+    monkeypatch.setattr(session, "free_bytes", lambda path: session.RECORD_FLOOR_BYTES - 1)
+    out_dir = tmp_path / "run" / "frames"
+    events: list[RunEvent] = []
+    session._record_guarded(NewFrames(), out_dir, threading.Event(), events.append)  # nothing else sets the event
+    assert len(_lines(out_dir / INDEX_NAME)) == 3  # the 3rd frame is saved before record's stop check
+    assert [(event.kind, event.text) for event in events] == [("warning", _low_space_text(out_dir))]
+
+
+def test_disk_check_constants():
+    assert session.DISK_CHECK_FRAMES == 600 and session.RECORD_FPS == 10.0
+
+
+def test_low_space_in_a_run(env, monkeypatch):
+    monkeypatch.setattr(session, "DISK_CHECK_FRAMES", 1)
+    monkeypatch.setattr(session, "free_bytes", lambda path: session.RECORD_FLOOR_BYTES - 1)
+    assert env.run() == 0
+    assert _warnings(env.events) == [_low_space_text(env.out / "frames")]
+    assert env.walks == 1  # the walk goes on
+
+
+def test_free_bytes_uses_the_nearest_existing_parent(tmp_path):
+    assert abs(session.free_bytes(tmp_path / "a" / "b") - shutil.disk_usage(tmp_path).free) < 100 * 2**20

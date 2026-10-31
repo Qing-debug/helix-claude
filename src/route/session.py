@@ -29,7 +29,7 @@ Where the plan is silent:
   `steps.jsonl` (the step log, the walker's observer) once the stop control has started (spec 5.9 step 1).
 - A step-1 failure prints one line (`step log unavailable: ...; walking without the route view`) and walks on with
   no step log; the files that did write stay (RV3-D2 A, A1).
-- The `end` event's `code` is null when an exception leaves `run()`.
+- In the step log's `end` line, `code` is null when an exception leaves `run()`.
 """
 
 import contextlib
@@ -246,10 +246,40 @@ def _write_run_files(out: Path, map_path: Path, frame: np.ndarray | None, step_l
         return Failure(f"{STEPS_FILE}: {type(exc).__name__}: {exc}")
 
 
-def _record_frames(shared, out_dir: Path, stop: threading.Event) -> None:
-    recorded = record(shared_frames(shared), out_dir, None, RECORD_FPS, stop=stop)
-    if not is_successful(recorded):
-        print(f"record failed: {recorded.failure()}", file=sys.stderr)
+def _record_guarded(shared: FrameHolder, out_dir: Path, stop: threading.Event,
+                    on_event: Callable[[RunEvent], None]) -> None:
+    """The recorder thread's target (spec 5.6, H62): `record` the shared frames into `out_dir` until `stop` is set.
+    An exception or a `Failure` from `record` ends the recording with one `warning` event, and so does free space
+    below `RECORD_FLOOR_BYTES` on the run folder's drive, checked every `DISK_CHECK_FRAMES` polls: that check sets
+    `stop`, so `record` saves that poll's frame and returns. The walk goes on. `record` is not edited; the constants
+    and `free_bytes` are read from this module when called (the tests patch them)."""
+    read = shared_frames(shared)
+    polls = 0
+    low_on: str | None = None  # the drive, once its free space fell below the floor
+
+    def frames() -> np.ndarray | None:
+        nonlocal polls, low_on
+        polls += 1
+        if polls % DISK_CHECK_FRAMES == 0 and free_bytes(out_dir) < RECORD_FLOOR_BYTES:
+            low_on = drive_name(out_dir)
+            stop.set()
+        return read()
+
+    try:
+        recorded = record(frames, out_dir, None, RECORD_FPS, stop=stop)
+    except Exception as exc:  # e.g. OSError from index.write on a full disk (record_minimap.py:99-100)
+        reason = f"{type(exc).__name__}: {exc}"
+        print(f"record failed: {reason}", file=sys.stderr)
+    else:
+        if not is_successful(recorded):
+            reason = str(recorded.failure())
+            print(f"record failed: {reason}", file=sys.stderr)
+        elif low_on is not None:
+            reason = f"less than {RECORD_FLOOR_BYTES / 2**30:g} GB free on {low_on}"
+            print(f"record stopped: {reason}", file=sys.stderr)
+        else:
+            return
+    on_event(RunEvent("warning", f"Recording stopped: {reason}. The walk goes on."))
 
 
 class RunSession:
@@ -476,7 +506,8 @@ class RunSession:
                 return 0
 
             rec_stop = threading.Event()
-            rec_thread = threading.Thread(target=_record_frames, args=(shared, out / _FRAMES, rec_stop),
+            rec_thread = threading.Thread(target=_record_guarded,
+                                          args=(shared, out / _FRAMES, rec_stop, self._on_event),
                                           name="record", daemon=True)
             rec_thread.start()
             if s.minutes is not None:

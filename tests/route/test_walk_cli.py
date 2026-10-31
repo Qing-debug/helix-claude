@@ -528,9 +528,9 @@ def test_end_to_end_over_the_simulator(sim):
     assert sim.main("--laps", "1") == 0
     assert len(_lines(sim.out / "legs.jsonl")) == 1 + len(sim.rotation) == 8
     assert len(_lines(sim.out / "laps.jsonl")) == 1
-    session = _json(sim.out / "session.json")
-    assert session["leg_timeout_s"] == 60.0 and session["map"] == str(FIXTURE) and len(session["map_sha256"]) == 64
-    assert isinstance(session["seed"], int)
+    session_json = _json(sim.out / "session.json")
+    assert session_json["leg_timeout_s"] == 60.0 and session_json["map"] == str(FIXTURE) and len(session_json["map_sha256"]) == 64
+    assert isinstance(session_json["seed"], int)
     assert sim.link.release_calls >= 1 and sim.link.close_calls >= 1
     assert _json(sim.out / "stop.json") == {"reason": "max_laps", "trigger_ns": None, "trigger_source": None}
     assert sim.stops[0].close_calls == 1
