@@ -732,7 +732,8 @@ Changed for the y/n question (section 6):
     `_check_processes`).
   - The three `maple_check` tests (:94-113) use answers (`n`, `y`, a `Failure` for no answer).
   - The parametrised reach test (:116-126) keeps only the `session_starts` case; the probe case becomes: with
-    `soak._read_answer` patched to `Success("n")`, `run_probes` returns `EXIT_BLOCKED` and never calls `_new_link` or
+    `soak._read_answer` patched to `Success("n")`, `run_probes` returns `soak.EXIT_REFUSED` (2, as 6.1; ruling
+    RTP96-D1 A) and never calls `_new_link` or
     `_board_list_json`; with `Success("y")`, `probe._check_processes(writer, text)` writes `text` into
     `writer.session["process_check"]`.
   - New: `soak.py`, `probe.py` and `session_starts.py` contain no `tasklist` and no `subprocess` call that lists
