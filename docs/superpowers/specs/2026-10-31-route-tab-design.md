@@ -666,8 +666,8 @@ New:
   `SimLink` (`make_link`), a fake `wait_first_frame`, a fake stop control and a fake clock and sleep: the events in
   order (status, countdown 5..1, running, ended); `stop("button")` during connect (cancel flag; `stop.json` is
   `{"reason": "cancelled", "trigger_ns": <the perf_counter_ns stamp taken at stop()>, "trigger_source": "button"}`,
-  exit 0, `walker.run` never called), right after Start (a `stop()` before `make_clock()` runs: same payload, no
-  error), between the last flag check and `StopControl.start()` (a fake stop control whose `start` calls
+  exit 0, `walker.run` never called; a second `stop()` keeps the first call's source and stamp), right after Start
+  (a `stop()` before `make_clock()` runs: same payload, no error), between the last flag check and `StopControl.start()` (a fake stop control whose `start` calls
   `session.stop("button")`: the countdown sees the trigger at its first check, exit 0, the flag's stamp in
   `stop.json`, `walker.run` never called), with the flag set while the step itself fails (a connect `Failure`: exit 4,
   no cancel payload), during the countdown (`trigger`; same payload with `StopControl.trigger_ns`; the step log's `end`
@@ -675,14 +675,15 @@ New:
   window-close and `app_focus` sources; `may_walk` returning `False` at the end of the countdown (source
   `countdown_focus`, cancel payload, exit 0, `walker.run` never called) and `True` (the walk runs); `start_capture`
   called once, after `make_positions` and before `wait_first_frame`, and not at all on a route-load or icon failure;
-  exit codes 0/1/2/3/4/5/9/10 as `walk`'s tests have them (3 from the fake `wait_first_frame`
+  exit codes 0/1/2/3/4/5/6/9/10 as `walk`'s tests have them (3 from the fake `wait_first_frame`
   and from a character not found, both inside `run()`); recording always on (frames written); no Tk import.
 - `tests/route/test_session.py`, failure paths: an exception raised inside `walker.run` (a fake walker) still posts
   exactly one `ended` event, with `code` 7 as today; an exception raised outside the walk body (e.g. by a fake
   `make_clock` or the leg log) posts `ended` with `code=None` and the error text, and `run()` re-raises it; the
-  recorder wrapper turns an `OSError` from `index.write` (patched) into one `warning` event and the walk goes on; with
-  `shutil.disk_usage` patched below the 1 GB floor, recording stops after the next 600-frame check with the low-space
-  warning and the walk goes on.
+  recorder wrapper turns an `OSError` from `cv2.imwrite` (patched; not `json.dumps`, which the whole run shares) into
+  one `warning` event and the walk goes on; with the free space patched below the 1 GB floor, recording stops at the
+  next check with the low-space warning and the walk goes on (tested on the wrapper with the check interval patched
+  small, since `record` polls on real time; a constants test pins the 600 frames).
 - `tests/route/test_walk_cli.py`: its existing `setattr(walk, ...)` patches (:464-470, :555, :575) reach the run
   through `RunSession`'s arguments unchanged (5.6), and every existing assertion holds; the three lines that reach a
   moved name (:438 `_load_route`, :754 `_LostLegSink`, :881 `JsonlLegLog.open`) reach it through `session` instead,
