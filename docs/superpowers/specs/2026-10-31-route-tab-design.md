@@ -249,8 +249,12 @@ class RunSession:
 - `StopControl.start(sigint: bool = True)` gains the flag; `RunSession` passes `sigint` through. The CLI runs on the
   main thread and passes `True` (Ctrl+C as today); the tab passes `False`, since there is no console and
   `signal.signal` fails off the main thread.
-- Layers: `session` sits above `walker` in contract f (it builds the walker); it imports `src.input` (link, layer,
-  timing) as `walk` does; it imports neither `src.gui` (contract d) nor `src.vision` (contract e).
+- Layers: contract f ("f route layers", `pyproject.toml:62-75`) gets `src.route.session` in its top layer, beside
+  `src.route.sim`: the first entry becomes `"src.route.session | src.route.sim"`. It must sit above
+  `src.route.position`, not just above `walker`, because it imports `runtime`, which imports `src.route.position`
+  (`runtime.py:253-258`); the `|` makes the two independent, so neither imports the other (import-linter
+  `contracts/layers.py:20`). It imports `src.input` (link, layer, timing) as `walk` does; it imports neither
+  `src.gui` (contract d) nor `src.vision` (contract e).
 
 The walk CLI after the change: `python -m src.route.walk --map ... --supervised [--class kanna] [--laps N]
 [--minutes M] [--seed S] [--out DIR]`. `--view` is removed (H57 retires H50; argparse rejects it with exit 2). Every
@@ -295,8 +299,14 @@ file lag. The step lines lag the walk by up to about 0.1-0.3 s (the poll), as be
 | Standalone replay | `src/route_view/__main__.py` | `python -m src.route_view --follow <folder>` always opens a replay; `--ready` and the live path removed |
 
 Contracts (`pyproject.toml`):
-- "route_view is a leaf" (:87-93): `src.gui` is taken off its list of importers, so `src.gui.route_tab` may import
-  `src.route_view`. `src.main` stays forbidden.
+- "route_view is a leaf" (:87-93): `src.gui` **and `src.main`** are taken off its `source_modules`, so
+  `src.gui.route_tab` may import `src.route_view`. `src.main` must go too: the contract has no
+  `allow_indirect_imports`, so it forbids indirect chains as well (`forbidden.py:135-143` uses
+  `graph.find_shortest_chains` unless `allow_indirect_imports` is true), and after the change
+  `src.main -> src.gui.gui -> src.gui.route_tab -> src.route_view` is such a chain (`src/main.py:3` imports
+  `src.gui.gui`). The other sources (`src.route`, `src.controller`, `src.vision`, `src.input`, `src.classes`,
+  `src.rune_solver`) stay; `lint-imports` confirms that none of them reaches `src.gui` (for `src.route`, contract d
+  already forbids it).
 - "route_view boundaries" (:77-85): unchanged, and `src.route.session` is added to its forbidden list, so the view stays
   free of the run driver.
 - New forbidden contract "gui reaches input only through the run driver": `src.gui` may not import `src.input`, with
@@ -373,8 +383,9 @@ no-activate style" to "no style change during a run"), unless section 9's option
   (standard input closed: `input()` raises `EOFError`, confirmed in the venv) stops the tool with its refusal exit code
   (`EXIT_REFUSED`, 2) and the line `refused: MapleStory not confirmed closed (answer: <answer or "none">)`, before the
   listener, the link or any key.
-- It asks once per tool run, not again. The 60 s re-check in `soak` and `probe` and the per-start check in
-  `session_starts` are removed: a question cannot be asked mid-run, because the console would take focus from the
+- It asks once per tool run, not again (where the one answer is read and how probe reuses it for each probe: 6.2).
+  The 60 s re-check in `soak` and `probe`, probe's per-probe check and the per-start check in `session_starts` are
+  removed: a question cannot be asked mid-run, because the console would take focus from the
   sink (a `FOCUS_LOST` abort) and the typed answer would be extra key events in `keys.jsonl` (a Delivery failure). Hong
   was told when he chose: "the 60-second re-check that catches the game being opened during a long soak run is lost;
   you would be the safety net" (RVT93-5 option B cost). See `DECISION NEEDED` RTS95-D1 in the notes for the check
@@ -403,8 +414,22 @@ What still guards a key-test run after the change:
 - `soak.maple_check() -> tuple[bool, str]` keeps its name and signature and reads `_read_answer` from soak's own
   globals: ok only for `y`.
 - `_check_processes` keeps its name in all three modules (the name is now historical; renaming it would edit three
-  modules and `test_guard_targets.py` for no behaviour gain). `PROCESS_CHECK_PERIOD_NS` and soak's `periodic_check`
-  go; `wait_for_click` no longer gets a MapleStory tick.
+  modules and `test_guard_targets.py` for no behaviour gain). `PROCESS_CHECK_PERIOD_NS` and every `periodic_check`
+  closure go; `wait_for_click` no longer gets a MapleStory tick.
+
+Where the one answer is read, and the call sites that remain (today each tool asks more than once, so this is a
+change, not a rename):
+
+| Tool | The one call that asks | Call sites removed | How the answer reaches `session.json` |
+|---|---|---|---|
+| `soak` | `run_soak` -> `_check_processes(writer)` (`soak.py:599`) -> `maple_check()` | the 60 s re-check (`:600-605`, `periodic_check`) | `_check_processes` writes `writer.session["process_check"]` as today |
+| `session_starts` | `run_starts` -> `_check_processes()` (`session_starts.py:171`) -> `soak.maple_check()` | the start-wait re-check (`:172-177`) and the per-start call before each start (`:189`) | no `session.json` (unchanged) |
+| `probe` | `run_probes` step 1 -> `soak.maple_check()` (`probe.py:1065`), once per tool run, before the board port check | the per-probe ask in `_run_probe` (`:1017`) and its 60 s re-check (`:1018-1023`) | `run_probes` passes the step-1 answer text to every `_run_probe(..., answer=text)`; `_run_probe` calls `_check_processes(writer, answer)`, which now only writes `writer.session["process_check"] = answer` and never asks |
+
+So `probe._check_processes` changes signature to `(writer: RunWriter, answer: str) -> None` and no longer reads
+`soak.maple_check`; `soak._check_processes` and `session_starts._check_processes` keep their signatures. With this,
+`echo y | python -m src.input.harness.probe ...` reads one line and runs every probe; a second `input()` would raise
+`EOFError` and refuse. The test changes this forces in `tests/input/test_guard_targets.py` are listed in section 8.
 
 ### 6.3 Safety text
 
@@ -425,7 +450,7 @@ only when Hong has said in the current session that MapleStory is closed, and ne
 
 `src/input/CLAUDE.md`, "Traps", replace the "MapleStory guard" bullet with:
 
-> - MapleStory question (H60). `soak.maple_check` (soak.py) reads the answer through `soak._read_answer`, which calls `input(soak.PROMPT)`; only `y` passes, and a closed input is a `Failure`. `probe._check_processes` and `session_starts._check_processes` call `soak.maple_check()` through the module; each tool asks once, before the listener, the link or any key, and never again. The tests patch `soak._read_answer` by name (test_probe, test_session_starts, test_soak, test_soak_v2_faults; `test_guard_targets.py` adds its own): if the function moves, those patches stop reaching the question and a test would block on real input. `tests/input/test_guard_targets.py` fails if a patched name stops being defined in its module. Never move or rename `maple_check`, `_read_answer` or `_check_processes` (the last name is historical: it no longer lists processes).
+> - MapleStory question (H60). `soak.maple_check` (soak.py) reads the answer through `soak._read_answer`, which calls `input(soak.PROMPT)`; only `y` passes, and a closed input is a `Failure`. Each tool asks exactly once per run, before the listener, the link or any key, and never again: `soak` through `soak._check_processes` in `run_soak`, `session_starts` through `session_starts._check_processes` in `run_starts`, `probe` at step 1 in `run_probes` (`soak.maple_check()` through the module); `probe._check_processes(writer, answer)` only writes that one answer into each probe's `session.json` and never asks. The tests patch `soak._read_answer` by name (test_probe, test_session_starts, test_soak, test_soak_v2_faults; `test_guard_targets.py` adds its own): if the function moves, those patches stop reaching the question and a test would block on real input. `tests/input/test_guard_targets.py` fails if a patched name stops being defined in its module. Never move or rename `maple_check`, `_read_answer` or `_check_processes` (the last name is historical: it no longer lists processes).
 
 In its "Harness tools" paragraph replace "(the tools' own check still applies)" with "(the tools ask; see the root
 CLAUDE.md H15 bullet for how an agent answers)". `firmware/CLAUDE.md:5`: replace "never bypass the tools' own
@@ -461,8 +486,10 @@ New:
   run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called).
 - `tests/test_anti_cheat_names.py`: the name scan of 5.12-4, with a planted sample to show it can fail.
 - `tests/route_view/test_view_model.py`: time-of-day why lines from `wall_ns`/`perf_ns`; elapsed when absent.
-- Import contracts: the "gui reaches input only through the run driver" contract and the changed leaf contract are
-  checked by `lint-imports` in `tools/check.py`; `tests/route_view/test_route_view_imports.py` updated to match.
+- Import contracts: the "gui reaches input only through the run driver" contract, the changed leaf contract (`src.gui`
+  and `src.main` both off its sources, 5.9) and `src.route.session` in contract f's top layer are checked by
+  `lint-imports` in `tools/check.py`, which must pass with `src.main -> src.gui.gui -> src.gui.route_tab ->
+  src.route_view` in the graph; `tests/route_view/test_route_view_imports.py` updated to match.
 
 Changed for the y/n question (section 6):
 - Every `monkeypatch.setattr(soak, "_process_names", ...)` (test_probe 4, test_session_starts 3, test_soak 5,
@@ -472,14 +499,27 @@ Changed for the y/n question (section 6):
   becomes "no answer (EOF) refuses".
 - The re-check tests are deleted: test_soak:626 (60 s check), test_soak:756 (during the start wait), test_probe:442
   (mid-probe), test_session_starts:312 (before a start). New tests in their place: each tool calls `_read_answer`
-  exactly once per run, and a full fake run sends its keys with no further call.
+  exactly once per run, and a full fake run sends its keys with no further call; for probe, a run of two or more
+  probes with `_read_answer` patched to answer once (a second call raises) runs every probe, and each probe's
+  `session.json` holds the same `process_check` text.
 - test_soak:1033 (`_process_names` lists this process) is deleted; new: `_read_answer` returns `Success("y")` for input
   "y", `Failure` for a closed input (patch `builtins.input`).
 - `process_check` value assertions (test_soak:258, :264, :585, :617, :769; test_probe:346, :464) take the new texts.
-- `tests/input/test_guard_targets.py`: `PATCHED[SOAK]` lists `_read_answer` instead of `_process_names`;
-  `test_maple_check_lives_in_soak_and_reads_process_names_from_its_own_globals` checks `_read_answer`; the three
-  `maple_check` tests and the parametrised reach test use answers; new: `soak.py`, `probe.py` and `session_starts.py`
-  contain no `tasklist` and no `subprocess` call that lists processes.
+- `tests/input/test_guard_targets.py` (line numbers at 61455a7):
+  - `PATCHED[SOAK]` (:35) lists `_read_answer` instead of `_process_names`.
+  - `test_maple_check_lives_in_soak_and_reads_process_names_from_its_own_globals` (:70-73) checks `_read_answer`.
+  - `test_the_other_tools_call_the_guard_through_soak` (:76-83): the loop at :78-81 runs over `session_starts` only;
+    the `run_probes` assertion (:82) and the soak one (:83) stay; new assertion: `probe._check_processes`'s
+    `co_names` contain neither `maple_check` nor `_read_answer` (it only records).
+  - `test_every_key_sending_entry_point_calls_its_check_processes` (:86-89) is unchanged (`_run_probe` still calls
+    `_check_processes`).
+  - The three `maple_check` tests (:94-113) use answers (`n`, `y`, a `Failure` for no answer).
+  - The parametrised reach test (:116-126) keeps only the `session_starts` case; the probe case becomes: with
+    `soak._read_answer` patched to `Success("n")`, `run_probes` returns `EXIT_BLOCKED` and never calls `_new_link` or
+    `_board_list_json`; with `Success("y")`, `probe._check_processes(writer, text)` writes `text` into
+    `writer.session["process_check"]`.
+  - New: `soak.py`, `probe.py` and `session_starts.py` contain no `tasklist` and no `subprocess` call that lists
+    processes.
 - `probe --run-sheet` text tests, if any pin `MAPLE_CHECK`, take the new line.
 
 Removed: `tests/route_view/test_win_focus.py`, `tests/route/test_view_check.py`, the claim/ready parts of
