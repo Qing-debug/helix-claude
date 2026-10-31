@@ -793,9 +793,9 @@ How the tab uses it:
 - When the flag rises (it was clear, the app now has the keyboard) while the run is in its countdown or walking, the
   tab calls `session.stop("app_focus")`. While walking this is a `trigger`, like the Stop button: the walker stops,
   the cleanup releases every key (its second step, 5.5), and the status line reads "Stopped: you clicked the app.
-  Press Start to run again." (waits for Hong: RTP96-RA3-D1) In the countdown it is a stop before the walk (5.6, cancel payload, same text). Before
-  the countdown (connecting) no key is sent yet, so the binding does nothing then; the check at the countdown's end
-  covers it.
+  Press Start to run again." (waits for Hong: RTP96-RA3-D1) In the countdown it is a stop before the walk (5.6,
+  cancel payload, same text). Before the countdown (connecting) no key is sent yet, so the binding does nothing then;
+  the check at the countdown's end covers it.
 - At the end of the countdown `run()` calls the `may_walk` the tab passed (5.6), which only reads the flag
   (`not flag.is_set()`; the worker never touches Tk). If the app still has the keyboard, the run does not start:
   source `countdown_focus`, exit 0, nothing walked, and the status line reads "Not started: click the game first.
