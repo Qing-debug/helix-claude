@@ -18,7 +18,7 @@ from returns.result import Failure, Result, Success
 from src.classes.classes import Kanna
 from src.input import input_layer
 from src.input.link import InputError
-from src.route import runtime, walk
+from src.route import runtime, session, walk
 from src.route.character import CharacterLocator
 from src.route.leg_log import LegOutcome, LegRecord, MemorySink, MoveEntry
 from src.route.runtime import StopControl
@@ -268,6 +268,19 @@ def test_start_off_the_main_thread_fails_and_close_removes_the_hook(hook, saved_
     assert hook.calls == 1
 
 
+def test_start_without_sigint_off_the_main_thread_succeeds_and_installs_no_handler(hook, saved_sigint):
+    stop = StopControl(lambda: None)
+    results: list[object] = []
+    th = threading.Thread(target=lambda: results.append(stop.start(sigint=False)))
+    th.start()
+    th.join(10)
+    assert results == [Success(None)]
+    assert signal.getsignal(signal.SIGINT) is saved_sigint
+    stop.close()
+    assert not _worker_alive()
+    assert hook.calls == 1
+
+
 def test_trigger_before_start_calls_on_stop_once_started(hook, saved_sigint):
     ran = threading.Event()
     stop = StopControl(ran.set)
@@ -378,8 +391,10 @@ class FakeStop:
         self.triggers: list[str] = []
         self.plays_at_trigger: int | None = None
         self.close_calls = 0
+        self.sigint: bool | None = None  # what start() was called with (choice 16)
 
-    def start(self):
+    def start(self, sigint: bool = True):
+        self.sigint = sigint
         return self.start_result
 
     def trigger(self, source: str = "hotkey") -> None:
@@ -435,7 +450,7 @@ def _json(path: Path) -> dict:
 @pytest.fixture
 def sim(monkeypatch, tmp_path):
     """The end-to-end seams of plan B19: FF2 terrain, noise off, start at (113, 60), one SimClock everywhere."""
-    rg, rotation = walk._load_route(FIXTURE, Kanna()).unwrap()
+    rg, rotation = session._load_route(FIXTURE, Kanna()).unwrap()
     clock = SimClock()
     params = SimParams()
     world = SimWorld(load_terrain(TERRAIN).unwrap(), rg.reach_h, rg.reach_v, params, NoiseConfig.off(),
@@ -569,6 +584,7 @@ def test_e_missing_map_exits_5(sim, tmp_path):
     code = walk.main(["--map", str(tmp_path / "nope.csv"), "--supervised", "--out", str(sim.out)])
     assert code == 5
     assert sim.link_calls == 0
+    assert sim.capture_calls == 0
 
 
 def test_e_character_icon_failure_exits_5(sim, monkeypatch):
@@ -576,6 +592,7 @@ def test_e_character_icon_failure_exits_5(sim, monkeypatch):
     monkeypatch.setattr(CharacterLocator, "from_files", staticmethod(lambda *args: Failure("no icon")))
     assert sim.main("--laps", "1") == 5
     assert sim.link_calls == 0
+    assert sim.capture_calls == 0
 
 
 # (f) the --minutes timer
@@ -655,6 +672,25 @@ def test_i_record_never_starts_when_connect_fails(sim):
     sim.link.connect_result = Failure("x")
     assert sim.main("--laps", "1", "--record") == 4
     assert not (sim.out / "frames").exists()
+
+
+@pytest.mark.parametrize("extra", [(), ("--record",)])
+def test_record_is_accepted_and_every_walk_records(sim, extra):
+    sim.frame = np.zeros((4, 4, 3), np.uint8)
+    assert sim.main("--laps", "1", *extra) == 0
+    assert len((sim.out / "frames" / "index.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    assert _json(sim.out / "session.json")["record"] is True
+
+
+def test_the_cli_starts_the_stop_control_with_sigint(sim):
+    assert sim.main("--laps", "1") == 0
+    assert [stop.sigint for stop in sim.stops] == [True]
+
+
+def test_the_moved_names_live_in_session():
+    assert callable(session._load_route) and isinstance(session._LostLegSink, type)
+    assert session.CLASSES == {"kanna": Kanna}
+    assert not hasattr(walk, "_load_route")
 
 
 # (j) cleanup order (PB-amend2-D1, B19-record-D1)
@@ -759,7 +795,7 @@ def _leg(outcome: LegOutcome, moves: int = 0, misses: int = 0, off_graph: int = 
 def test_lost_leg_sink_triggers_then_stops_the_walker(rec, expected):
     inner = MemorySink()
     calls: list[str] = []
-    sink = walk._LostLegSink(inner)
+    sink = session._LostLegSink(inner)
     sink.arm(calls.append, lambda: calls.append("stop_now"))
     assert sink.write_leg(rec) == Success(None)
     assert inner.legs == [rec]
@@ -886,7 +922,7 @@ def test_a_seed_above_64_bits_is_accepted(sim):
 # B19-R M4(a): the leg log cannot be opened after connect
 
 def test_leg_log_open_failure_exits_2_with_keys_released_and_link_closed(sim, monkeypatch, capsys):
-    monkeypatch.setattr(walk.JsonlLegLog, "open", classmethod(lambda cls, directory: Failure("cannot open")))
+    monkeypatch.setattr(session.JsonlLegLog, "open", classmethod(lambda cls, directory: Failure("cannot open")))
     assert sim.main("--laps", "1") == 2
     assert "error: cannot open" in capsys.readouterr().err
     assert sim.link.plays == 0

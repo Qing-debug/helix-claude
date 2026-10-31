@@ -61,19 +61,21 @@ class StopControl:
         self.trigger_ns: int | None = None
         self.trigger_source: str | None = None
 
-    def start(self) -> Result[None, str]:
-        """Install the hotkey hook, then the SIGINT handler, then start the worker. Never raises."""
+    def start(self, sigint: bool = True) -> Result[None, str]:
+        """Install the hotkey hook, then the SIGINT handler (only with `sigint`; the app has no console and
+        `signal.signal` fails off the main thread), then start the worker. Never raises."""
         try:
             self._remove = self._install_hook()
         except OSError as exc:
             return Failure(f"hook: {exc}")
-        handler = self._on_sigint  # stored: close() compares the installed handler with this very object
-        try:
-            previous = signal.signal(signal.SIGINT, handler)
-        except ValueError as exc:  # signal.signal works only on the main thread
-            return Failure(f"sigint: {exc}")
-        self._sigint_handler = handler
-        self._prev_sigint = previous
+        if sigint:
+            handler = self._on_sigint  # stored: close() compares the installed handler with this very object
+            try:
+                previous = signal.signal(signal.SIGINT, handler)
+            except ValueError as exc:  # signal.signal works only on the main thread
+                return Failure(f"sigint: {exc}")
+            self._sigint_handler = handler
+            self._prev_sigint = previous
         self._worker = threading.Thread(target=self._work, name="stop-control", daemon=True)
         self._worker.start()
         return Success(None)

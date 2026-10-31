@@ -18,7 +18,7 @@ from returns.result import Failure, Result, Success
 from src.classes.classes import Kanna
 from src.input.link import InputError, SendReport
 from src.input.protocol import Done, DoneStatus, Key
-from src.route import walk as walk_cli
+from src.route import session
 from src.route.harness import measure_moves
 from src.route.harness.measure_moves import MEASURE_FILE, MoveSample, append_sample, main, summarize
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
@@ -322,7 +322,7 @@ def rig(monkeypatch, tmp_path):
         env.positions = positions
 
     def use_sim(start=(113.0, 60.0)) -> None:
-        rg, _ = walk_cli._load_route(FIXTURE, Kanna()).unwrap()  # noqa: SLF001
+        rg, _ = session._load_route(FIXTURE, Kanna()).unwrap()  # noqa: SLF001
         params = SimParams()
         world = SimWorld(load_terrain(TERRAIN).unwrap(), rg.reach_h, rg.reach_v, params, NoiseConfig.off(),
                          np.random.default_rng(0), start)

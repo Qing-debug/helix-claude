@@ -8,7 +8,7 @@ from returns.result import Failure
 from test_walk_cli import _lines
 from test_walk_view import _frame
 
-from src.route import walk
+from src.route import session
 from src.route.step_log import STEPS_FILE
 
 sim = test_walk_cli.sim  # the B19 rig's fixture (bound by assignment, as test_walk_view.py does)
@@ -33,7 +33,7 @@ def test_m1_a_normal_return_inside_a_callers_except_block_records_its_code(sim):
 
 def test_m1_a_nonzero_return_inside_a_callers_except_block_records_its_code(sim, monkeypatch):
     sim.frame = _frame()
-    monkeypatch.setattr(walk.RouteWalker, "run", lambda self: Failure("boom"))
+    monkeypatch.setattr(session.RouteWalker, "run", lambda self: Failure("boom"))
     try:
         raise ValueError("the caller is handling this")
     except ValueError:
@@ -49,7 +49,7 @@ def test_m1_an_exception_leaving_main_inside_a_callers_except_block_still_record
     def interrupted(self):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(walk.RouteWalker, "run", interrupted)
+    monkeypatch.setattr(session.RouteWalker, "run", interrupted)
     try:
         raise ValueError("the caller is handling this")
     except ValueError:
