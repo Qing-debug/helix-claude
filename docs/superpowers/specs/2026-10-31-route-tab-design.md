@@ -300,7 +300,14 @@ assertions and their patches. Three other lines of that file reach a name throug
 with the body: `walk._load_route` (:438), `walk._LostLegSink` (:754) and `walk.JsonlLegLog.open` (:881, patched on
 the class through walk's import, `walk.py:77`). Those three lines re-point to `session._load_route`,
 `session._LostLegSink` and `session.JsonlLegLog.open`; their assertions do not change, and `walk.py` does not keep
-the names for the tests' sake. `tests/route/test_session.py` passes the same fakes (the simulator's
+the names for the tests' sake. Two other test files hold the same kind of line (a name that moves, reached through
+`walk`), and they re-point the same way with their assertions unchanged: `tests/route/test_walk_view_minors.py:39`
+and `:55` patch `walk.RouteWalker.run` and re-point to `session.RouteWalker.run` (the same class object, so the patch
+still reaches the run); `tests/route/test_walk_view.py:247` and `:253` read `walk._OUT_FILES` and `walk._FRAMES` and
+re-point to `session.OUT_FILES` and `session._FRAMES`. `test_walk_view.py:256-266` runs the walk with `--view`,
+which is now rejected: it drops `--view` and runs over the three new names left (`steps.jsonl`, `map.csv`,
+`minimap.png`; 5.13 removes the `view.*` names), with its assertions unchanged.
+`tests/route/test_session.py` passes the same fakes (the simulator's
 `SimPositionSource` and `SimLink`, as `test_walk_cli.py:25`, :314, :446) as constructor arguments. The patches of
 `walk._start_viewer`,
 `walk._wait_for_viewer` and `walk.open` live in tests that 5.13 removes. The tab passes only `settings`, `shared`,
@@ -679,7 +686,9 @@ New:
 - `tests/route/test_walk_cli.py`: its existing `setattr(walk, ...)` patches (:464-470, :555, :575) reach the run
   through `RunSession`'s arguments unchanged (5.6), and every existing assertion holds; the three lines that reach a
   moved name (:438 `_load_route`, :754 `_LostLegSink`, :881 `JsonlLegLog.open`) reach it through `session` instead,
-  with their assertions unchanged (5.6). `test_e_missing_map_exits_5` and `test_e_character_icon_failure_exits_5`
+  with their assertions unchanged (5.6); so do `test_walk_view_minors.py:39`, `:55` and `test_walk_view.py:247`,
+  `:253`, and `test_walk_view.py:256-266` drops `--view` (5.6).
+  `test_e_missing_map_exits_5` and `test_e_character_icon_failure_exits_5`
   (:568, :574) also assert `capture_calls == 0`, so the capture still starts after the route load.
 - `tests/route/test_walk_cli.py`: unchanged expectations for exit codes and files; `--view` rejected with exit 2;
   `--record` accepted.
