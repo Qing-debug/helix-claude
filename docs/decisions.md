@@ -2094,6 +2094,8 @@ Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-RV.md:193` (Hong's 
 
 ## H55 (2026-10-31): The route view becomes a tab in the main app, with Start and Stop, live and replay, time-of-day why lines and no automatic focus check (QB114-QB117)
 
+Status: amended by H64 (Hong, 2026-10-31, RVT94-1, QB116's option B "watch our own app only" asked again): a click on the app (our app getting the keyboard) also stops a run, besides F12 and Stop; still no check of which window is in front. The rest of H55 stands.
+
 Ids note: H55-H67 continue after H54 on this branch (`p1-route-tab`, cut from `p1-route-view`); H43-H46 are on `p1c-runes`.
 
 Question: after the first route-view build Hong reshaped it: instead of a separate window that follows a command-line walk, a tab in the main app where he sets up, puts MapleStory in front, presses Start, and sees what the bot plans and does. The orchestrator then asked four questions (QB114-QB117).
@@ -2122,7 +2124,7 @@ Ruling [Hong]: a standing fact, added to "Hong's standing facts" above. Reading 
 
 Reason: his words: the anti-cheat flags such calls.
 
-Affects: the tab spec section 5.12 (no focus or process query in the app; no new window, style or icon change during a run, kept by Hong in H65; Tk itself calls `GetForegroundWindow` only when an already-shown window is restyled or made transient, not when a window is first shown, an icon is set or a window is made always on top, as corrected after RVT94); FG92's planned foreground check (dropped); the N1 click-check tool (removed with the tab, H57); a name-scan test the tab plan adds.
+Affects: the tab spec section 5.12 (no focus or process query in the app; no new window, style or icon change during a run, kept by Hong in H65; Tk itself calls `GetForegroundWindow` only when an already-shown window is restyled or made transient, not when a window is first shown, an icon is set or a window is made always on top, as corrected after RVT94, with the spec 5.12 caveat that an icon set before a window's first show is inferred to make that first show query); FG92's planned foreground check (dropped); the N1 click-check tool (removed with the tab, H57); a name-scan test the tab plan adds.
 
 Cost if wrong: features that would need a focus or process query (pause when the game loses focus, wait until the game is in front) are not built.
 
@@ -2188,7 +2190,7 @@ Ruling [Hong]: option B, "Replace it with a question to you: 'Is MapleStory clos
 
 Reason: not given beyond the pick; the set's text for B was "The tools never ask Windows about programs again."
 
-Affects: `src/input/harness/soak.py`, `probe.py`, `session_starts.py` and their tests; the root CLAUDE.md "Safety rules" (the harness-tools and patched-names bullets, and how H15's "MapleStory is not running" is met by an agent), `src/input/CLAUDE.md` ("MapleStory guard" trap), `firmware/CLAUDE.md`, `tests/CLAUDE.md`. The exact text and test changes are in the tab spec section 6. H54's "key-sending tools keep their check" now means this question. How an agent answers the question under H15: Hong's H66 (RVT95-1; the orchestrator's RTS95-D2 sent to him). That only the 60 s re-check is lost: the orchestrator's ruling RTS95-D1 (one ask at the start, no mid-run re-check).
+Affects: `src/input/harness/soak.py`, `probe.py`, `session_starts.py` and their tests; the root CLAUDE.md "Safety rules" (the harness-tools and patched-names bullets, and how H15's "MapleStory is not running" is met by an agent), `src/input/CLAUDE.md` ("MapleStory guard" trap), `firmware/CLAUDE.md`, `tests/CLAUDE.md`. The exact text and test changes are in the tab spec section 6. H54's "key-sending tools keep their check" now means this question. How an agent answers the question under H15: Hong's H66 (RVT95-1; the orchestrator's RTS95-D2 sent to him). That every mid-run re-check goes (the 60 s one in `soak` and `probe`, probe's per-probe ask, session_starts' per-start ask), so the question is asked once at a tool's start: the orchestrator's ruling RTS95-D1 (one ask at the start, no mid-run re-check).
 
 Cost if wrong: a key-test run started, or left running, with the game open types into the game; the listener's key blocking and the tools' sink-focus check remain.
 
@@ -2250,7 +2252,7 @@ Question: what should happen if he clicks the app (or Alt-Tabs to it) during a r
 
 Ruling [Hong]: option B. His pick, verbatim: "Stop when our app gets the keyboard (Recommended)". Note: none.
 
-Reason: not given beyond the pick. The set's text for B: "When Windows tells our window it now has the keyboard, the bot stops at once, releases all keys and the tab says 'Stopped: you clicked the app'. The run also does not begin if the countdown ends while the app still has the keyboard. Nothing asks Windows which window is in front, but it is Windows telling us something about our own window's focus (borderline: you judge)."
+Reason: not given beyond the pick. The set's text for B, in full: "Same tab as A. When Windows tells our window it now has the keyboard, the bot stops at once, releases all keys and the tab says 'Stopped: you clicked the app'. The run also does not begin if the countdown ends while the app still has the keyboard. Nothing asks Windows which window is in front, but it is Windows telling us something about our own window's focus (borderline: you judge)." Option A's label, which "Same tab as A" points to: "Warning only: a fixed line in the tab for the whole run, everything except Stop greyed out". So during a run everything but Stop is greyed out, the Setup tab's draw-node, clear-console and clear-drawn-nodes buttons included (spec 5.1; fixed in RTF98-1 after plan review RB found the spec kept those four usable).
 
 Affects: the tab spec section 9 (Tk's `<FocusIn>`/`<FocusOut>` on our own window and Tk's own `focus_get()`, no Windows query), 5.5 (sources `app_focus` and `countdown_focus`), 5.6 (`RunSession`'s `may_walk`, asked when the countdown ends), 5.12 rule 1 and section 8. Replaces H49 (status line there). Under H56 it asks Windows nothing; he judged the borderline case. Not covered, as the set said: a third program taking the keyboard.
 
@@ -2260,7 +2262,7 @@ Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:118`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT94.json` (RVT94-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/RVT94.md` sections 2-3; question bank QB126.
 
-## H65 (2026-10-31): Tk's own foreground query when a shown window is restyled is fine; no new window, style or icon change during a run (RVT94-2, QB127)
+## H65 (2026-10-31): Tk's own foreground query is accepted outside a run (the app triggers none today); no new window, style or icon change during a run (RVT94-2, QB127)
 
 Question: is it OK that the window toolkit (Tk) itself asks Windows which window is in front in some window operations, which none of the RVT94-1 options causes during a run as long as no window opens or changes style then? Options: A fine as it is; B fine, but always open Helix (and the map editor) before MapleStory; C not OK, find a way to stop Tk doing it.
 
@@ -2268,7 +2270,7 @@ Ruling [Hong]: option A. His pick, verbatim: "Fine as it is (Recommended)". Note
 
 Reason: not given beyond the pick. The set's text for A: "It only happens when a window opens, never during a run." and "Keeps the rule 'nothing during a run' and changes nothing else."
 
-Correction (2026-10-31; the Q&A-page answers to his two follow-up questions told him): the set's issue text was wrong about when Tk asks. In Tk 8.6.15 (`win/tkWinWm.c`) the only such call is `GetForegroundWindow` in `UpdateWrapper` (:2018), skipped while a window has no wrapper yet, so a window's first show (:1909, :2388) and an icon set (:1059) make no query; `wm attributes -topmost` calls `SetWindowPos` directly (:3219-3229) and makes none. The query is made when an already-shown window is restyled (`resizable`, `overrideredirect`, `attributes -toolwindow`, full screen) or made transient. The app does none of these today, so it makes no such query, at start or when the map editor opens. His pick stands on the corrected facts: it keeps the rule, which is what A said.
+Correction (2026-10-31; the Q&A-page answers to his two follow-up questions told him): the set's issue text was wrong about when Tk asks. In Tk 8.6.15 (`win/tkWinWm.c`) the only such call is `GetForegroundWindow` in `UpdateWrapper` (:2018), skipped while a window has no wrapper yet, so a window's first show (:1909, :2388) and an icon set (:1059) make no query (caveat, inferred from source reading and not run: an icon set before a window's first show makes that first show take the query path; spec 5.12); `wm attributes -topmost` calls `SetWindowPos` directly (:3219-3229) and makes none. The query is made when an already-shown window is restyled (`resizable`, `overrideredirect`, `attributes -toolwindow`, full screen) or made transient. The app does none of these today, so it makes no such query, at start or when the map editor opens. His pick stands on the corrected facts: it keeps the rule, which is what A said.
 
 Affects: the tab spec section 2 (the rule and its corrected reason) and 5.12 rule 2 (no new window and no `wm` style, transient or icon call during a run); H56's "Affects" line (corrected).
 
