@@ -16,7 +16,7 @@ Rulings this builds on top of the plan text:
   runtime.py:81-89). `stop.json` reason is that source and the exit is 10, also when the lost leg was the last leg of
   the last lap. A leg that sent moves and then timed out does not end the run (the walker goes on to the next leg).
 - B19-D2 (re-run into a used --out): the CLI refuses with exit 2, before capture starts or any file is written, when
-  `--out` is an existing file or holds any of `OUT_FILES`'s first five names (`check_out`).
+  `--out` is an existing file or holds any of `OUT_FILES`'s eight names (`check_out`).
 
 Where the plan is silent:
 - `make_positions` returns the position source, or a `Failure` (exit 5) when the character icon does not load.

@@ -63,7 +63,7 @@ ignore_imports = [
 name = "f route layers"
 type = "layers"
 layers = [
-    "src.route.sim",
+    "src.route.session | src.route.sim",
     "src.route.position",
     "src.route.walker",
     "src.route.moves | src.route.route_preview",
@@ -81,7 +81,7 @@ source_modules = ["src.route_view"]
 forbidden_modules = [
     "src.gui", "src.main", "src.vision", "src.rune_solver",
     "src.input.input_layer", "src.input.link", "src.input.actions", "src.input.timing", "src.input.harness",
-    "src.route.walker", "src.route.walk", "src.route.moves", "src.route.runtime", "src.route.sim",
+    "src.route.walker", "src.route.walk", "src.route.session", "src.route.moves", "src.route.runtime", "src.route.sim",
 ]
 
 [[tool.importlinter.contracts]]

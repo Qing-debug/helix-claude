@@ -1,7 +1,7 @@
 """The route view's pure model (route view plan task RV-6, contract V5): what step k of a run looks like.
 
 `RunModel` is built from a `RunHeader` and `StepEvent`s (`src.route.step_log`), the route graph rebuilt from the
-folder's map and the header's params (as `walk.py` builds it), and the frame index. `step(k)` answers "what does step k
+folder's map and the header's params (as `session.py` builds it), and the frame index. `step(k)` answers "what does step k
 look like" as a `StepView` for the window and the follower; `render_text` renders the same answer as plain text for
 golden tests. No Tk, no Windows call, no subprocess (the git head comes in as `current_git_head`); the module imports
 only what spec 5.8 allows, which import-linter enforces ("route_view boundaries").
@@ -73,7 +73,7 @@ STATE_WORDS = {
 }
 
 Pos = tuple[int, int]
-_CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}  # the model's own copy: it may not import walk.py (5.8)
+_CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}  # the model's own copy: it may not import session.py (5.8)
 _NO_GRAPH = ": route not shown"
 _PLAY_DEFAULT_MS = 100
 _RECENT = 5
@@ -261,7 +261,7 @@ def read_frame_index(data: bytes) -> tuple[list[tuple[int, str]], int]:
 
 
 def _build_graph(map_path: Path, header: RunHeader) -> Result[tuple[RouteGraph, MapleAgent], str]:
-    """The route graph as `walk.py:164-178` builds it, from the header's class and params."""
+    """The route graph as `session._load_route` (`session.py:180-194`) builds it, from the header's class and params."""
     maker = _CLASSES.get(header.character)
     if maker is None:
         return Failure(f"unknown class {header.character}")

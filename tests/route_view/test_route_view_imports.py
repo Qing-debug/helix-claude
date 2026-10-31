@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 BOUNDARIES = [
     "src.gui", "src.main", "src.vision", "src.rune_solver", "src.input.input_layer", "src.input.link",
     "src.input.actions", "src.input.timing", "src.input.harness", "src.route.walker", "src.route.walk",
-    "src.route.moves", "src.route.runtime", "src.route.sim",
+    "src.route.session", "src.route.moves", "src.route.runtime", "src.route.sim",
 ]
 LEAF_SOURCES = ["src.route", "src.controller", "src.gui", "src.main", "src.vision", "src.input", "src.classes",
                 "src.rune_solver"]

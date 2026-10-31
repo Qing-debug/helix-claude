@@ -32,8 +32,8 @@ _REPO = Path(__file__).resolve().parents[2]
 
 
 def _git_head() -> str | None:
-    """`git rev-parse HEAD` in the repo root, or None on any error. A copy of `walk.py:181-187` (the viewer may not
-    import `walk.py`, spec 5.8). `subprocess.run`'s `timeout` kills the child and raises `TimeoutExpired`, a
+    """`git rev-parse HEAD` in the repo root, or None on any error. A copy of `session._git_head` (`session.py:197-203`; the viewer
+    may not import `session.py`, spec 5.8). `subprocess.run`'s `timeout` kills the child and raises `TimeoutExpired`, a
     `SubprocessError` (Python 3.14 `subprocess.py:169`, `run` :512-527)."""
     try:
         done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO, capture_output=True, text=True, timeout=10)
