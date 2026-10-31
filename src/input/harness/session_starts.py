@@ -2,19 +2,19 @@
 
 Runs V2 step 3's 20 session starts in this order (PLAN): 8 ``plain``, 6 ``reset_board``, 6 ``bluetooth_off_on``,
 into its own run dir (``data/starts/<run>/``, never a soak's), with its own listener (H1), so ``keys.jsonl`` lands
-next to ``session_starts.jsonl``. Before the first start: the MapleStory check (hard rule 2), the listener, and
+next to ``session_starts.jsonl``. Before the first start: the MapleStory question (hard rule 2, ``soak.maple_check``:
+"Is MapleStory closed? y/n", asked once for the whole run; any answer but ``y`` exits 2, refused), the listener, and
 soak's start wait for the operator's click on the sink. Then, per start (attempt k, 1-based):
 
-1. MapleStory check (hard rule 2) before this start's reset or key; a match aborts the run.
-2. The condition's injector, if any, while the previous start's session is still open: ``faults.reset_board()``
+1. The condition's injector, if any, while the previous start's session is still open: ``faults.reset_board()``
    (which repeats the VID 303A / PID 1001 port lookup itself on every call, H2) or ``faults.bluetooth_off_on(10)``.
    A Failure ends the start as a Failure row carrying the injector's message; ``connect()`` is not called, and the
    start is neither skipped nor retried.
-3. ``BleLink.close()`` (a no-op if the session already ended) + ``BleLink.connect()``; ``seconds`` is the duration
+2. ``BleLink.close()`` (a no-op if the session already ended) + ``BleLink.connect()``; ``seconds`` is the duration
    of the ``connect()`` call (null when it was not called).
-4. One ``ping()``; soak's focus check (a sink not back after its 10 re-checks aborts the run: the start is then
+3. One ``ping()``; soak's focus check (a sink not back after its 10 re-checks aborts the run: the start is then
    invalid, not a link failure); one tap-E through ``InputLayer.tap`` (no stimulus, so no reaction wait).
-5. The listener must log E's down and then its up at or after the tap call began, within TAP_SEEN_TIMEOUT_S of the
+4. The listener must log E's down and then its up at or after the tap call began, within TAP_SEEN_TIMEOUT_S of the
    tap's return (``keys.jsonl`` is polled); otherwise the error is ``TAP_NOT_SEEN``.
 
 The first thing that fails is the row's ``error`` (C5); the run goes on with the next start. A successful start
@@ -114,6 +114,10 @@ class _Abort(Exception):
     pass
 
 
+class _Refused(_Abort):
+    """The MapleStory question was not answered `y`; `run_starts` exits `soak.EXIT_REFUSED` with the text."""
+
+
 def _attempt(condition: str, link: BleLink, layer: InputLayer, sink: soak.Sink,
              keys_path: Path) -> tuple[str | None, float | None]:
     """(error or None, connect seconds or None) of one start."""
@@ -154,12 +158,12 @@ def run_start(attempt: int, condition: str, link: BleLink, layer: InputLayer, si
 def _check_processes() -> None:
     ok, text = soak.maple_check()
     if not ok:
-        raise _Abort(text)
+        raise _Refused(text)
 
 
 def run_starts(out: Path, link: BleLink, start_sink: Callable[[Path], soak._SoakSink], seed: int,
                plan: tuple[tuple[str, int], ...] = PLAN) -> int:
-    """All starts of `plan` into `out`; returns the exit code (soak's: 0 done, 1 abort, 130 Ctrl-C)."""
+    """All starts of `plan` into `out`; returns the exit code (soak's: 0 done, 1 abort, 2 refused, 130 Ctrl-C)."""
     out = Path(out)
     layer = InputLayer(link, TimingModel(np.random.default_rng(seed)))
     sink = None
@@ -168,25 +172,16 @@ def run_starts(out: Path, link: BleLink, start_sink: Callable[[Path], soak._Soak
     (out / listener.KEYS_FILE).write_bytes(b"")  # the listener appends: start it on a fresh file (A-V2prep-R m2)
     with open(out / STARTS_FILE, "w", encoding="utf-8", newline="\n") as fh:
         try:
-            _check_processes()  # before the listener blocks any key, before any reset or connect (hard rule 2)
-            last_check_ns = _clock()
-
-            def periodic_check() -> None:  # during the start wait, as the soak does
-                nonlocal last_check_ns
-                if _clock() - last_check_ns >= soak.PROCESS_CHECK_PERIOD_NS:
-                    _check_processes()
-                    last_check_ns = _clock()
-
+            _check_processes()  # the one question: before the listener blocks any key, before any reset or connect
             try:
                 sink = start_sink(out)
             except OSError as e:
                 raise _Abort(f"listener did not start: {e}") from e
-            if not soak.wait_for_click(sink, periodic_check):
+            if not soak.wait_for_click(sink):
                 raise _Abort(f"the sink did not take the foreground within {soak.START_WAIT_S:g} s (no click)")
             names = conditions(plan)
             ok = 0
             for attempt, condition in enumerate(names, 1):
-                _check_processes()  # before this start's reset or key (hard rule 2)
                 row = run_start(attempt, condition, link, layer, sink, out / listener.KEYS_FILE)
                 fh.write(json.dumps(row) + "\n")
                 fh.flush()
@@ -197,6 +192,9 @@ def run_starts(out: Path, link: BleLink, start_sink: Callable[[Path], soak._Soak
             ended = True
             print(f"session starts done: {ok}/{len(names)} Success -> {out / STARTS_FILE}", flush=True)
             return soak.EXIT_OK
+        except _Refused as e:
+            print(e, file=sys.stderr, flush=True)
+            return soak.EXIT_REFUSED
         except _Abort as e:
             print(f"session starts aborted: {e}", file=sys.stderr, flush=True)
             return soak.EXIT_ABORT

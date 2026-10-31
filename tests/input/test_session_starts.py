@@ -298,29 +298,40 @@ def test_tap_seen_ignores_a_partly_written_line_and_a_missing_file(tmp_path):
     assert tap_seen(p, VK_E, 100)
 
 
-# ---- safety: MapleStory check, focus, abort path ------------------------------------------------------
+# ---- safety: MapleStory question, focus, abort path ---------------------------------------------------
 
-def test_maplestory_at_start_aborts_before_the_listener_any_reset_or_key(tmp_path, clock, monkeypatch):
+REFUSAL_N = "refused: MapleStory not confirmed closed (answer: n)"
+
+
+def test_answer_n_refuses_before_the_listener_any_reset_or_key(tmp_path, clock, monkeypatch, capsys):
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
     code, link, sink, calls, run = _run(tmp_path, clock, monkeypatch)
-    assert code == soak.EXIT_ABORT
+    assert code == soak.EXIT_REFUSED
     assert sink.started_in is None and calls == []
     assert "connect" not in link.events and "play" not in link.events
     assert _rows(run) == []
+    # the refusal text once, as its own line, with no tool prefix; a release_all line may follow it (the finally)
+    assert capsys.readouterr().err.splitlines().count(REFUSAL_N) == 1
 
 
-def test_maplestory_before_a_start_aborts_before_its_reset_and_releases(tmp_path, clock, monkeypatch):
-    checks = []
+def test_a_refused_run_is_not_reported_as_an_abort(tmp_path, clock, monkeypatch, capsys):
+    monkeypatch.setattr(soak, "_read_answer", lambda: Failure("none"))
+    code, *_ = _run(tmp_path, clock, monkeypatch)
+    err = capsys.readouterr().err
+    assert code == soak.EXIT_REFUSED
+    assert "refused: MapleStory not confirmed closed (answer: none)" in err.splitlines()
+    assert "session starts aborted" not in err
 
-    def names():
-        checks.append(1)
-        return Success("n" if len(checks) == 10 else "y")  # 1 at start + 1 per start
 
-    monkeypatch.setattr(soak, "_read_answer", names)
-    code, link, sink, calls, run = _run(tmp_path, clock, monkeypatch)
-    assert code == soak.EXIT_ABORT
-    assert len(_rows(run)) == 8 and calls == []  # the check before attempt 9 (the first reset) found it
-    assert link.events[-2:] == ["release_all", "close"] and sink.stopped
+def test_read_answer_is_called_once_per_run(tmp_path, clock, monkeypatch):
+    """The question is asked once for the whole default plan, never again before a start. A left-in per-start call
+    would be unconditional, so `calls == [1]` catches it without a clock."""
+    calls = []
+    monkeypatch.setattr(soak, "_read_answer", lambda: calls.append(1) or Success("y"))
+    code, link, *_ = _run(tmp_path, clock, monkeypatch)
+    assert code == soak.EXIT_OK
+    assert calls == [1]
+    assert link.events.count("play") == 20  # the keys were sent
 
 
 def test_focus_never_back_aborts_without_a_tap(tmp_path, clock, monkeypatch):
