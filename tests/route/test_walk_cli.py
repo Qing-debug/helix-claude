@@ -613,6 +613,14 @@ def test_one_lap_is_accepted(sim):
     assert sim.main("--laps", "1") == 0
 
 
+# spec 5.13: the walk no longer starts a viewer, so --view is an unknown option
+
+def test_view_is_rejected_with_exit_2(sim, capsys):
+    assert sim.main("--laps", "1", "--view") == 2  # --laps 1: if --view were ever accepted again the walk would end
+    assert "unrecognized arguments: --view" in capsys.readouterr().err
+    assert sim.capture_calls == 0
+
+
 # (h) the --minutes range
 
 @pytest.mark.parametrize("minutes", ["0", "-1", "nan", "inf", "1e6"])

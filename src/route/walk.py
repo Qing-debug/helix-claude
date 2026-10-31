@@ -1,7 +1,7 @@
 """The supervised walk CLI (plan task B19): walk the map's rotation in the game through the board, F12 stops.
 
     python -m src.route.walk --map maps/fossil_foundry_2.csv --supervised [--class kanna] [--laps N] [--minutes M]
-                             [--seed S] [--out data/route/<UTC stamp>] [--record] [--view]
+                             [--seed S] [--out data/route/<UTC stamp>] [--record]
 
 Exit codes: 0 done · 1 run ended link_down · 2 usage (a --laps below 1, a bad --minutes or --seed), no --supervised, an --out that
 already holds a run (B19-D2), or a leg log that cannot be opened · 3 no first frame or no character found · 4 connect
@@ -38,10 +38,6 @@ Where the plan is silent:
   `steps.jsonl` (the step log, the walker's observer) once the stop control has started (spec 5.9 step 1).
 - A step-1 failure prints one line (`step log unavailable: ...; walking without the route view`) and walks on with
   no step log and no viewer; the files that did write stay (RV3-D2 A, A1).
-- `--view` turns on `--record` and starts the viewer by module name (`python -m src.route_view`); walk never imports
-  it.
-- A viewer that is late, exits or cannot start costs one stderr line, never the walk; after the ready wait the walk
-  never looks at the viewer's process again.
 - The `end` event's `code` is null when an exception leaves `main`.
 """
 
@@ -77,7 +73,7 @@ from src.route.harness.record_minimap import INDEX_NAME, record, shared_frames
 from src.route.leg_log import LAPS_FILE, LEGS_FILE, JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink
 from src.route.params import MovementParams
 from src.route.route_graph import RouteGraph
-from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, VIEW_CLAIM, VIEW_LOG, VIEW_READY, RunHeader, StepLog
+from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, RunHeader, StepLog
 from src.route.walker import Clock, PositionSource, RealClock, RouteWalker, RunSummary, WalkerConfig
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -89,16 +85,10 @@ _RECORD_JOIN_S = 2.0
 _SESSION = "session.json"
 _STOP = "stop.json"
 _FRAMES = "frames"
-# Every file walk writes into --out, in the order the B19-D2 check reports the first one found (RV-9's names after the
-# old ones, so the message for an old run folder is unchanged).
-_OUT_FILES = (_SESSION, _STOP, LEGS_FILE, LAPS_FILE, f"{_FRAMES}/{INDEX_NAME}", STEPS_FILE, MAP_COPY, SNAPSHOT,
-              VIEW_LOG, VIEW_CLAIM, VIEW_READY)
+# Every file walk writes into --out, in the order the B19-D2 check reports the first one found (RV-9's step log, map
+# copy and snapshot after the old ones, so the message for an old run folder is unchanged).
+_OUT_FILES = (_SESSION, _STOP, LEGS_FILE, LAPS_FILE, f"{_FRAMES}/{INDEX_NAME}", STEPS_FILE, MAP_COPY, SNAPSHOT)
 _LOST_SOURCES = frozenset({"off_graph", "no_position"})
-_VIEW_READY_S = 15.0        # spec 5.9 step 3: wait for view.ready at most this long
-_VIEW_CLAIM_EXTRA_S = 2.0   # ... and this much more when the viewer holds the claim
-_VIEW_POLL_S = 0.05         # poll period of the wait
-VIEW_LATE_LINE = ("route view did not start within {s:g} s; walking without it (it opens when the walk ends), "
-                  "see view.log")  # spec 5.9 step 3 word for word, with s = _VIEW_READY_S; printed to stderr
 
 _countdown_s = 5.0
 
@@ -127,42 +117,6 @@ def _make_clock() -> Clock:
 
 def _make_stop_control(on_stop: Callable[[], None]):
     return runtime.StopControl(on_stop)
-
-
-def _start_viewer(out: Path) -> subprocess.Popen[bytes] | Failure[str]:
-    """Start the route view on `out` with V6's Popen call word for word (spec 5.9 step 2). No `shell=True` and no
-    `startupinfo`: the child then gets no STARTF_USESHOWWINDOW, so the viewer's first SW_SHOWNOACTIVATE is honoured
-    (RV-8 review, measured). Popen hands the child its own inheritable duplicate of the `view.log` handle
-    (subprocess.py:1398, :1428-1430), so the parent's copy is closed once Popen returns. An OSError (from the open or
-    from Popen), or the Windows-only flags missing elsewhere (AttributeError), is a Failure; never raises."""
-    try:
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-        with open(out / VIEW_LOG, "ab") as log:
-            return subprocess.Popen([sys.executable, "-u", "-m", "src.route_view", "--follow", str(out), "--ready",
-                                     str(out / VIEW_READY)], cwd=_REPO, creationflags=flags,
-                                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-    except (OSError, AttributeError) as exc:
-        return Failure(f"{type(exc).__name__}: {exc}")
-
-
-def _wait_for_viewer(out: Path, proc) -> bool:
-    """Spec 5.9 step 3, walk side (V7 step 5). Runs on the main thread before the countdown and touches only
-    `view.ready` and `view.claim` in `out` and `proc.poll()`. True when `view.ready` appeared within `_VIEW_READY_S`,
-    or within `_VIEW_CLAIM_EXTRA_S` more after it found the claim taken (the viewer is between its claim and its
-    show). Otherwise the walk holds the claim, so a late viewer stays hidden until it reads `end`; it prints
-    VIEW_LATE_LINE once and returns False. A viewer that has exited ends the first wait early. Never raises, never
-    kills or waits on the process, and the walk does not look at `proc` again."""
-    if _ready_within(out, _VIEW_READY_S, proc):
-        return True
-    try:
-        open(out / VIEW_CLAIM, "x").close()
-    except FileExistsError:
-        if _ready_within(out, _VIEW_CLAIM_EXTRA_S, None):
-            return True
-    except OSError:
-        pass  # the viewer's own claim likely fails too (it then stays hidden); a mid-walk show does not activate (V7)
-    print(VIEW_LATE_LINE.format(s=_VIEW_READY_S), file=sys.stderr)
-    return False
 
 
 # ---- helpers ----------------------------------------------------------------------------------------------------------
@@ -208,7 +162,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--out", type=Path, default=None, help="run folder (default data/route/<UTC stamp>)")
     parser.add_argument("--record", action="store_true", help="also record the minimap frames into <out>/frames")
-    parser.add_argument("--view", action="store_true", help="open the route view beside the game; turns on --record")
     return parser
 
 
@@ -249,20 +202,6 @@ def _sha256(path: Path) -> str:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-
-def _ready_within(out: Path, seconds: float, proc) -> bool:
-    """Poll `out/view.ready` every `_VIEW_POLL_S`: True once it exists, False after `seconds` (time.monotonic) or,
-    with a `proc`, once that has exited. `Path.exists` is `os.path.exists`, which returns False on an OSError."""
-    ready = out / VIEW_READY
-    deadline = time.monotonic() + seconds
-    while not ready.exists():
-        if proc is not None and proc.poll() is not None:
-            return ready.exists()  # it may have written view.ready just before it exited
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(_VIEW_POLL_S)
-    return True
 
 
 def _write_run_files(out: Path, map_path: Path, frame: np.ndarray | None, step_log: StepLog,
@@ -313,8 +252,6 @@ def main(argv: list[str] | None = None) -> int:
         args = _parser().parse_args(argv)
     except SystemExit as exc:  # argparse error or --help: return its code, do not raise
         return exc.code if isinstance(exc.code, int) else 2
-    if args.view:
-        args.record = True  # H48: session.json's "record" then says True
 
     if not args.supervised:
         print("error: walk sends keys to the game; run it only while you watch, with --supervised", file=sys.stderr)
@@ -386,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         sink = _LostLegSink(log)
         config = WalkerConfig(use_stimulus=True, leg_timeout_s=_LEG_TIMEOUT_S, max_laps=args.laps)
         clock = _make_clock()
-        step_log = StepLog()  # no I/O; every walk passes it, --view or not (V7 step 3)
+        step_log = StepLog()  # no I/O; every walk passes it (V7 step 3)
         walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log)
         stop = _make_stop_control(walker.stop_now)
         sink.arm(stop.trigger, walker.stop_now)
@@ -404,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             wall_ns=time.time_ns(), perf_ns=clock.now_ns()))  # RV4-D2 A: read back to back, wall clock first
         if is_successful(wrote):
             run_log = (step_log, clock)
-        else:  # RV3-D2 A with A1: no step log, no viewer, no view.claim; the exit code does not change
+        else:  # RV3-D2 A with A1: no step log; the exit code does not change
             print(f"step log unavailable: {wrote.failure()}; walking without the route view", file=sys.stderr)
             step_log.close()  # at once: from here every observer call is dropped (V3, A2)
         _write_json(out / _SESSION, {
@@ -420,12 +357,6 @@ def main(argv: list[str] | None = None) -> int:
             "minutes": minutes,
             "record": args.record,
         })
-        if args.view and run_log is not None:  # spec 5.9 steps 2-3
-            proc = _start_viewer(out)
-            if isinstance(proc, Failure):
-                print(f"route view could not start: {proc.failure()}; walking without it", file=sys.stderr)
-            else:
-                _wait_for_viewer(out, proc)
         print(f"Focus the game window. Starting in {_countdown_s:g} s. F12 stops.")
         time.sleep(_countdown_s)
 
