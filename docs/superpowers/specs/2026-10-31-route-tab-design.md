@@ -38,7 +38,7 @@ text and the test changes.
 |---|---|---|---|
 | 1 | Start and Stop live in the main app; the tab shows the run live | "Yes, start from the app (Recommended)" (QB114) | H55 |
 | 2 | The tab shows live runs and replays saved runs | "Live and replay (Recommended)" (QB115) | H55 |
-| 3 | No automatic check of which window is in front; F12 or Stop only | "C: no automatic check" (QB116) | H55 |
+| 3 | No automatic check of which window is in front; F12, Stop, or (row 13) the app getting the keyboard | "C: no automatic check" (QB116) | H55, amended by H64 |
 | 4 | Why-log lines show the time of day | "show time of day, not since run starteed" (QB117) | H55 |
 | 5 | Anti-cheat: nothing may interact with MapleStory's memory or ask Windows about its window or process | "Remember, we can't interact with memory/windows API else the anticheat flags it" | standing fact, H56 |
 | 6 | The three old route-view decisions are replaced by the tab; the save/replay + reasoning-log principle of the first is kept | RVT93-1, option A, with his note (quoted in H57) | H57 |
@@ -49,7 +49,7 @@ text and the test changes.
 | 11 | Every run records its minimap pictures | RVT93-7 B, "Always record" | H62 |
 | 12 | Two tabs, "Setup" (today's screen) and "Route" (run view, settings, Start and Stop) | RVT93-8 A | H63 |
 | 13 | If our app gets the keyboard during a run (a click, Alt-Tab), the run stops at once; it does not begin if the app still has the keyboard when the countdown ends | "Stop when our app gets the keyboard (Recommended)" (RVT94-1, option B; RVT93-2 re-asked) | H64 |
-| 14 | Tk's own foreground query when an already-shown window is restyled is fine; the rule "no new window, style or icon change during a run" stays | "Fine as it is (Recommended)" (RVT94-2, option A) | H65 |
+| 14 | Tk's own foreground query is accepted outside a run (the app triggers none today); the rule "no new window, style or icon change during a run" stays | "Fine as it is (Recommended)" (RVT94-2, option A) | H65 |
 | 15 | An agent answers the key-test tools' "Is MapleStory closed?" with `y` only if Hong said in that same session that MapleStory is closed; otherwise it asks him first | "The agent answers 'y' only if you said in that same session that MapleStory is closed; otherwise it asks you first (Recommended)" (RVT95-1, option A) | H66 |
 | 16 | The capture thread's separate "Minimap" window is removed; the capture itself is unchanged | "Remove it (Recommended)" (RVT96-1, option A) | H67 |
 
@@ -110,8 +110,11 @@ Today's `MapleGUI` content, moved as is into the first tab of a `ttk.Notebook` t
 their behaviour do not change outside a run. The one visible difference: the window is 120 px wider (1120x1000
 instead of 1000x1000, `gui.py:144`) so the Route tab's 4x view fits (5.2), and the Setup tab shows that extra width as
 empty space beside its column; its scrollbar and mousewheel scrolling stay (5.7 scopes the wheel to this tab). During a run (from Start until the run's cleanup has finished) these are
-disabled: Load Map, the character picker, Open Map Editor, and the dev buttons (`gui.py:198-215`), because they change
-the graph or open a window (section 5.12). The draw-node, clear-console and clear-drawn-nodes buttons stay usable.
+disabled: every button of the Setup tab and its character picker, that is Load Map, the picker, Open Map Editor, the
+dev buttons (`gui.py:198-215`), the draw blue node and draw orange node buttons, clear console and clear drawn nodes. Load
+Map, the picker, Open Map Editor and the dev buttons change the graph or open a window (section 5.12); the other four
+are greyed out too because Hong's pick (H64, RVT94-1 option B, "Same tab as A", whose tab has "everything except Stop
+greyed out") leaves only Stop usable during a run. All of them come back after the cleanup.
 
 ### 5.2 The Route tab, as Hong sees it
 
