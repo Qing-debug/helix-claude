@@ -716,6 +716,7 @@ Checks with Hong (need the game; never run by an agent without his go, root `CLA
 Check with Hong or an idle PC (no game, no keys sent, MapleStory closed): **N1** the no-key check of section 5.7,
 including its spawn part (no console window, Ctrl+C in the parent's console does not reach the viewer, the viewer
 outlives its parent), before L1.
+Retired by the route-tab spec 5.13 (`docs/superpowers/specs/2026-10-31-route-tab-design.md`): the viewer spawn and the N1 tool are gone, so N1 and its run H-1 will not run.
 
 ## 8. Open decisions
 
@@ -1124,4 +1125,5 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
   15 s ready wait that ignores F12 and Ctrl+C is acceptable (it costs up to 15 + 2 + 5 s before the walk ends).
 - **N1: pending (H-1).** The tool is built and its dry run is covered by a test with no Win32 call
   (`tests/route/test_view_check.py:294`); the check with real clicks has not been run.
+  Retired by the route-tab spec 5.13 (`docs/superpowers/specs/2026-10-31-route-tab-design.md`): the viewer spawn and the N1 tool are gone, so N1 and its run H-1 will not run.
 - **L1-L4: pending (H-2 to H-4).**
