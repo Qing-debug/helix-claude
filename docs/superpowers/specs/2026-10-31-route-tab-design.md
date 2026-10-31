@@ -114,7 +114,9 @@ disabled: every button of the Setup tab and its character picker, that is Load M
 dev buttons (`gui.py:198-215`), the draw blue node and draw orange node buttons, clear console and clear drawn nodes. Load
 Map, the picker, Open Map Editor and the dev buttons change the graph or open a window (section 5.12); the other four
 are greyed out too because Hong's pick (H64, RVT94-1 option B, "Same tab as A", whose tab has "everything except Stop
-greyed out") leaves only Stop usable during a run. All of them come back after the cleanup.
+greyed out") leaves only Stop usable during a run. All of them come back after the cleanup. (waits for Hong:
+RTF98-1-D1) Whether the Setup tab's header itself stays selectable during a run (the plan builds "it does") gets one
+sentence here once Hong answers.
 
 ### 5.2 The Route tab, as Hong sees it
 
@@ -228,8 +230,8 @@ Ways a run ends, each a `StopControl.trigger(source)` except the natural end:
 | Laps done | none (natural end, exit 0; `stop.json` reason `max_laps`, also when a stop lands as the last lap ends) | "Ended: all laps done." |
 | Character lost (B19-D1) | `off_graph` / `no_position` | "Ended: the character was lost (exit 10)." |
 | App window closed | `window_close` (new) | none (the app closes after the cleanup) |
-| App got the keyboard while walking (section 9) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." |
-| Stop before the walk (route load, connect or countdown) | `button`, `window_close` or `app_focus`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." (`app_focus`: "Stopped: you clicked the app. Press Start to run again.") |
+| App got the keyboard while walking (section 9) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." (waits for Hong: RTP96-RA3-D1) |
+| Stop before the walk (route load, connect or countdown) | `button`, `window_close` or `app_focus`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." (`app_focus`: "Stopped: you clicked the app. Press Start to run again."; waits for Hong: RTP96-RA3-D1) |
 | App still had the keyboard when the countdown ended (section 9) | `countdown_focus` (new), reason `cancelled` (5.6) | "Not started: click the game first. Press Start, then click the game before the countdown ends." |
 
 Other exit codes (same numbers as `walk.py:6-9`): 1 "Ended: the board link was lost.", 2 "Could not start: the run
@@ -791,7 +793,7 @@ How the tab uses it:
 - When the flag rises (it was clear, the app now has the keyboard) while the run is in its countdown or walking, the
   tab calls `session.stop("app_focus")`. While walking this is a `trigger`, like the Stop button: the walker stops,
   the cleanup releases every key (its second step, 5.5), and the status line reads "Stopped: you clicked the app.
-  Press Start to run again." In the countdown it is a stop before the walk (5.6, cancel payload, same text). Before
+  Press Start to run again." (waits for Hong: RTP96-RA3-D1) In the countdown it is a stop before the walk (5.6, cancel payload, same text). Before
   the countdown (connecting) no key is sent yet, so the binding does nothing then; the check at the countdown's end
   covers it.
 - At the end of the countdown `run()` calls the `may_walk` the tab passed (5.6), which only reads the flag
@@ -804,7 +806,8 @@ How the tab uses it:
 - Tests (section 8): tab tests for the binding and the countdown refusal, and `RunSession` tests for `may_walk` and
   the `app_focus` source. Hong checks it by hand once, with no game and no board: an in-app simulator run (built as
   the 5.7 timing measurement builds it, simulator positions and link, so no key goes anywhere), where he clicks
-  another ordinary window and then the app (the run stops with the "you clicked the app" text), and lets one
+  another ordinary window and then the app (the run stops with the "you clicked the app" text; waits for Hong:
+  RTP96-RA3-D1), and lets one
   countdown end with the app in front (the run does not start).
 
 Hong's RVT94-2 pick ("Fine as it is (Recommended)", H65) keeps 5.12 rule 2 as written. 5.1's greying out of Load Map,
