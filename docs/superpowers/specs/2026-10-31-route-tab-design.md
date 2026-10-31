@@ -5,7 +5,8 @@
 Branch `p1-route-tab`, cut from `p1-route-view` at 61455a7. Every `file:line` is at 61455a7 unless marked otherwise.
 Inputs: the investigation `notes/RVT92.md` sections 1-5, Hong's answers to question sets QB114-QB117 and RVT93
 (`docs/decisions.md` H55-H63), and `notes/RVT94.md` (clicking the app during a run; workspace
-`.superpowers/orchestrator/2026-10-21-phase1/`). One choice is open with Hong: section 9.*
+`.superpowers/orchestrator/2026-10-21-phase1/`). Two choices are open with Hong: section 9, and the capture thread's
+"Minimap" window (open point in 5.12).*
 
 ## 1. Summary
 
@@ -117,7 +118,9 @@ the graph or open a window (section 5.12). The draw-node, clear-console and clea
 |                                                      | why log (time of day)                     |
 |                                                      | 14:02:31.204 at (52,40): teleport up ...  |
 +------------------------------------------------------+-------------------------------------------+
-| Saved runs: [ 2026-10-31 14:02 fossil_foundry_2  5 laps  312 MB  v ]  [ Open ] [ Refresh ]        |
+| Saved runs (a list, 4 rows visible, scrolls):                              [ Open ] [ Refresh ]  |
+|   2026-10-31 14:02  fossil_foundry_2  5 laps  312 MB                                               |
+|   2026-10-31 11:40  fossil_foundry_2  2 laps  130 MB                                               |
 | replay bar (when a saved run is open): |< < > >|  slider  2x 3x 4x                                |
 +--------------------------------------------------------------------------------------------------+
 ```
@@ -330,10 +333,15 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
   (5.4 step 5).
 - Old runs: kept until Hong deletes them by hand, as the RVT93-7 option he picked said ("you delete old runs by
   hand"). Nothing deletes runs automatically. The saved-run list shows each run's size so the big ones are easy to find.
-- Picking a run: the "Saved runs" list in the Route tab (no file dialog, 5.12) shows the folders under `data/route`
-  that hold `steps.jsonl` or `legs.jsonl`, newest first, as "<local start time> <map file name> <laps done> <size>".
-  "Refresh" re-reads the folder; "Open" loads the run with `load_folder` (`model.py:690`) into the view as a replay.
-  The list, Open and Refresh are disabled while a run is live.
+- Picking a run: the "Saved runs" list in the Route tab is a `tk.Listbox` with a scrollbar (no file dialog and no
+  Combobox drop-down, both of which are new windows, 5.12). It shows the folders under `data/route` that hold
+  `steps.jsonl` or `legs.jsonl`, newest first, as "<local start time> <map file name> <laps done> <size>".
+  "Refresh" re-reads the folder; "Open" loads the selected run with `load_folder` (`model.py:690`) into the view as a
+  replay. The list, Open and Refresh are disabled while a run is live.
+- Sizes: a long run holds tens of thousands of frame files (10 per second is 36 000 per hour), so summing them on the
+  Tk thread would freeze the app. The list is filled at once with "size ..." and a daemon thread (`saved-run-sizes`)
+  sums each folder's file sizes (`os.scandir`, no Tk) and posts the results to a queue that the tab drains with
+  `after`, as the run events are (5.6). A Refresh while a sum is running starts a new one and drops the old results.
 - Replay draws on the recorded frames when the run has them, else on `minimap.png` (H52), else on a dark canvas (as
   built, route-view spec 5.5).
 
@@ -342,24 +350,64 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
 1. Nothing in the app, the run driver, the walk or the view asks Windows which window is in front, enumerates windows
    or processes, or opens, reads or signals MapleStory's process or window. The only Windows facilities used while the
    game runs are monitor capture (H58) and the F12 low-level keyboard hook (H59), plus Tk's own handling of its own
-   windows.
+   windows, plus (until Hong answers the open point below) OpenCV's handling of the capture thread's own "Minimap"
+   window.
 2. During a run (from Start until the cleanup has finished) the app opens no new window (no message box, file dialog,
-   Toplevel or OpenCV window), and calls no `wm` command that changes a window's style or icon (`overrideredirect`,
+   Toplevel or OpenCV window; the one exception is the capture thread's existing "Minimap" window, see the open point
+   below), and calls no `wm` command that changes a window's style or icon (`overrideredirect`,
    `resizable`, `attributes` with `-toolwindow`, `-topmost` or `-fullscreen`, `iconbitmap`, `iconphoto`). Errors and
    warnings go to the Route tab's status line. This is why the map editor and Load Map are disabled during a run, and
    why the Route tab never uses a dialog even outside a run (the game is usually open then too).
 3. During a run the app never calls `focus_force`, `focus_set`, `lift`, `tkraise` or `grab_set` (they move or take
-   focus; the existing `test_10` ban list in `tests/route_view/test_view_window.py:507` carries over to the tab).
-4. A test enforces rule 1 by name (section 8): no module outside `src/input/harness/` may contain
-   `GetForegroundWindow`, `EnumWindows`, `EnumProcesses`, `CreateToolhelp32Snapshot`, `OpenProcess`, `FindWindow`,
-   `GetWindowText`, `GetClassName`, `GetWindowThreadProcessId`, `tasklist`, `Get-Process` or `psutil`. Today these
-   appear only in `src/input/harness/` and `src/route/harness/view_check.py` (grep at 61455a7), and `view_check` is
-   removed (5.13). `src/input/harness/` is exempt because its tools run only with MapleStory closed; after section 6,
-   `tasklist` and `Get-Process` leave it too.
+   focus; the existing `test_10` ban list in `tests/route_view/test_view_window.py:555` carries over to the tab).
+4. A test enforces rule 1 by name (section 8). Scope: every `src/**/*.py` and `tools/**/*.py` file, except those under
+   `src/input/harness/`; `tests/` is not scanned (the key-test tests and the guard tests name these calls on purpose,
+   e.g. `tests/input/test_guard_targets.py`, `test_listener.py`, `test_probe.py`, `test_soak.py`, and the scan test
+   itself plants a sample). No scanned file may contain `GetForegroundWindow`, `EnumWindows`, `EnumProcesses`,
+   `CreateToolhelp32Snapshot`, `OpenProcess`, `FindWindow`, `GetWindowText`, `GetClassName`,
+   `GetWindowThreadProcessId`, `tasklist`, `Get-Process` or `psutil`. Today these appear only in `src/input/harness/`
+   and `src/route/harness/view_check.py` (grep at 61455a7), and `view_check` is removed (5.13). `src/input/harness/`
+   is exempt because its tools run only with MapleStory closed; after section 6, `tasklist` and `Get-Process` leave it
+   too. Known limit: a scan by name cannot see a name built at run time (`getattr(ctypes.windll.user32, "Get" +
+   ...)`); review covers that.
+
+The capture thread's "Minimap" window. The capture loop shows every frame in a native OpenCV window of its own:
+`cv2.imshow("Minimap", minimap_frame)` and `cv2.waitKey(FRAME_DELAY_MS)` (`src/vision/vision.py:83-84`). It runs in
+the app (`src/main.py:17`) and in the CLI walk (`runtime.start_capture`, `runtime.py:278-282`), so it exists during
+every run. OpenCV 4.13.0 (the venv's version) creates it as a visible top-level window and shows it with
+`ShowWindow(..., SW_SHOW)` (`modules/highgui/src/window_w32.cpp:1041-1095`, :1071), and its `WM_ACTIVATE` handler calls
+`SetFocus` (:1618-1621); it makes no `GetForegroundWindow` or `GetFocus` call (grep of that file), so it does not break
+rule 1's ban on asking Windows which window is in front. Two risks remain: clicking it during a run sends the bot's
+keys there, not to the game; and if it is closed during a run (`WM_DESTROY` removes it, :1543-1545), the next
+`imshow` creates and shows a new one mid-run, which rule 2 forbids. [inferred, not tested: a re-created window may
+take the keyboard from the game, subject to Windows' foreground lock.] Section 9's options cover only the Tk window.
+
+> **Open point: Minimap window: remove (A) or keep (B), waiting on Hong** (question set RVT96; raised as RTS95-R-D1).
+> This spec does not decide it.
+> - **A. Remove it.** `vision.py` drops `cv2.imshow("Minimap", ...)` and keeps the same pause with
+>   `time.sleep(FRAME_DELAY_MS / 1000)` in place of `cv2.waitKey(FRAME_DELAY_MS)`; the minimap stays visible on the
+>   Setup tab. What changes here: rules 1 and 2 above lose their "Minimap" window exception; 5.9's table gains a row
+>   "Capture loop, `src/vision/vision.py`: the `imshow`/`waitKey` pair becomes one `time.sleep`; nothing else"; section
+>   7's "monitor capture (H58)" line notes that the capture itself is unchanged; section 8 gains a test that
+>   `vision.py` contains no `imshow`, `namedWindow` or `waitKey` (and, if rule 4's scan is the natural home, that
+>   `cv2.imshow` appears nowhere under `src/` outside `src/input/harness/`); section 11's step (9) includes the change.
+>   Hong no longer sees the separate "Minimap" window.
+> - **B. Keep it.** Nothing in `vision.py` changes. What changes here: rules 1 and 2 keep the exception as written;
+>   the Route tab's Running line (5.2) and the safety text (6.3, the route-tab bullet) add "Do not click or close the
+>   separate 'Minimap' window during a run"; the window joins the question section 9 puts to Hong (any lock or focus
+>   rule he picks there would have to cover it too; option C's `attributes -disabled` would not, as it locks only the
+>   Tk window); section 8 adds nothing (OpenCV's window cannot be driven from a test without showing it).
 
 Known and accepted, for Hong's information (RVT94 concern 1): Tk makes one `GetForegroundWindow` call when the app's
 main window is first shown, and again when the map editor opens. It compares the answer only with its own window. If
 the app is opened after the game, that call happens while the game runs. Starting the app before the game avoids it.
+
+Also accepted, outside a run only: the Setup tab's own pop-up windows, which Tk shows as new top-level windows (each
+reaching `UpdateWrapper` when first shown): Load Map's file dialog (`filedialog.askopenfilename`, `gui.py:316`), its
+error box (`messagebox.showerror`, `gui.py:337`), and the character picker's drop-down list (a `ttk.Combobox`,
+`gui.py:174`). [inferred, not verified in Tk's source: a Combobox drop-down is a Toplevel shown on its first post.]
+All three are disabled during a run (5.1). The Route tab itself never opens one: its saved-run picker is a
+`tk.Listbox` (5.11), not a Combobox.
 
 ### 5.13 What is removed
 
@@ -484,7 +532,9 @@ New:
   the saved-run list (order, size, disabled while live); the close handler calls `stop("window_close")` and destroys
   only after the worker ends or 10 s; no message box, Toplevel, `wm` style or icon call and no focus call during a
   run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called).
-- `tests/test_anti_cheat_names.py`: the name scan of 5.12-4, with a planted sample to show it can fail.
+- `tests/test_anti_cheat_names.py`: the name scan of 5.12-4 over `src/**/*.py` and `tools/**/*.py`, exempting
+  `src/input/harness/` and not scanning `tests/`, with a planted sample (in `tmp_path`, scanned by the same function)
+  to show it can fail.
 - `tests/route_view/test_view_model.py`: time-of-day why lines from `wall_ns`/`perf_ns`; elapsed when absent.
 - Import contracts: the "gui reaches input only through the run driver" contract, the changed leaf contract (`src.gui`
   and `src.main` both off its sources, 5.9) and `src.route.session` in contract f's top layer are checked by
@@ -571,6 +621,8 @@ change the graph or open a window).
 - His question on RVT93-4 ("Is this a risky? What's the likelihood this gets flagged by the anticheat?") goes to the
   Q&A page; the hook stays as H59 records.
 - The B21 walk test and Feature C stay paused (H47).
+- The capture thread's "Minimap" window during a run: remove (A) or keep (B), question set RVT96; the options and what
+  each changes in this spec are in 5.12.
 
 ## 11. Notes for the plan
 
