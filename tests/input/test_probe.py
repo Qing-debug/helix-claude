@@ -297,13 +297,27 @@ def test_board_list_json_runs_the_cli_and_reports_a_missing_exe():
     assert isinstance(got, Failure) and "arduino-cli" in got.failure()
 
 
-# ---- steps 1/2 and the foreground check: refusals ------------------------------------------------------
+# ---- steps 1/2 and the foreground check: refusals (step 1 is the MapleStory question, exit 2) ----------------
 
-def test_maplestory_running_is_blocked_before_any_link_listener_or_dir(tmp_path, clock, monkeypatch):
+def test_answer_n_refuses_before_any_link_listener_or_dir(tmp_path, clock, monkeypatch, capsys):
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
+    monkeypatch.setattr(probe, "_board_list_json", lambda cli: pytest.fail("the board port is looked up after step 1"))
     code, rig = _run(tmp_path, clock)
-    assert code == probe.EXIT_BLOCKED
+    assert code == soak.EXIT_REFUSED
     assert rig.links == [] and rig.sinks == [] and not (tmp_path / "run").exists()
+    line = "refused: MapleStory not confirmed closed (answer: n)"
+    assert capsys.readouterr().err.splitlines().count(line) == 1  # printed once, no tool prefix
+
+
+def test_ctrl_c_at_the_question_exits_130(tmp_path, clock, monkeypatch, capsys):
+    def interrupted():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(soak, "_read_answer", interrupted)
+    monkeypatch.setattr(probe, "_board_list_json", lambda cli: pytest.fail("the board port is looked up after step 1"))
+    code, rig = _run(tmp_path, clock)
+    assert code == soak.EXIT_INTERRUPTED
+    assert rig.links == [] and rig.sinks == [] and not (tmp_path / "run").exists()
+    assert "interrupted (Ctrl-C) at the MapleStory question; nothing was sent" in capsys.readouterr().err
 
 
 def test_no_board_port_is_blocked_before_any_link_listener_or_dir(tmp_path, clock, monkeypatch):
@@ -403,7 +417,7 @@ def test_review_items_print_and_a_stop_ends_the_run(tmp_path, clock, monkeypatch
     assert "[review] one: writes can reorder" in (tmp_path / "run" / "one" / "report.txt").read_text(encoding="utf-8")
 
 
-# ---- aborts: FOCUS_LOST, link loss, MapleStory mid-probe, Ctrl-C ------------------------------------------------
+# ---- aborts: FOCUS_LOST, link loss, the one question asked once, Ctrl-C ----------------------------------------
 
 def test_focus_lost_stops_like_the_soak_and_names_the_probes_not_run(tmp_path, clock, two_dummies, capsys):
     # check 1: wait_for_click's bring; 2: command 0's focus check; 3: command 1's -> away, never back
@@ -439,13 +453,14 @@ def test_a_non_link_failure_is_logged_and_the_probe_goes_on(tmp_path, clock, two
     assert [r["error"] for r in rows] == ["REJECTED", None]
 
 
-def test_maplestory_appearing_mid_probe_aborts(tmp_path, clock, two_dummies, monkeypatch):
-    calls = {"n": 0}
+def test_read_answer_is_called_once_per_run(tmp_path, clock, two_dummies, monkeypatch):
+    """Two probes, each command 61 s long: a left-in 60 s re-check (or a per-probe check) would ask again."""
+    calls = []
 
-    def names():
-        calls["n"] += 1
-        return Success("n" if calls["n"] > 2 else "y")  # 1 precheck, 2 probe start
-    monkeypatch.setattr(soak, "_read_answer", names)
+    def counting():
+        calls.append(1)
+        return Success("y")
+    monkeypatch.setattr(soak, "_read_answer", counting)
 
     rig = Rig(clock)
     orig_new = rig.new_link
@@ -455,14 +470,30 @@ def test_maplestory_appearing_mid_probe_aborts(tmp_path, clock, two_dummies, mon
         base = link.play
 
         def play(steps):
-            clock.now += 61 * 1_000_000_000  # each command past the 60 s re-check period
+            clock.now += 61 * 1_000_000_000  # every command passes the old 60 s re-check period
             return base(steps)
         link.play = play
         return link
+    start_ns = clock.now
     code = probe.run_probes(_cfg(tmp_path, ("one", "two")), new_link, rig.start_sink)
-    assert code == probe.EXIT_ABORT
-    assert "MapleStory" in _session(tmp_path / "run" / "one")["process_check"]
-    assert rig.links[0].events[-2:] == ["release_all", "close"]
+    assert code == probe.EXIT_OK
+    assert clock.now - start_ns > 2 * 2 * 61 * 1_000_000_000  # 2 probes x 2 commands x 61 s
+    assert len(calls) == 1
+    assert all(link.events == ["connect", "play", "play", "close"] for link in rig.links) and len(rig.links) == 2
+
+
+def test_two_probes_share_one_answer(tmp_path, clock, two_dummies, monkeypatch):
+    calls = []
+
+    def once():
+        calls.append(1)
+        assert len(calls) == 1, "asked a second time"
+        return Success("y")
+    monkeypatch.setattr(soak, "_read_answer", once)
+    code, rig = _run(tmp_path, clock, probes=("one", "two"))
+    assert code == probe.EXIT_OK and len(rig.links) == 2
+    for name in ("one", "two"):
+        assert _session(tmp_path / "run" / name)["process_check"] == "answered y: MapleStory closed"
 
 
 def test_ctrl_c_releases_and_closes(tmp_path, clock, monkeypatch):
@@ -782,7 +813,7 @@ def test_run_sheet_prints_every_step_and_executes_nothing(monkeypatch, capsys):
     i_off, i_run, i_head = (out.index("probe-nojitter"), out.index("--probes m2_nojitter"),
                             out.index("--output-dir $REPO/firmware/build $REPO"))
     assert i_off < i_run < i_head
-    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count("Get-Process | Where-Object") == 2
+    assert out.count('PORT=$("$CLI" board list --format json') == 2 and out.count(probe.MAPLE_CHECK) == 2
 
 
 def test_run_sheet_states_its_preconditions(capsys):
@@ -795,8 +826,18 @@ def test_run_sheet_states_its_preconditions(capsys):
     # the board must already run HEAD's firmware, else steps 2e-2g (MapleStory check, PORT lookup, flash) first
     assert "running HEAD's firmware (else do steps 2e-2g first)" in out
     # step 2 only after step 1 exited 0; otherwise stop and report
-    assert "Only after step 1 exited 0; on exit 1, 3 or 4 stop and report" in out
+    assert "Only after step 1 exited 0; on exit 1, 2, 3 or 4 stop and report" in out
     assert out.index("before step 1") < out.index("1. Probes on HEAD's firmware") < out.index("2. M2 with START_JITTER")
+
+
+def test_run_sheet_says_check_maplestory_by_eye(capsys):
+    assert probe.main(["--run-sheet"]) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Check that MapleStory is closed (no game window, no game on the taskbar)." in out
+    assert "ProcessName -match 'maple'" not in out
+    # step 1 names the question, an agent's rule for the answer, and exit 2 = refused
+    assert "probe.py asks 'Is MapleStory closed? y/n' once" in out and "exit 2 = refused, exit 3 = BLOCKED" in out
+    assert "PowerShell MapleStory check" not in out
 
 
 def test_run_sheet_describes_the_sink_and_how_to_raise_it(capsys):

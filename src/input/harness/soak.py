@@ -318,10 +318,9 @@ def check_focus(sink: Sink) -> FocusCheck:
     return FocusCheck(False, None)
 
 
-def wait_for_click(sink: Sink, tick: Callable[[], None] = lambda: None, timeout_s: float = START_WAIT_S) -> bool:
+def wait_for_click(sink: Sink, timeout_s: float = START_WAIT_S) -> bool:
     """Before the first command: one bring-to-foreground try; if the sink is not in front, prompt the operator to
-    click it and poll GetForegroundWindow() every START_POLL_S until it is, or `timeout_s` passed (False).
-    `tick()` runs on every poll; an exception from it ends the wait."""
+    click it and poll GetForegroundWindow() every START_POLL_S until it is, or `timeout_s` passed (False)."""
     if sink.bring_sink_to_foreground():
         return True
     print(f"\n>>> CLICK the window titled '{listener.SINK_TITLE}' now, then press no keys. Waiting up to "
@@ -331,7 +330,6 @@ def wait_for_click(sink: Sink, tick: Callable[[], None] = lambda: None, timeout_
     deadline_ns = start_ns + int(timeout_s * 1e9)
     while _clock() < deadline_ns:
         _sleep(START_POLL_S)
-        tick()
         if sink.sink_is_foreground():
             print(f"sink in front after {(_clock() - start_ns) / 1e9:.1f} s; starting", file=sys.stderr, flush=True)
             return True
@@ -501,10 +499,6 @@ def fault_row(kind: str, stamps: faults.FaultStamps, link_faults: list[tuple[int
 # ---- MapleStory question (hard rule 2, decision H60) --------------------------------------------------
 
 PROMPT = "Is MapleStory closed? y/n "
-
-# RT-1 transitional: only probe.py and session_starts.py still read this, until their own pieces of RT-1 drop the
-# 60 s re-check (the last one deletes the constant, spec 6.2).
-PROCESS_CHECK_PERIOD_NS = 60 * 1_000_000_000
 
 
 def _read_answer() -> Result[str, str]:

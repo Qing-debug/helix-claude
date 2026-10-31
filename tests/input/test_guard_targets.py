@@ -75,12 +75,14 @@ def test_maple_check_lives_in_soak_and_reads_the_answer_from_its_own_globals(mod
 
 
 def test_the_other_tools_call_the_guard_through_soak(modules):
-    """probe and session_starts read `soak.maple_check` at call time, so patching `soak._read_answer` reaches them."""
-    for name in (PROBE, SESSION_STARTS):
-        check = modules[name]._check_processes
-        assert check.__module__ == name
-        assert {"soak", "maple_check"} <= set(check.__code__.co_names), name
+    """session_starts and probe's `run_probes` (step 1) read `soak.maple_check` at call time, so patching
+    `soak._read_answer` reaches them. probe's `_check_processes` only records the answer: it never asks."""
+    check = modules[SESSION_STARTS]._check_processes
+    assert check.__module__ == SESSION_STARTS
+    assert {"soak", "maple_check"} <= set(check.__code__.co_names)
     assert {"soak", "maple_check"} <= set(modules[PROBE].run_probes.__code__.co_names)  # probe step 1
+    probe_names = set(modules[PROBE]._check_processes.__code__.co_names)
+    assert "maple_check" not in probe_names and "_read_answer" not in probe_names
     assert "maple_check" in modules[SOAK]._check_processes.__code__.co_names
 
 
@@ -112,17 +114,39 @@ def test_maple_check_refuses_when_there_is_no_answer(modules, monkeypatch):
     assert soak.maple_check() == (False, "refused: MapleStory not confirmed closed (answer: none)")
 
 
-@pytest.mark.parametrize("module_name, abort_name", [(PROBE, "ProbeAbort"), (SESSION_STARTS, "_Abort")])
-def test_the_patch_on_soak_reaches_the_other_tools_checks(modules, monkeypatch, module_name, abort_name):
+def test_the_patch_on_soak_reaches_session_starts_check(modules, monkeypatch):
     """`_check_processes` aborts on `n` and passes on `y`: the soak patch took effect, not the console."""
-    module = modules[module_name]
-    writer = types.SimpleNamespace(session={})
-    args = (writer,) if module_name == PROBE else ()
+    module = modules[SESSION_STARTS]
     monkeypatch.setattr(modules[SOAK], "_read_answer", lambda: Success("n"))
-    with pytest.raises(getattr(module, abort_name)):
-        module._check_processes(*args)
+    with pytest.raises(module._Abort):
+        module._check_processes()
     monkeypatch.setattr(modules[SOAK], "_read_answer", lambda: Success("y"))
-    assert module._check_processes(*args) is None
+    assert module._check_processes() is None
+
+
+def test_the_patch_on_soak_reaches_probe_step_1_before_any_link_or_board_port(modules, monkeypatch, tmp_path):
+    """With `Success("n")` `run_probes` exits 2 and never reaches `_new_link` or `_board_list_json`."""
+    soak, probe = modules[SOAK], modules[PROBE]
+
+    def never(*args, **kwargs):
+        pytest.fail("reached past probe's step 1")
+    monkeypatch.setattr(soak, "_read_answer", lambda: Success("n"))
+    monkeypatch.setattr(probe, "_new_link", never)
+    monkeypatch.setattr(probe, "_board_list_json", never)
+    cfg = probe.ProbeConfig(probes=("delivery",), out=tmp_path / "run", seed=1, cli="arduino-cli")
+    assert probe.run_probes(cfg, probe._new_link, probe._start_sink) == soak.EXIT_REFUSED
+    assert not (tmp_path / "run").exists()
+
+
+def test_probe_check_processes_only_records_the_answer(modules, monkeypatch):
+    soak, probe = modules[SOAK], modules[PROBE]
+
+    def never():
+        pytest.fail("probe's _check_processes must not ask")
+    monkeypatch.setattr(soak, "_read_answer", never)
+    writer = types.SimpleNamespace(session={})
+    assert probe._check_processes(writer, "t") is None
+    assert writer.session["process_check"] == "t"
 
 
 # ---- no tool lists the running programs (Hong's anti-cheat standing fact, H56) -------------------------------------------
@@ -149,6 +173,19 @@ def test_no_tool_lists_processes(modules):
         source = Path(modules[name].__file__).read_text(encoding="utf-8")
         assert "tasklist" not in source.lower(), name
         assert _process_lister_calls(source) == [], name
+
+
+# ---- the question is asked once: no re-check is left in any tool (spec 6.1, decision H60) -------------------------------
+
+def test_no_mid_run_recheck_left(modules):
+    soak, probe = modules[SOAK], modules[PROBE]
+    assert not hasattr(soak, "PROCESS_CHECK_PERIOD_NS")
+    for fn in (soak.run_soak, probe._run_probe, modules[SESSION_STARTS].run_starts):
+        code = fn.__code__  # the closure's name: a local, or a cell variable once a nested function uses it
+        assert "periodic_check" not in code.co_varnames and "periodic_check" not in code.co_cellvars, fn.__qualname__
+    assert "periodic_check" not in probe.ProbeContext.__init__.__code__.co_varnames
+    assert "_periodic_check" not in probe.ProbeContext.command.__code__.co_names
+    assert "tick" not in soak.wait_for_click.__code__.co_varnames  # nothing is left to give it
 
 
 def test_the_process_lister_scan_can_fail():

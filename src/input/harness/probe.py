@@ -6,15 +6,16 @@ matching and the M7 split from `analyze.py` (H3), the sample pairing from `reali
 A run is ``data/probe/<run>/``; each probe writes a complete C5 run dir ``data/probe/<run>/<probe>/`` with its own
 `BleLink`, listener (``keys.jsonl``) and `RunWriter`, so analyze.py / realism.py read it unchanged. Per run:
 
-1. Step 1, MapleStory check (hard rule 2, `soak.maple_check`) and step 2, the board port (hard rule 3: exactly one
-   port with VID 0x303A / PID 0x1001 in ``arduino-cli board list --format json``), before any listener, link or
-   run dir exists. Either one failing: BLOCKED (exit 3).
-2. Per probe, in order: open the writer, MapleStory check, start the listener in the probe dir, the start wait
-   (`soak.wait_for_click`: one bring-to-foreground try, then the operator clicks the sink; a timeout is BLOCKED),
-   connect, then the probe's commands. Each command goes through `soak.run_command` (focus policy, `stimulus_ns`,
-   the C5 row, a drain); the MapleStory check repeats every 60 s.
-3. A command that ends `FOCUS_LOST` or with a link loss (NOT_CONNECTED / LINK_LOST), a MapleStory process, a
-   failed connect or listener, or Ctrl-C stops probe.py like the soak (PA-rev m15, A-H2-R-D2): `release_all()`,
+1. Step 1 asks "Is MapleStory closed? y/n" once (hard rule 2, `soak.maple_check`); any answer but `y` exits 2
+   (refused). Step 2, the board port (hard rule 3: exactly one port with VID 0x303A / PID 0x1001 in
+   ``arduino-cli board list --format json``), failing: BLOCKED (exit 3). Both come before any listener, link or
+   run dir exists.
+2. Per probe, in order: open the writer, record the step-1 answer in `session.json`, start the listener in the
+   probe dir, the start wait (`soak.wait_for_click`: one bring-to-foreground try, then the operator clicks the sink;
+   a timeout is BLOCKED), connect, then the probe's commands. Each command goes through `soak.run_command` (focus
+   policy, `stimulus_ns`, the C5 row, a drain).
+3. A command that ends `FOCUS_LOST` or with a link loss (NOT_CONNECTED / LINK_LOST), a failed connect or
+   listener, or Ctrl-C stops probe.py like the soak (PA-rev m15, A-H2-R-D2): `release_all()`,
    `session.json` written, link closed, listener stopped, non-zero exit; the probes after it are not run and are
    named on stderr.
 4. After a probe's files are closed its report runs on them; its lines go to stdout and ``report.txt``. A report
@@ -60,7 +61,7 @@ from src.input.timing import TimingModel, TimingType, truncated_cdf
 _clock = time.perf_counter_ns
 _sleep = time.sleep
 
-EXIT_BLOCKED = 3  # a precondition failed (MapleStory, board port, sink never in front); nothing was sent in that probe
+EXIT_BLOCKED = 3  # a precondition failed (board port, sink never in front); nothing was sent in that probe
 EXIT_STOP = 4  # a probe's report asked to stop (plan V1: "stop and report")
 
 PROBE_ROOT = Path("data/probe")
@@ -132,8 +133,7 @@ class ProbeContext:
     and the probe's own generator. `command()` / `issue()` number the rows from 0."""
 
     def __init__(self, name: str, run_dir: Path, writer: RunWriter, sink: soak.Sink, link: BleLink,
-                 layer: InputLayer, rng: np.random.Generator, session: SessionInfo,
-                 periodic_check: Callable[[], None]) -> None:
+                 layer: InputLayer, rng: np.random.Generator, session: SessionInfo) -> None:
         self.name = name
         self.run_dir = run_dir
         self.writer = writer
@@ -142,13 +142,11 @@ class ProbeContext:
         self.layer = layer
         self.rng = rng
         self.session = session
-        self._periodic_check = periodic_check
         self.seq = 0
 
     def command(self, action: str, call: Callable[[int], Result[ActionRecord, InputError]],
                 intended_ms: float | None = None) -> CommandOutcome:
         """`soak.run_command` with the next seq; FOCUS_LOST and a link loss raise `ProbeAbort` (H2's rules)."""
-        self._periodic_check()
         seq = self.seq
         outcome = soak.run_command(self.writer, self.sink, seq, action, call, intended_ms)
         self.seq += 1
@@ -893,8 +891,7 @@ PLAN_VARS = (
     "FQBN=esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc",
     "RUN=v1-<YYYYmmdd>; SEED=<N>   # the same two for every probe.py call below",
 )
-MAPLE_CHECK = ("Get-Process | Where-Object { $_.ProcessName -match 'maple' } | Select-Object ProcessName, Id   "
-               "# PowerShell (hard rule 2); expected: no output, else stop BLOCKED")
+MAPLE_CHECK = "Check that MapleStory is closed (no game window, no game on the taskbar)."
 PORT_LOOKUP = ('PORT=$("$CLI" board list --format json | "$PY" -c "import json,sys; print(\' \'.join(p[\'port\']'
                '[\'address\'] for p in json.load(sys.stdin)[\'detected_ports\'] if (p[\'port\'].get(\'properties\') '
                'or {}).get(\'vid\',\'\').lower()==\'0x303a\' and p[\'port\'][\'properties\'].get(\'pid\',\'\')'
@@ -920,15 +917,15 @@ def run_sheet() -> list[str]:
     first = default_probes()
     lines = [
         "V1 live run sheet (printed by probe.py --run-sheet; probe.py executes none of it)",
-        "Shell: Git Bash at the repo root of $REPO (below), except the PowerShell MapleStory check. Variables "
-        "(plan A):",
+        "Shell: Git Bash at the repo root of $REPO (below). Variables (plan A):",
         *[f"  {v}" for v in PLAN_VARS],
         "Operator before step 1: run from the main tree (REPO) with p1a-v1 merged into its branch; MapleStory "
         "closed; board on its native USB port and running HEAD's firmware (else do steps 2e-2g first); 'Guiness' "
         "paired; session unlocked; nothing else will take the foreground; type no secrets (keys.jsonl logs every "
         "key).",
-        "1. Probes on HEAD's firmware (probe.py runs the MapleStory check and the board-port lookup itself; exit 3 = "
-        "BLOCKED, stop):",
+        "1. Probes on HEAD's firmware (probe.py asks 'Is MapleStory closed? y/n' once (an agent answers y only as the "
+        "root CLAUDE.md H15 bullet says, H66) and runs the board-port lookup itself; exit 2 = refused, exit 3 = "
+        "BLOCKED: stop):",
         f"   {_probe_call(first)}",
         f"   Per probe a sink window opens: a large bright-yellow window titled '{listener.SINK_TITLE}', topmost and "
         f"centred, reading '{listener.SINK_LABEL.replace(chr(10), ' / ')}'. It may cover part of this console, so click "
@@ -943,7 +940,7 @@ def run_sheet() -> list[str]:
         "   Exit 1 = abort ([review] if FOCUS_LOST; re-running is the orchestrator's call), 4 = a report asked to "
         "stop (m6: a silent drop; release_ordering: the writes can reorder; the probes after it are not run). "
         "Reports: data/probe/$RUN/<probe>/report.txt.",
-        "2. M2 with START_JITTER off (PA-rev I8). Only after step 1 exited 0; on exit 1, 3 or 4 stop and report (the "
+        "2. M2 with START_JITTER off (PA-rev I8). Only after step 1 exited 0; on exit 1, 2, 3 or 4 stop and report (the "
         "board is still on HEAD's firmware):",
         f"   a. {MAPLE_CHECK}",
         f"   b. {PORT_LOOKUP}",
@@ -999,14 +996,13 @@ def _link_debug_log(run_dir: Path | None):
         handler.close()
 
 
-def _check_processes(writer: RunWriter) -> None:
-    ok, text = soak.maple_check()
-    writer.session["process_check"] = text
-    if not ok:
-        raise ProbeAbort(text)
+def _check_processes(writer: RunWriter, answer: str) -> None:
+    """Records step 1's answer text in this probe's `session.json`; never asks (`run_probes` asked once)."""
+    writer.session["process_check"] = answer
 
 
-def _run_probe(p: Probe, cfg: ProbeConfig, link: BleLink, start_sink: Callable[[Path], soak._SoakSink]) -> int:
+def _run_probe(p: Probe, cfg: ProbeConfig, link: BleLink, start_sink: Callable[[Path], soak._SoakSink],
+               answer: str) -> int:
     """One probe into ``cfg.out / p.name``; returns EXIT_OK when its commands ran to the end."""
     timing_rng, own_rng = probe_streams(cfg.seed, p.name)
     layer = InputLayer(link, p.model(timing_rng))
@@ -1014,29 +1010,20 @@ def _run_probe(p: Probe, cfg: ProbeConfig, link: BleLink, start_sink: Callable[[
     ended = False
     with RunWriter(cfg.out / p.name, link, run_id=f"{cfg.out.name}/{p.name}", seed=cfg.seed) as writer:
         try:
-            _check_processes(writer)
-            last_check_ns = _clock()
-
-            def periodic_check() -> None:
-                nonlocal last_check_ns
-                if _clock() - last_check_ns >= soak.PROCESS_CHECK_PERIOD_NS:
-                    _check_processes(writer)
-                    last_check_ns = _clock()
-
+            _check_processes(writer, answer)
             (writer.run_dir / listener.KEYS_FILE).write_bytes(b"")  # the listener appends: start on a fresh file
             try:
                 sink = start_sink(writer.run_dir)
             except OSError as e:
                 raise ProbeAbort(f"listener did not start: {e}") from e
-            if not soak.wait_for_click(sink, periodic_check):  # PA-rev m15 foreground check, before connect
+            if not soak.wait_for_click(sink):  # PA-rev m15 foreground check, before connect
                 raise ProbeAbort(f"BLOCKED: the sink did not take the foreground within {START_WAIT_S:g} s; every "
                                  "command would end FOCUS_LOST", EXIT_BLOCKED)
             connected = link.connect()
             if not is_successful(connected):
                 raise ProbeAbort(f"connect failed: {connected.failure()}")
             writer.record_connect(connected.unwrap())
-            ctx = ProbeContext(p.name, writer.run_dir, writer, sink, link, layer, own_rng, connected.unwrap(),
-                               periodic_check)
+            ctx = ProbeContext(p.name, writer.run_dir, writer, sink, link, layer, own_rng, connected.unwrap())
             p.commands(ctx)
             ended = True
             return EXIT_OK
@@ -1061,11 +1048,17 @@ def _emit_report(p: Probe, run_dir: Path, report: ProbeReport) -> None:
 
 def run_probes(cfg: ProbeConfig, new_link: Callable[[], BleLink],
                start_sink: Callable[[Path], soak._SoakSink]) -> int:
-    """Steps 1-2, then each probe in `cfg.probes` order; returns the exit code."""
-    ok, text = soak.maple_check()
+    """Steps 1-2, then each probe in `cfg.probes` order; returns the exit code. Step 1 asks the MapleStory question
+    once; each probe records its answer text. Any answer but `y` returns EXIT_REFUSED (2), Ctrl-C at the question
+    EXIT_INTERRUPTED (130), both before the board port is looked up and before any link, listener or run dir."""
+    try:
+        ok, text = soak.maple_check()
+    except KeyboardInterrupt:
+        print("probe.py interrupted (Ctrl-C) at the MapleStory question; nothing was sent", file=sys.stderr, flush=True)
+        return EXIT_INTERRUPTED
     if not ok:
-        print(f"BLOCKED (step 1, hard rule 2): {text}", file=sys.stderr, flush=True)
-        return EXIT_BLOCKED
+        print(text, file=sys.stderr, flush=True)
+        return EXIT_REFUSED
     port = board_port(cfg.cli)
     if not is_successful(port):
         print(f"BLOCKED (step 2, hard rule 3): {port.failure()}", file=sys.stderr, flush=True)
@@ -1076,7 +1069,7 @@ def run_probes(cfg: ProbeConfig, new_link: Callable[[], BleLink],
         rest = ", ".join(cfg.probes[i + 1:]) or "none"
         try:
             with _link_debug_log(cfg.out / name if cfg.link_debug else None):
-                _run_probe(p, cfg, new_link(), start_sink)
+                _run_probe(p, cfg, new_link(), start_sink, answer=text)
         except ProbeAbort as e:
             tag = "[review] " if "FOCUS_LOST" in str(e) else ""
             print(f"{tag}{e} (probe.py stopped in probe {name}; not run: {rest})", file=sys.stderr, flush=True)
