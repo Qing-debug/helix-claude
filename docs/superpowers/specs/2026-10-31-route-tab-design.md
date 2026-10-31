@@ -165,6 +165,12 @@ States of the top area:
 At the end of a run the view switches to replay of that run (as the old viewer did at `end`, `follow.py:207-221`
 minus the focus calls). Error texts per exit code are in 5.5.
 
+(waits for Hong: RTF98-4b-D1) From Start until Running (Connecting and the countdown) the view area keeps the replay
+it showed before Start, if any, with its replay bar greyed out like the rest of the tab (only Stop is usable, 5.1,
+H64), until the live view replaces it at Running; answer B empties the view area at Start instead. (waits for Hong:
+RTF98-6a-D1) A run that ends before Running and leaves no step or leg log ends with the view area empty under the
+plan as written; the other answer keeps that earlier replay and gives its bar back.
+
 ### 5.3 Run settings
 
 | Setting | Field | Default | Valid | Maps to |
