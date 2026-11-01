@@ -1,7 +1,29 @@
 """Anti-cheat name rules (H56, H67; spec 5.12-4 and 5.12-5)."""
+from collections.abc import Iterable
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# Each name is split into adjacent pieces so that no banned name appears in the repo as plain text (RT-11-D1,
+# option B). The joined value is what the scan matches.
+BANNED = (
+    "Get" + "Foreground" + "Window",
+    "Enum" + "Windows",
+    "Enum" + "Processes",
+    "Create" + "Toolhelp32" + "Snapshot",
+    "Open" + "Process",
+    "Find" + "Window",
+    "Get" + "Window" + "Text",
+    "Get" + "Class" + "Name",
+    "Get" + "Window" + "Thread" + "Process" + "Id",
+    "task" + "list",
+    "Get-" + "Process",
+    "psu" + "til",
+    "im" + "show",
+    "named" + "Window",
+    "wait" + "Key",
+)
+CASE_INSENSITIVE = frozenset({"task" + "list", "Get-" + "Process", "psu" + "til"})
 
 
 def scanned_files(repo_root: Path) -> list[Path]:
@@ -9,6 +31,44 @@ def scanned_files(repo_root: Path) -> list[Path]:
     harness_dir = repo_root / "src" / "input" / "harness"
     files = [*(repo_root / "src").glob("**/*.py"), *(repo_root / "tools").glob("**/*.py")]
     return sorted(p for p in files if harness_dir not in p.parents)
+
+
+def banned_names(paths: Iterable[Path]) -> list[str]:
+    """One "<path>:<line>: <name>" per banned name per line, comments and strings included."""
+    hits = []
+    for path in paths:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for name in BANNED:
+                if name in CASE_INSENSITIVE:
+                    found = name.lower() in line.lower()
+                else:
+                    found = name in line
+                if found:
+                    hits.append(f"{path}:{number}: {name}")
+    return hits
+
+
+def test_no_banned_name_in_src_or_tools():
+    assert banned_names(scanned_files(REPO)) == []
+
+
+def test_the_scan_can_fail(tmp_path):
+    fixture = tmp_path / "fixture.py"
+    fixture.write_text(
+        "\n".join([
+            "user32." + "Get" + "Foreground" + "Window()",
+            "cv2." + "im" + "show(\"x\", f)",
+            "user32." + "Get" + "Window" + "Text" + "W(hwnd, buf, 256)",
+            "subprocess.run([\"" + "TASK" + "LIST\"])",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    assert banned_names([fixture]) == [
+        f"{fixture}:1: {BANNED[0]}",
+        f"{fixture}:2: {BANNED[12]}",
+        f"{fixture}:3: {BANNED[6]}",
+        f"{fixture}:4: {BANNED[9]}",
+    ]
 
 
 def test_scope():
