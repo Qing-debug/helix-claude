@@ -899,8 +899,8 @@ Start (F12, Stop and a click on the app) and a replay; agents never press Start.
 
 ## 12. As built (RT-14, written 2026-11-01)
 
-This section says what the code at `415dbf0` (the tip of `p1-route-tab` before this section) does where that is not
-what sections 1-11 say. Where this section and an earlier one disagree, this section is right. The build is not
+This section says what the code at `415dbf0` (the tip of `p1-route-tab` before this section), plus RT-14b's one change to
+`tools/route_tab_sim.py` (`9bb3146`), does where that is not what sections 1-11 say. Where this section and an earlier one disagree, this section is right. The build is not
 finished: section 12.5 lists what is still open. `python tools/check.py --full` at `415dbf0`: ruff, basedpyright,
 lint-imports and pytest all pass (2277 passed, 10 skipped).
 
@@ -948,8 +948,8 @@ both; reaction median 223.671 ms in both (seed 1, noise off, so both modes walk 
 MIN_SENDS 200, MEDIAN_GAP_MS 20, P95_MAX_MS 100 and NO_WAIT_GAP 0.05; none fired (gaps: median +0.007 ms, app p95
 0.38 ms, no-wait share +0 points), so the tab's key path adds nothing a person could see.
 
-What the simulator does not cover, as three lines. The tool's printout and `timing.json` carry the first two; the third
-is recorded here and in `src/route/CLAUDE.md` (the tool's own list is code and was not changed by this docs pass):
+What the simulator does not cover, as three lines. The tool's printout and `timing.json` carry all three (the third was
+added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is the one place the docs spell them out:
 
 - the F12 hook's own latency (the sim app's stop control installs no keyboard hook);
 - the real capture thread's load (the frame pump only stores a copy of one picture);
