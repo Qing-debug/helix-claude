@@ -151,6 +151,27 @@ def test_minimap_draw_error_is_reported_once(make_minimap, capsys):
     assert capsys.readouterr() == ("", "")
 
 
+def test_a_draw_error_that_comes_back_after_a_good_draw_is_reported_again(make_minimap, capsys):
+    """RDO110-R m6: "not again while it repeats" ends at a good draw: the same error after one is news again."""
+    gui, shared, minimap = make_minimap(_with_icons(ICON_AT))
+    lines = []
+    reporting = LiveMinimap(minimap.canvas.master, gui, report=lines.append)
+    good = shared.minimap_frame
+    bad = np.zeros((2, 2, 2, 2), dtype=np.uint8)  # Image.fromarray cannot read it
+    shared.minimap_frame = bad
+    reporting.draw()
+    reporting.draw()
+    assert len(lines) == 1
+    shared.minimap_frame = good
+    reporting.draw()  # recovered
+    assert len(lines) == 1 and reporting.canvas.find_withtag("bg")
+    shared.minimap_frame = bad
+    reporting.draw()
+    reporting.draw()
+    assert len(lines) == 2 and lines[1] == lines[0]  # the same line again, once
+    assert capsys.readouterr() == ("", "")
+
+
 def test_minimap_draw_never_raises(make_minimap, capsys):
     gui, shared, minimap = make_minimap(_with_icons(ICON_AT))
     minimap.draw()
