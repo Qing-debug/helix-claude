@@ -426,6 +426,9 @@ class RunSession:
             # A stop() before StopControl.start() (the cancel flag) is checked after each step; it ends the run with
             # exit 0 and the cancel payload, unless the step itself failed (spec 5.6).
             character = CLASSES[s.character]()
+            # Keep this route load before the first event (the "status" below): its redirect_stdout must end before
+            # the Tk thread can react to an event and start its own (the live view's RunModel.open), or the two
+            # swaps overlap and stdout is left on a dead buffer (DBG115).
             route = _load_route(s.map_csv, character)
             if not is_successful(route):
                 self._log(f"error: {route.failure()}", True)

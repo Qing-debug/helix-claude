@@ -202,6 +202,21 @@ def test_events_in_order(env):
     assert env.walks == 1
 
 
+def test_route_load_finishes_before_the_first_event(env, monkeypatch):
+    """`_load_route` swaps stdout; the Tk thread swaps it too once it sees an event, so no event may come first (DBG115)."""
+    real_load = session._load_route
+    seen: list[int] = []
+
+    def load(map_csv, character):
+        result = real_load(map_csv, character)
+        seen.append(len(env.events))  # the events posted by the time the load returns
+        return result
+
+    monkeypatch.setattr(session, "_load_route", load)
+    assert env.run() == 0
+    assert seen == [0]
+
+
 # ---- stop(): the cancel flag before StopControl.start(), trigger(source) after ---------------------------------------
 
 def test_stop_during_connect_cancels(env):
