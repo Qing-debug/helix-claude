@@ -635,3 +635,25 @@ def test_11_fifty_thousand_events_load_and_scrub_fast(tmp_path):
 def test_load_folder_fails_when_the_folder_has_no_run(tmp_path):
     result = load_folder(tmp_path, repo_root=REPO_ROOT, current_git_head=None)
     assert isinstance(result, Failure) and str(tmp_path) in result.failure()
+
+
+def test_why_time_of_day_rounds_to_the_millisecond_and_carries_into_the_second(tmp_path):
+    # `_stamp` rounds the whole time to ms before it splits it, so a half millisecond goes up and 999.5 ms carries.
+    wall, perf = 1_761_900_000_000_000_000, 5_000_000_000  # wall is a whole second
+    model = _load(make_folder(tmp_path, [("leg", 5.0, 0, 5, (49, 28), (101, 24))],
+                              default_header(wall_ns=wall, perf_ns=perf)))
+
+    def clock(seconds_after: int) -> str:
+        return datetime.fromtimestamp(wall // 1_000_000_000 + seconds_after).strftime("%H:%M:%S")
+
+    assert model._stamp(perf + 1_499_999) == clock(0) + ".001"
+    assert model._stamp(perf + 1_500_000) == clock(0) + ".002"
+    assert model._stamp(perf + 999_499_999) == clock(0) + ".999"
+    assert model._stamp(perf + 999_500_000) == clock(1) + ".000"  # not `:60.000`-style: the carry is real
+
+
+def test_why_time_of_day_needs_an_event_time(tmp_path):
+    # An event with no t_ns has no wall time: the elapsed form's 00:00.000, even with wall_ns and perf_ns in the header.
+    model = _load(make_folder(tmp_path, [("leg", 5.0, 0, 5, (49, 28), (101, 24))],
+                              default_header(wall_ns=1_761_900_000_000_000_000, perf_ns=5_000_000_000)))
+    assert model._stamp(None) == "00:00.000"

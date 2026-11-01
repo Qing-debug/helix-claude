@@ -209,13 +209,19 @@ class LiveController:
 
     def _read_live_frame(self) -> bool:
         """Spec 5.8, plan choice 12: ask `live_frame` for the newest frame. A new array object makes a new picture (and
-        counts as a change); the same object, or `None`, keeps the picture made so far. True when there is a new one."""
+        counts as a change); the same object, or `None`, keeps the picture made so far. True when there is a new one.
+        It runs after the poll consumed the files, so it must not raise: an error in the callable or in `fromarray` is
+        reported (status line and console) and the picture made so far stays (RT-5 review I1)."""
         if self._live_frame is None:
             return False
-        frame = self._live_frame()
-        if frame is None or frame is self._frame:
+        try:
+            frame = self._live_frame()
+            if frame is None or frame is self._frame:
+                return False
+            picture = Image.fromarray(frame)
+        except Exception as err:
+            self._report(f"follow error: live frame: {type(err).__name__}: {err}")
             return False
-        picture = Image.fromarray(frame)
         self._frame, self._picture = frame, picture
         return True
 

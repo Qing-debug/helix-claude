@@ -1004,3 +1004,15 @@ def test_destroy_removes_its_widgets(tmp_path, make_window):
     tick()
     assert window.index == 0 and window._speed is None  # the queued tick found a new generation and did nothing
     window.destroy()  # a second call is a no-op, not a TclError on the destroyed widgets
+
+
+def test_a_live_picture_clears_a_stale_read_error(tmp_path, make_window):
+    """`_update_live_picture`: a given picture needs no file, so a failed read's status and flag are cleared."""
+    folder = make_folder(tmp_path)
+    data = _noise_png((10, 120, 200))
+    (folder / "minimap.png").write_bytes(data[: len(data) // 2])
+    window = make_window(folder, live=True)
+    window.show(1)
+    assert not window.background_ok and window._status.get().startswith("cannot read minimap.png: ")
+    window.show(1, picture=_live_image())
+    assert window.background_ok and window._status.get() == "" and window.shown_background == "live"

@@ -26,7 +26,9 @@ Where the plan is silent (each decided here, local and reversible):
   bracket). Several other starts give `; via <label> <c> s` once each, inside the one bracket.
 - A `sent` with no key changes reads `sent: no key changes`; a logged move whose kind or direction is unknown to the
   planner is shown as the logged words with keys `?` and takes no part in a route-changed test.
-- A time before the run's first event is shown as `00:00.000`.
+- The why-line time is the local time of day, `HH:MM:SS.mmm`, when the header has `wall_ns` and `perf_ns` (spec 5.10,
+  `_stamp`). Without them (sim runs, legs-only folders), or before the run's first timed event, it is the elapsed time
+  since the first event: `mm:ss.mmm` (`h:mm:ss.mmm` past an hour), `00:00.000` before that event.
 - `ended` is also True from the start for a legs-only run (origin "legs"): it has no `end` event but is complete
   (`RunSteps.ended`, V1), so the window must not follow it live.
 - A frame index line must be a JSON object with an int `t_ns` and a str `file`; a blank line is a bad line (as

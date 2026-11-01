@@ -563,8 +563,8 @@ def test_live_frame_is_drawn_and_new_frames_redraw(tmp_path, roots, monkeypatch)
     before = len(draws)
     t.live.tick()  # A again, the same object, nothing else new: no redraw
     assert len(draws) == before
-    t.live.tick()  # B, a new object: a redraw, with B
-    assert len(draws) > before and all(draw == ("live", 200) for draw in draws[before:])
+    t.live.tick()  # B, a new object: exactly one redraw, with B
+    assert len(draws) == before + 1 and draws[before] == ("live", 200)
     assert t.window.shown_background == "live"
     assert np.array_equal(np.asarray(t.window.shown_image), b)
     assert loads == []  # no file was read, at any draw
@@ -599,3 +599,68 @@ def test_the_end_puts_the_recorded_picture_back_at_once(tmp_path, roots, monkeyp
     t.live.tick()
     assert t.live.ended and t.window.live is False
     assert t.window.shown_background == "frames/frame_000000.png"
+
+
+def test_a_live_frame_that_raises_on_the_header_tick_loses_no_line(tmp_path, roots, monkeypatch, capsys):
+    """RT-5 review I1: the polled lines are stored whatever `live_frame` does. The error goes to the status line and the
+    console once, the picture stays what it was (none yet), and following goes on."""
+    folder = _live_folder(tmp_path, LINES[:5])
+    calls = []
+
+    def live_frame():
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError("x")
+        return _frame(30)
+
+    t = _live_with_frame(roots, monkeypatch, folder, live_frame)
+    t.live.tick()  # the tick that reads the header: the callable raises
+    model = t.window.model
+    assert model is not None and len(model.events) == 5  # the header and the lines were not lost with it
+    assert _status(t.window) == "follow error: live frame: RuntimeError: x"
+    assert capsys.readouterr().out == "follow error: live frame: RuntimeError: x\n"
+    assert t.window.shown_background != "live" and len(t.after) == 1 and not t.live.ended
+    _append(folder / STEPS_FILE, b"".join(LINES[5:7]))
+    t.live.tick()  # the callable is fine again: the picture appears and the steps go on
+    assert len(model.events) == 7 and t.window.shown_background == "live" and len(t.after) == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_a_live_frame_that_raises_on_the_end_tick_still_ends_the_run(tmp_path, roots, monkeypatch, capsys):
+    """RT-5 review I1: the `end` line is stored (so the run ends and the window switches to replay) even if `live_frame`
+    raises on the tick that reads it."""
+    folder = _live_folder(tmp_path, LINES[:25])
+    _add_frame(folder, 0, 1.05)
+    broken = []
+
+    def live_frame():
+        if broken:
+            raise RuntimeError("x")
+        return _frame(30)
+
+    t = _live_with_frame(roots, monkeypatch, folder, live_frame)
+    t.live.tick()
+    assert t.window.shown_background == "live"
+    capsys.readouterr()
+    broken.append(True)
+    _append(folder / STEPS_FILE, LINES[25])
+    t.live.tick()  # reads `end`; the callable raises
+    assert t.live.ended and t.window.model is not None and t.window.model.ended
+    assert t.window.live is False and len(t.after) == 1  # no further tick
+    assert t.window.shown_background == "frames/frame_000000.png"  # the recorded picture replaced the live one
+    assert _status(t.window) == "follow error: live frame: RuntimeError: x"
+    assert capsys.readouterr().out == "follow error: live frame: RuntimeError: x\n"
+
+
+def test_a_live_frame_that_cannot_be_made_into_a_picture_is_reported_the_same_way(tmp_path, roots, monkeypatch, capsys):
+    """`Image.fromarray` is in the same guard as the callable (RT-5 review I1): a dtype it cannot take is an error on
+    the status line, and the steps of the tick still go in."""
+    folder = _live_folder(tmp_path, LINES[:5])
+    bad = np.zeros((82, 162, 3), dtype=np.float64)  # Pillow has no mode for this
+    t = _live_with_frame(roots, monkeypatch, folder, lambda: bad)
+    t.live.tick()
+    model = t.window.model
+    assert model is not None and len(model.events) == 5
+    assert _status(t.window).startswith("follow error: live frame: TypeError: ")
+    assert t.window.shown_background != "live" and not t.live.ended
+    capsys.readouterr()
