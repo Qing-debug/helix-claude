@@ -2,8 +2,9 @@
 
 It only replays: any run folder (a `steps.jsonl` with or without `end`, or only `legs.jsonl`) opens as a replay,
 `--replay` is accepted and ignored, and there is no `--ready` (route tab plan choice 10). It runs only on its own,
-outside any run, and nothing in the app starts it; the live view of a run is hosted by the Route tab, not here. Tk
-happens inside `main`, never at import.
+outside any run, and nothing in the app starts it; the live view of a run is hosted by the Route tab, not here. Because it
+never runs inside the app, it may set its own root's title (`main` does, once); `window.py` and `follow.py`, which the
+app hosts, may not (`tests/route_view/test_view_window.py` test 10). Tk happens inside `main`, never at import.
 """
 import time
 
@@ -61,6 +62,7 @@ def main(argv: list[str] | None = None, *, make_root: Callable[[], tk.Tk] = tk.T
         print(f"error: {loaded.failure()}", file=sys.stderr)
         root.destroy()
         return 2
+    root.title(f"Route view · {folder}")  # the one title call: the view itself sets none, since the app hosts it
     RouteViewWindow(root, folder, loaded.unwrap(), live=False)  # shows the last step
     print(f"window built in {time.perf_counter() - _T0:.2f} s", flush=True)
     root.deiconify()

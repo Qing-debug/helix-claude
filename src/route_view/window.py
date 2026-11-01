@@ -1,17 +1,24 @@
-"""The route view's Tk window and replay controls (route view plan task RV-7; spec 5.4, 5.5, 5.7).
+"""The route view's Tk window and replay controls (route view plan task RV-7; spec 5.4, 5.5, 5.7; route tab plan RT-4,
+spec 5.9, 5.13).
 
 `RouteViewWindow` draws one step of a `RunModel` (the enlarged minimap, the nodes, the route, the aim, the character and
 the last moves), shows the model's side panel and "why" log, and has the replay bar. It reads the model and the files in
 the run folder and nothing else; it holds no lock and no thread.
 
-Focus (spec 5.7): the window never calls `focus_force`, `focus_set`, `lift`, `tkraise`, `grab_set` or `-topmost`, opens
-no message box or dialog, and calls none of `resizable`, `overrideredirect`, `transient` or `attributes` (in any
-spelling): once Tk has made its wrapper window, each of those makes Tk build a new wrapper, which silently drops the
-no-activate style RV-8 sets on it (plan RV-7, "The window never calls ..."; `tests/route_view/test_view_window.py`
-test 10 walks every `src/route_view` source for them). Errors go to the status line.
+Hosting (route tab plan C3): it packs its widgets into the `parent` it is given (the Route tab's container Frame, or the
+standalone replay's root) and owns nothing above them: the title text is `title_label`, the first widget in the view,
+and the window's own title is never written here. It is built for one folder; `destroy()` stops playback and removes
+the widgets it packed, leaving `parent` as it was.
+
+Focus (spec 5.7) and no style change during a run (spec 5.13): the window never calls `focus_force`, `focus_set`,
+`lift`, `tkraise`, `grab_set` or `-topmost`, opens no message box or dialog, and calls none of `resizable`,
+`overrideredirect`, `transient` or `attributes` (in any spelling): once Tk has made its wrapper window, each of those
+makes Tk build a new wrapper, and the app makes no style change to its window during a run. It sets no window title
+either (`.title(...)`, `.wm_title(...)`). `tests/route_view/test_view_window.py` test 10 walks every `src/route_view`
+source for the first group and `window.py` and `follow.py` for the titles. Errors go to the status line.
 
 Where the plan is silent (each decided here, local and reversible):
-- The title's mode part is `LIVE` while live; `ended: <reason>` (`ended: no reason` for an `end` without one) for a run
+- The title label's mode part is `LIVE` while live; `ended: <reason>` (`ended: no reason` for an `end` without one) for a run
   with an `end` event; `REPLAY (from legs.jsonl)` for a legs-only run; `REPLAY (did not end)` for a steps folder
   without `end`. `set_mode` overrides it; `set_live` puts the default back (call `set_mode` after it).
 - `show` reports a background that could not be read in `background_ok` (False), so RV-8's follower can retry at its
@@ -66,8 +73,9 @@ class RouteViewWindow:
     background_ok: bool  # False when the last `show` asked for a picture file and could not read it
     index: int | None  # the step shown; None with no steps
 
-    def __init__(self, root: tk.Tk, folder: Path, model: RunModel | None, *, live: bool) -> None:
-        self._root = root
+    def __init__(self, parent: tk.Misc, folder: Path, model: RunModel | None, *, live: bool) -> None:
+        self._parent = parent
+        self._destroyed = False
         self.folder = Path(folder)
         self.model = model
         self.live = live
@@ -98,15 +106,17 @@ class RouteViewWindow:
     # layout
 
     def _build(self) -> None:
-        root = self._root
-        self._status = tk.StringVar(master=root, value="")
-        self.status_label = tk.Label(root, textvariable=self._status, anchor="w", justify="left")
+        parent = self._parent
+        self.title_label = tk.Label(parent, text="", anchor="w", justify="left")
+        self.title_label.pack(side="top", fill="x")
+        self._status = tk.StringVar(master=parent, value="")
+        self.status_label = tk.Label(parent, textvariable=self._status, anchor="w", justify="left")
         self.status_label.pack(side="bottom", fill="x")
-        self.bar = tk.Frame(root)
+        self.bar = tk.Frame(parent)
         if not self.live:
             self.bar.pack(side="bottom", fill="x")
-        self.warn_label = tk.Label(root, text="", fg="red", anchor="w", justify="left")
-        self.main = tk.Frame(root)
+        self.warn_label = tk.Label(parent, text="", fg="red", anchor="w", justify="left")
+        self.main = tk.Frame(parent)
         self.main.pack(side="top", fill="x")
         self.canvas = tk.Canvas(self.main, width=_MIN_SIZE, height=_MIN_SIZE, bg=DARK, highlightthickness=0, bd=0)
         self.canvas.pack(side="left")
@@ -116,10 +126,10 @@ class RouteViewWindow:
         self.panel_label = tk.Label(self.panel_box, text="", anchor="nw", justify="left", font="TkFixedFont",
                                     wraplength=PANEL_WIDTH_PX - 16, padx=8, pady=4)
         self.panel_label.pack(side="top", fill="both", expand=True)
-        self._label_font = tkfont.nametofont("TkDefaultFont", root=root).copy()
+        self._label_font = tkfont.nametofont("TkDefaultFont", root=parent).copy()
         self._label_font.configure(size=8)
 
-        self.why_frame = tk.Frame(root)
+        self.why_frame = tk.Frame(parent)
         self.why_frame.pack(side="top", fill="both", expand=True)
         self.why_scroll = tk.Scrollbar(self.why_frame, orient="vertical")
         self.why_text = tk.Text(self.why_frame, height=WHY_LINES, wrap="none", state="disabled", font="TkFixedFont",
@@ -142,7 +152,7 @@ class RouteViewWindow:
         self.btn_prev = button("<", lambda: self._step(-1))
         self.btn_next = button(">", lambda: self._step(1))
         self.btn_last = button(">|", self._last)
-        self.unit_var = tk.StringVar(master=self._root, value=UNITS[0])
+        self.unit_var = tk.StringVar(master=self._parent, value=UNITS[0])
         self.unit_menu = tk.OptionMenu(bar, self.unit_var, *UNITS)
         self.unit_menu.pack(side="left")
         self.slider = tk.Scale(bar, from_=0, to=0, orient="horizontal", showvalue=False, length=SLIDER_PX,
@@ -153,11 +163,11 @@ class RouteViewWindow:
         tk.Label(bar, text=" play").pack(side="left")
         self.play_buttons = {speed: self._play_button(speed) for speed in (1, 4)}
         tk.Label(bar, text=" lap").pack(side="left")
-        self.lap_var = tk.StringVar(master=self._root, value="")
+        self.lap_var = tk.StringVar(master=self._parent, value="")
         self.lap_entry = tk.Entry(bar, textvariable=self.lap_var, width=4)
         self.lap_entry.pack(side="left")
         tk.Label(bar, text="leg").pack(side="left")
-        self.leg_var = tk.StringVar(master=self._root, value="")
+        self.leg_var = tk.StringVar(master=self._parent, value="")
         self.leg_entry = tk.Entry(bar, textvariable=self.leg_var, width=4)
         self.leg_entry.pack(side="left")
         for entry in (self.lap_entry, self.leg_entry):
@@ -177,6 +187,17 @@ class RouteViewWindow:
 
     # -----------------------------------------------------------------------------------------------------------
     # the public interface (RV-8 builds on it)
+
+    def destroy(self) -> None:
+        """Stop a running playback and destroy the widgets this window packed into `parent`. `parent` stays, and so
+        does anything else in it. A play tick already queued with `after` finds a new generation and does nothing; a
+        second call does nothing. The window cannot be used afterwards (route tab plan C3)."""
+        if self._destroyed:
+            return
+        self._destroyed = True
+        self._stop_play()
+        for widget in (self.title_label, self.warn_label, self.main, self.why_frame, self.bar, self.status_label):
+            widget.destroy()
 
     def set_model(self, model: RunModel) -> None:
         """RV-8: the live header arrived, so there is a model now."""
@@ -319,7 +340,7 @@ class RouteViewWindow:
         if model is None or index is None or speed is None:
             return
         gen = self._play_gen
-        self._root.after(model.play_delay_ms(index, speed), lambda: self._play_tick(gen))
+        self._parent.after(model.play_delay_ms(index, speed), lambda: self._play_tick(gen))
 
     def _play_tick(self, gen: int) -> None:
         model, index = self.model, self.index
@@ -402,7 +423,7 @@ class RouteViewWindow:
                 label = f" -> {view.target.label}" if view.target is not None else ""
                 parts.append(f"leg {view.leg}{label}")
             parts.append(view.state)
-        self._root.title(" · ".join(parts))
+        self.title_label.configure(text=" · ".join(parts))
 
     def _update_panel(self, view: StepView | None) -> None:
         self.panel_label.configure(text="\n".join(view.panel) if view is not None else "")
@@ -489,7 +510,7 @@ class RouteViewWindow:
         if self.shown_photo is None or self._photo_source is not image or self._photo_scale != self.scale:
             w, h = image.size
             scaled = image.resize((w * self.scale, h * self.scale), Image.Resampling.NEAREST)
-            self.shown_photo = ImageTk.PhotoImage(scaled, master=self._root)
+            self.shown_photo = ImageTk.PhotoImage(scaled, master=self._parent)
             self._photo_source, self._photo_scale = image, self.scale
         return self.shown_photo
 

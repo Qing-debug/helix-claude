@@ -1,12 +1,14 @@
-"""Tests of the route view's Tk window (route view plan task RV-7, tests 1-10 and 14; contract V5 and spec 5.4, 5.5, 5.7).
+"""Tests of the route view's Tk window (route view plan task RV-7, tests 1-10 and 14; contract V5 and spec 5.4, 5.5, 5.7;
+route tab plan RT-4: the view is hosted in a Frame, `title_label` replaces the root's title).
 
-Every test opens a real Tk root, withdrawn, with no mainloop, and replaces its `after` by a recorder; each root is
-destroyed at teardown. Nothing is shown, so nothing takes focus.
+Every test opens a real Tk root, withdrawn, with no mainloop, builds the window in a Frame of it and replaces that
+Frame's `after` by a recorder; each root is destroyed at teardown. Nothing is shown, so nothing takes focus.
 """
 
 import ast
 import io
 import random
+import tkinter as tk
 from pathlib import Path
 
 import pytest
@@ -32,19 +34,22 @@ def roots():
 
 @pytest.fixture
 def make_window(roots):
-    """`make(folder_or_model, live=False)` -> the window; `window.after_calls` is its root's recorded `after`."""
+    """`make(folder_or_model, live=False)` -> the window, built in a Frame of a withdrawn root (as the Route tab hosts
+    it); `window.after_calls` is that Frame's recorded `after`."""
 
     def make(source, *, live=False, git_head=GIT_HEAD):
         root = open_root()
         roots.append(root)
-        calls = record_after(root)
+        frame = tk.Frame(root)
+        frame.pack(fill="both", expand=True)
+        calls = record_after(frame)
         if isinstance(source, Path):
             loaded = load_folder(source, repo_root=REPO_ROOT, current_git_head=git_head)
             assert is_successful(loaded), loaded
             model, folder = loaded.unwrap(), source
         else:
             model, folder = source
-        window = RouteViewWindow(root, folder, model, live=live)
+        window = RouteViewWindow(frame, folder, model, live=live)
         window.after_calls = calls  # type: ignore[attr-defined]
         return window
 
@@ -75,6 +80,10 @@ def _sub(tmp_path, name):
     folder = tmp_path / name
     folder.mkdir()
     return folder
+
+
+def _title(window) -> str:
+    return window.title_label.cget("text")
 
 
 def _canvas_size(window) -> tuple[int, int]:
@@ -120,7 +129,7 @@ def test_1_a_sim_folder_shows_every_kind_of_step(tmp_path, make_window):
         assert window.panel_label.cget("text") == "\n".join(view.panel)
         assert len(_text_lines(window)) == len(model.why)
         assert _tagged_line(window) == view.why_line + 1
-    assert window._root.title().startswith("Route view · ended: max_laps")
+    assert _title(window).startswith("Route view · ended: max_laps")
 
 
 # 2 ---------------------------------------------------------------------------------------------------------------
@@ -128,7 +137,7 @@ def test_1_a_sim_folder_shows_every_kind_of_step(tmp_path, make_window):
 
 def test_2_a_legs_only_folder_opens_on_a_dark_canvas(tmp_path, make_window):
     window = make_window(make_legs_folder(tmp_path))
-    assert "REPLAY (from legs.jsonl)" in window._root.title()
+    assert "REPLAY (from legs.jsonl)" in _title(window)
     assert _canvas_size(window) == (648, 328)  # FF2 "# minimap_size=162,82" at 4x
     assert window.shown_background == "dark" and window.shown_image is None
     assert window.canvas.cget("bg") == "#202020"
@@ -476,22 +485,22 @@ def test_8_live_hides_the_replay_bar(tmp_path, make_window):
     window = make_window(make_folder(tmp_path))
     assert window.bar.winfo_manager() == "pack" and window._mode() == "ended: max_laps"
     window.set_live(True)
-    assert window.bar.winfo_manager() == "" and window._root.title().split(" · ")[1] == "LIVE"
+    assert window.bar.winfo_manager() == "" and _title(window).split(" · ")[1] == "LIVE"
     window.set_live(False)
-    assert window.bar.winfo_manager() == "pack" and window._root.title().split(" · ")[1] == "ended: max_laps"
+    assert window.bar.winfo_manager() == "pack" and _title(window).split(" · ")[1] == "ended: max_laps"
     window.set_mode("LIVE: something")
-    assert window._root.title().split(" · ")[1] == "LIVE: something"
+    assert _title(window).split(" · ")[1] == "LIVE: something"
     window.set_live(True)  # the default comes back
-    assert window._root.title().split(" · ")[1] == "LIVE"
+    assert _title(window).split(" · ")[1] == "LIVE"
 
 
 def test_8_a_live_window_never_packs_the_bar_and_a_model_can_arrive_later(tmp_path, make_window, roots):
     folder = make_folder(tmp_path)
     root = open_root()
     roots.append(root)
-    window = RouteViewWindow(root, folder, None, live=True)
+    window = RouteViewWindow(tk.Frame(root), folder, None, live=True)
     assert window.bar.winfo_manager() == "" and window.index is None and window.model is None
-    assert root.title().split(" · ")[1] == "LIVE"
+    assert _title(window).split(" · ")[1] == "LIVE"
     model, events = _live_model(folder)
     window.set_model(model)
     assert window.index is None and len(window.canvas.find_withtag("node")) == 21
@@ -552,7 +561,18 @@ def focus_problems(source: str) -> list[str]:
     return problems
 
 
+def title_calls(source: str) -> list[str]:
+    """Every `.title(...)` and `.wm_title(...)` call in `source`, in line order. The hosted modules never set a window
+    title: the app owns its own window, and a title is a `wm` call on it (route tab plan RT-4, spec 5.13)."""
+    found = [(node.lineno, f"line {node.lineno}: .{node.func.attr}(...)") for node in ast.walk(ast.parse(source))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr in {"title", "wm_title"}]
+    return [text for _, text in sorted(found)]
+
+
 def test_10_the_viewer_never_takes_focus_or_rebuilds_the_wrapper_window():
+    """No style change during a run (spec 5.13): the view, hosted in the app's window, never takes focus, opens a
+    dialog or calls the `wm` commands that make Tk rebuild the wrapper window. Every `src/route_view` module is scanned."""
     sources = sorted(ROUTE_VIEW_SRC.glob("*.py"))
     assert {p.name for p in sources} >= {"__init__.py", "__main__.py", "model.py", "window.py"}
     for path in sources:
@@ -571,12 +591,24 @@ def test_10_the_walk_finds_a_planted_sample():
     assert focus_problems("root.title('x')\nroot.geometry('1x1')\nc.configure(width=1)") == []
 
 
+def test_10_no_title_call_in_the_hosted_modules():
+    """The modules the app hosts during a run (`window.py`, `follow.py`) set no window title. `__main__.py` is not
+    checked: the standalone replay sets its own root's title there (plan choice 10) and never runs inside the app."""
+    for name in ("window.py", "follow.py"):
+        assert title_calls((ROUTE_VIEW_SRC / name).read_text(encoding="utf-8")) == [], name
+
+
+def test_10_the_title_check_finds_a_planted_sample():
+    assert title_calls("root.title('x')\nroot.wm_title('y')") == ["line 1: .title(...)", "line 2: .wm_title(...)"]
+    assert title_calls("a.configure(text='x')\nroot.geometry('1x1')\nroot.tk.call('wm', 'title', root, 'x')") == []
+
+
 # 14 --------------------------------------------------------------------------------------------------------------
 
 
 def test_14_a_steps_file_with_a_header_only_opens_with_no_steps(tmp_path, make_window):
     window = make_window(make_folder(tmp_path, []))
-    title = window._root.title()
+    title = _title(window)
     assert "REPLAY (did not end)" in title and "no steps" in title, title
     assert window._status.get() == NO_STEPS == "no steps logged"
     assert window.index is None and window.model.events == [] and window._view is None
@@ -632,13 +664,13 @@ def test_the_title_names_the_mode_folder_lap_leg_target_and_state(tmp_path, make
     folder = make_folder(tmp_path)
     window = make_window(folder)
     window.show(1)
-    assert window._root.title() == f"Route view · ended: max_laps · {folder} · lap 0 · leg 5 -> #6 · planned"
+    assert _title(window) == f"Route view · ended: max_laps · {folder} · lap 0 · leg 5 -> #6 · planned"
     window.show(25)
-    assert window._root.title().endswith("· lap 0 · leg 6 -> #7 · ended")
+    assert _title(window).endswith("· lap 0 · leg 6 -> #7 · ended")
     legs = make_window(make_legs_folder(_sub(tmp_path, "legs")))
-    assert legs._root.title().startswith("Route view · REPLAY (from legs.jsonl) · ")
+    assert _title(legs).startswith("Route view · REPLAY (from legs.jsonl) · ")
     cut = make_window(make_folder(_sub(tmp_path, "cut"), G[:12]))
-    assert cut._root.title().split(" · ")[1] == "REPLAY (did not end)"
+    assert _title(cut).split(" · ")[1] == "REPLAY (did not end)"
 
 
 # RV-7 review fixes: what the window draws and where (I1) and the stale read-failure status (m1) ------------------------
@@ -656,13 +688,13 @@ def _checkerboard_png(path, size=(162, 82)) -> None:
 
 def _photo_pixel(window, x, y) -> tuple[int, ...]:
     """The colour of pixel (x, y) of the picture the canvas holds (Tk's `<image> get x y`; ImageTk has no `get`)."""
-    return tuple(int(c) for c in window._root.tk.call(str(window.shown_photo), "get", x, y))
+    return tuple(int(c) for c in window._parent.tk.call(str(window.shown_photo), "get", x, y))
 
 
 def _top_to_bottom(window) -> list:
     """The root's packed widgets as they stack in the window: the top-side ones in pack order, then the bottom-side ones
     with the last packed first (the packer fills the top edge downwards and the bottom edge upwards)."""
-    slaves = window._root.pack_slaves()
+    slaves = window._parent.pack_slaves()
     return ([w for w in slaves if w.pack_info()["side"] == "top"]
             + [w for w in slaves if w.pack_info()["side"] == "bottom"][::-1])
 
@@ -743,21 +775,24 @@ def test_the_ring_hop_numbers_aim_and_recent_moves_are_drawn_where_the_step_puts
 
 def test_9_the_warning_label_is_above_the_canvas_and_the_bar_stays_under_the_log(tmp_path, make_window):
     warned = make_window(make_folder(_sub(tmp_path, "a"), None, default_header(map_sha256="f" * 64)))
-    order = [warned.warn_label, warned.main, warned.why_frame, warned.bar, warned.status_label]
-    assert _top_to_bottom(warned) == order  # warning, canvas and panel, why log, replay bar, status line
-    packed = warned._root.pack_slaves()  # the packing order too: it decides who is squeezed when the window is small
-    assert packed == [warned.status_label, warned.bar, warned.warn_label, warned.main, warned.why_frame]
+    order = [warned.title_label, warned.warn_label, warned.main, warned.why_frame, warned.bar, warned.status_label]
+    assert _top_to_bottom(warned) == order  # title, warning, canvas and panel, why log, replay bar, status line
+    packed = warned._parent.pack_slaves()  # the packing order too: it decides who is squeezed when the window is small
+    assert packed == [warned.title_label, warned.status_label, warned.bar, warned.warn_label, warned.main,
+                      warned.why_frame]
     warned.set_live(True)
     assert _top_to_bottom(warned) == [w for w in order if w is not warned.bar]
     warned.set_live(False)
     assert _top_to_bottom(warned) == order  # the bar comes back where it was
-    assert warned._root.pack_slaves() == packed  # ... right after the status line in the packing order
+    assert warned._parent.pack_slaves() == packed  # ... right after the status line in the packing order
     clean = make_window(make_folder(_sub(tmp_path, "b")))
-    assert _top_to_bottom(clean) == [clean.main, clean.why_frame, clean.bar, clean.status_label]
+    assert _top_to_bottom(clean) == [clean.title_label, clean.main, clean.why_frame, clean.bar, clean.status_label]
     clean.add_warning("clicking here takes focus from the game")
-    assert _top_to_bottom(clean) == [clean.warn_label, clean.main, clean.why_frame, clean.bar, clean.status_label]
+    assert _top_to_bottom(clean) == [clean.title_label, clean.warn_label, clean.main, clean.why_frame, clean.bar,
+                                     clean.status_label]
     clean.add_warning("second")
-    assert _top_to_bottom(clean) == [clean.warn_label, clean.main, clean.why_frame, clean.bar, clean.status_label]
+    assert _top_to_bottom(clean) == [clean.title_label, clean.warn_label, clean.main, clean.why_frame, clean.bar,
+                                     clean.status_label]
 
 
 def test_6_the_log_scrolls_to_the_current_line(tmp_path, make_window, monkeypatch):
@@ -857,3 +892,63 @@ def test_5_a_status_from_a_failed_read_goes_when_a_show_needs_no_file(tmp_path, 
     window.set_status("something else")  # a status somebody else set is not ours to clear
     window.show(0)
     assert window._status.get() == "something else"
+
+
+# RT-4: the view is hosted in a Frame (route tab plan RT-4; spec 5.9, 5.13) ---------------------------------------------
+
+
+def _loaded(folder):
+    return load_folder(folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD).unwrap()
+
+
+def _widgets(window) -> list[tk.Misc]:
+    """The widgets the window keeps as attributes (and in its dicts of buttons)."""
+    found = []
+    for value in vars(window).values():
+        found += list(value.values()) if isinstance(value, dict) else [value]
+    return [w for w in found if isinstance(w, tk.Misc)]
+
+
+def test_view_packs_into_a_given_frame(tmp_path, roots):
+    root = open_root()
+    roots.append(root)
+    root.title("host")
+    frame, sibling = tk.Frame(root), tk.Frame(root)
+    folder = make_folder(tmp_path)
+    window = RouteViewWindow(frame, folder, _loaded(folder), live=False)
+    assert root.winfo_children() == [frame, sibling]  # it made nothing beside the Frame it was given
+    assert sibling.winfo_children() == [] and frame.pack_slaves() != []
+    widgets = [w for w in _widgets(window) if w is not frame]  # the window keeps its parent too
+    assert window.canvas in widgets and window.title_label in widgets and window.bar in widgets and len(widgets) > 20
+    assert all(str(w).startswith(str(frame) + ".") for w in widgets), [str(w) for w in widgets]
+    assert root.title() == "host"  # the view never writes the window's title
+    assert window.title_label.cget("text").startswith("Route view")
+    assert window.title_label.master is frame and window.title_label.pack_info()["side"] == "top"
+
+
+def test_the_picture_is_made_in_the_hosts_tcl_interpreter(tmp_path, roots):
+    """A view hosted in a second root draws on that root's canvas: its `PhotoImage` is made with `master=` the parent
+    (without it Pillow uses the first root, and the canvas finds no such image)."""
+    first, host = open_root(), open_root()
+    roots.extend([first, host])
+    folder = make_folder(tmp_path)
+    Image.new("RGB", (162, 82), (10, 20, 30)).save(folder / "minimap.png")
+    window = RouteViewWindow(tk.Frame(host), folder, _loaded(folder), live=False)
+    (bg,) = window.canvas.find_withtag("bg")
+    assert window.canvas.itemcget(bg, "image") == str(window.shown_photo)
+    assert window.shown_photo.width() == 162 * window.scale
+
+
+def test_destroy_removes_its_widgets(tmp_path, make_window):
+    window = make_window(make_folder(tmp_path))
+    frame = window._parent
+    assert frame.winfo_children() != []
+    window.btn_first.invoke()
+    window.play_buttons[4].invoke()
+    assert window._speed == 4.0
+    tick = window.after_calls[-1][1]  # the play tick that is scheduled when the view goes
+    window.destroy()
+    assert frame.winfo_children() == [] and frame.winfo_exists()  # its widgets go; the Frame it was given stays
+    tick()
+    assert window.index == 0 and window._speed is None  # the queued tick found a new generation and did nothing
+    window.destroy()  # a second call is a no-op, not a TclError on the destroyed widgets

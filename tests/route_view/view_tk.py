@@ -28,15 +28,16 @@ def open_root() -> tk.Tk:
     raise AssertionError("unreachable")
 
 
-def record_after(root: tk.Tk) -> list[tuple[int, Callable[[], object] | None]]:
-    """Replace `root.after` by a recorder of `(delay_ms, callback)`; nothing is ever scheduled. Returns the list."""
+def record_after(widget: tk.Misc) -> list[tuple[int, Callable[[], object] | None]]:
+    """Replace `widget.after` (a root or the Frame a view is hosted in) by a recorder of `(delay_ms, callback)`; nothing
+    is ever scheduled. Returns the list."""
     calls: list[tuple[int, Callable[[], object] | None]] = []
 
     def after(ms, func=None, *args):
         calls.append((ms, func))
         return f"after#{len(calls)}"
 
-    root.after = after  # type: ignore[method-assign]
+    widget.after = after  # type: ignore[method-assign]
     return calls
 
 

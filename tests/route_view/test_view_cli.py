@@ -81,7 +81,7 @@ def test_11_the_follow_option_is_required(capsys):
     assert stop.value.code == 2 and "--follow" in capsys.readouterr().err
 
 
-def test_12_a_run_folder_opens_a_window_on_its_last_step(tmp_path, capsys, monkeypatch, no_git):
+def test_12_a_run_folder_opens_a_window_on_its_last_step(tmp_path, capsys, monkeypatch, no_git, windows):
     folder = make_folder(tmp_path)
     root = open_root()
     try:
@@ -94,8 +94,9 @@ def test_12_a_run_folder_opens_a_window_on_its_last_step(tmp_path, capsys, monke
         assert len(lines) == 1 and re.fullmatch(r"window built in \d+\.\d\d s", lines[0]), out
         assert shown == ["deiconify"]
         assert root.state() == "withdrawn"  # only the recorder was called: nothing was shown
-        assert root.title().startswith("Route view · ended: max_laps")
-        assert root.title().endswith("· ended")  # the last step is `end`
+        assert root.title() == f"Route view · {folder}"  # set once by `main`; the window never writes it (RT-4)
+        label = windows[-1].title_label.cget("text")
+        assert label.startswith("Route view · ended: max_laps") and label.endswith("· ended")  # the last step is `end`
     finally:
         destroy_all([root])
 

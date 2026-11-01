@@ -3,7 +3,8 @@ RT-4: the claim, ready and Win32 focus tests went with their code, spec 5.13).
 
 Every Tk root is real and withdrawn (`view_tk.open_root`), has no mainloop and records `after`; `withdraw` and
 `deiconify` are replaced by recorders that never call Tk's own, so nothing is ever shown and nothing takes focus, and a
-test that expects no window call checks the recorder. Each root is destroyed at teardown. The clock is a `FakeClock`.
+test that expects no window call checks the recorder. The title is the window's `title_label` (RT-4): the view writes
+no title on the root. Each root is destroyed at teardown. The clock is a `FakeClock`.
 """
 
 import os
@@ -94,6 +95,10 @@ def _add_frame(folder: Path, i: int, seconds: float, data: bytes | None = None) 
 
 def _status(window) -> str:
     return window._status.get()
+
+
+def _title(window) -> str:
+    return window.title_label.cget("text")
 
 
 def _spy_loads(monkeypatch, window) -> list[str]:
@@ -203,7 +208,7 @@ def test_1_following_a_folder_while_a_writer_thread_writes_it(tmp_path, roots, m
     model = t.window.model
     assert model is not None and len(model.events) == 26 and model.ended and t.live.ended
     assert t.window.bar.winfo_manager() == "pack" and not t.window.live
-    assert t.root.title().startswith("Route view · ended: max_laps")
+    assert _title(t.window).startswith("Route view · ended: max_laps")
     assert t.window.shown_background == "frames/frame_000024.png"
     scheduled = len(t.after)
     assert scheduled < ticks  # the tick that read `end` scheduled nothing
@@ -264,24 +269,24 @@ def test_4_a_torn_last_line_and_ten_silent_seconds(tmp_path, roots, monkeypatch)
     t = _live(roots, monkeypatch, folder, clock=clock)
     t.live.tick()
     assert len(t.window.model.events) == 5
-    assert t.root.title().startswith("Route view · LIVE · ") and SILENT not in t.root.title()
+    assert _title(t.window).startswith("Route view · LIVE · ") and SILENT not in _title(t.window)
     clock.t = SILENT_S - 0.1
     t.live.tick()
-    assert SILENT not in t.root.title() and _status(t.window) == ""
+    assert SILENT not in _title(t.window) and _status(t.window) == ""
     clock.t = SILENT_S
     t.live.tick()
-    assert t.root.title().startswith(f"Route view · LIVE · {SILENT} · ")
+    assert _title(t.window).startswith(f"Route view · LIVE · {SILENT} · ")
     assert _status(t.window) == HINT and "console" in HINT
     assert t.after[-1] == (POLL_MS, t.live.tick)  # it keeps following
     _append(folder / STEPS_FILE, LINES[5][12:])
     clock.t = SILENT_S + 5
     t.live.tick()
     assert len(t.window.model.events) == 6
-    assert t.root.title().startswith("Route view · LIVE · ") and SILENT not in t.root.title()
+    assert _title(t.window).startswith("Route view · LIVE · ") and SILENT not in _title(t.window)
     assert _status(t.window) == ""
     clock.t = 2 * SILENT_S + 5  # ten more silent seconds from the sixth line
     t.live.tick()
-    assert SILENT in t.root.title()
+    assert SILENT in _title(t.window)
 
 
 # 5 ----------------------------------------------------------------------------------------------------------------
@@ -333,7 +338,7 @@ def test_end_switches_to_replay_without_window_calls(tmp_path, roots, monkeypatc
     assert t.window.live is False and t.live.ended is True
     assert t.log == []  # neither `withdraw` nor `deiconify` was called on the root
     assert t.window.bar.winfo_manager() == "pack"
-    assert t.root.title().startswith("Route view · ended: max_laps · ")
+    assert _title(t.window).startswith("Route view · ended: max_laps · ")
     assert len(t.after) == 1  # no further tick
     t.live.tick()
     assert len(t.after) == 1 and t.log == []
