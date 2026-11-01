@@ -29,22 +29,27 @@ RUN_NAME = "2026-10-31T140231Z"
     (" 2 ", "1.5", "60", (2, 1.5, 60)),
     ("1", " 0.5 ", " 1 ", (1, 0.5, 1)),
     ("", repr(threading.TIMEOUT_MAX / 60), "5", (None, threading.TIMEOUT_MAX / 60, 5)),  # "at most": the top is valid
+    ("007", "2.", "05", (7, 2.0, 5)),  # leading zeros; a point with no digits after it (RT-7-S1 M2)
+    ("", ".5", "5", (None, 0.5, 5)),
 ])
 def test_validate_settings_accepts(laps, minutes, countdown, expected):
     assert validateSettings(laps, minutes, countdown) == (expected, None)
 
 
-@pytest.mark.parametrize("laps", ["0", "-1", "1.5", "abc", "1_0", "+2", "²"])
+# "\uff12" fullwidth 2, "\u0663" Arabic-Indic 3; past Python's 4300-digit int() limit is refused, not raised (RT-7-S1 M1)
+@pytest.mark.parametrize("laps", ["0", "-1", "1.5", "abc", "1_0", "+2", "²", "\uff12", "\u0663", pytest.param("9" * 4301, id="9x4301"),
+                                  pytest.param("0" * 4300 + "1", id="0x4300+1")])
 def test_validate_settings_table_laps(laps):
     assert validateSettings(laps, "", "5") == (None, LAPS_ERROR)
 
 
-@pytest.mark.parametrize("minutes", ["0", "-1", "abc", "nan", "inf", "1e400", "1_0", str(threading.TIMEOUT_MAX / 60 * 1.01)])
+@pytest.mark.parametrize("minutes", ["0", "-1", "abc", "nan", "inf", "1e400", "1_0", str(threading.TIMEOUT_MAX / 60 * 1.01),
+                                     "+2", "1e1", "1e-300", "\uff12", "\u0663", "."])  # ASCII digits, one point (M2)
 def test_validate_settings_table_minutes(minutes):
     assert validateSettings("", minutes, "5") == (None, MINUTES_ERROR)
 
 
-@pytest.mark.parametrize("countdown", ["0", "61", "", "2.5", "-3", "abc"])
+@pytest.mark.parametrize("countdown", ["0", "61", "", "2.5", "-3", "abc", "+5", "\uff15", pytest.param("9" * 4301, id="9x4301")])
 def test_validate_settings_table_countdown(countdown):
     assert validateSettings("", "", countdown) == (None, COUNTDOWN_ERROR)
 
@@ -84,6 +89,8 @@ def folder(tmp_path):
     (0, "none/", "Ended (none/)."),  # choice 3's "none" comes only with codes 2-5 and 9, which map by code
     (0, "stopped/", "Ended (stopped/)."),
     (0, "xyz/abc", "Ended (xyz/abc)."),
+    (11, "none/", "Ended (exit 11, none/)."),  # a non-zero code no producer sends: the code is shown (RT-7-S1 S1-a)
+    (8, "stopped/hotkey", "Ended (exit 8, stopped/hotkey)."),
 ])
 def test_ended_text_table(code, text, expected):
     assert endedText(code, text, None, False) == expected
@@ -126,7 +133,7 @@ def test_ended_text_suffix_follows_replay_open_only(folder):
 
 @pytest.mark.parametrize("code, text", [
     (0, "stopped/app_focus"), (0, "cancelled/app_focus"), (0, "cancelled/countdown_focus"), (0, "stopped/window_close"),
-    (0, "xyz/abc"), (0, "none/"), (2, "none/"), (3, "none/"), (4, "none/"), (5, "none/"), (9, "none/"),
+    (0, "xyz/abc"), (0, "none/"), (2, "none/"), (3, "none/"), (4, "none/"), (5, "none/"), (9, "none/"), (11, "none/"),
 ])
 def test_ended_text_other_prefixes_take_no_suffix(code, text, folder):
     assert endedText(code, text, folder, True) == endedText(code, text, folder, False)
@@ -309,6 +316,8 @@ def test_ready_and_not_ready_rows(make_rig):
     ("laps_var", "0", LAPS_ERROR), ("laps_var", "abc", LAPS_ERROR),
     ("minutes_var", "-1", MINUTES_ERROR), ("minutes_var", "nan", MINUTES_ERROR),
     ("countdown_var", "61", COUNTDOWN_ERROR), ("countdown_var", "", COUNTDOWN_ERROR),
+    pytest.param("laps_var", "9" * 4301, LAPS_ERROR, id="laps_var-9x4301"),
+    pytest.param("countdown_var", "9" * 4301, COUNTDOWN_ERROR, id="countdown_var-9x4301"),  # no drain raises (M1)
 ])
 def test_an_invalid_field_turns_start_off_and_its_text_is_the_status_line(make_rig, field, value, error):
     rig = make_rig()

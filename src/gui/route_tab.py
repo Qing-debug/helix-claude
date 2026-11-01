@@ -33,7 +33,8 @@ LAPS_ERROR = "Laps must be a whole number of 1 or more"
 MINUTES_ERROR = f"Minutes must be a number above 0 and at most {threading.TIMEOUT_MAX / 60:g}"
 COUNTDOWN_ERROR = "Countdown must be a whole number of seconds from 1 to 60"
 
-_WHOLE_NUMBER = re.compile(r"[0-9]+")  # ASCII digits only: int() would also take "1_0" and some other Unicode digits
+_WHOLE_NUMBER = re.compile(r"[0-9]+")  # ASCII digits only: int() would also take "+2", "1_0" and other Unicode digits
+_DECIMAL_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]*)?|\.[0-9]+")  # Minutes: ASCII digits and at most one point (RT-7-S1 M2)
 
 # spec 5.5, "Stop, the end of a run, and its words". Texts that need no folder name.
 _CLICKED_THE_APP = "Stopped: you clicked the app. Press Start to run again."
@@ -64,6 +65,17 @@ _CODE_TEXTS = {  # the walk's exit codes (walk.py:6-9); 6 and 7 name the run fol
 _WALKER_FAILED_CODES = (6, 7)
 
 
+def _wholeNumber(text: str) -> int | None:
+    """`text` (already stripped) as an int when it is ASCII digits only, else None. Past Python's int-digit limit (4300
+    digits by default) int() raises ValueError; that is None too, so the 100 ms drain never raises (RT-7-S1 M1)."""
+    if not _WHOLE_NUMBER.fullmatch(text):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def validateSettings(laps: str, minutes: str, countdown: str
                      ) -> tuple[tuple[int | None, float | None, int] | None, str | None]:
     """The three field strings (spec 5.3) as `((laps, minutes, countdown), None)`, or `(None, error text)` naming the
@@ -71,23 +83,20 @@ def validateSettings(laps: str, minutes: str, countdown: str
     laps = laps.strip()
     laps_value = None
     if laps:
-        if not _WHOLE_NUMBER.fullmatch(laps) or int(laps) < 1:
+        laps_value = _wholeNumber(laps)
+        if laps_value is None or laps_value < 1:
             return None, LAPS_ERROR
-        laps_value = int(laps)
     minutes = minutes.strip()
     minutes_value = None
     if minutes:
-        try:
-            minutes_value = float(minutes) if "_" not in minutes else math.nan  # float() takes "1_0" too
-        except ValueError:
-            minutes_value = math.nan
-        # nan fails both comparisons, inf and "1e400" fail the upper one (as the walk CLI's check, walk.py:98)
+        minutes_value = float(minutes) if _DECIMAL_NUMBER.fullmatch(minutes) else math.nan
+        # nan fails both comparisons; digits past the float range ("9" * 400) read as inf and fail the upper one
         if not (math.isfinite(minutes_value) and 0 < minutes_value <= threading.TIMEOUT_MAX / 60):
             return None, MINUTES_ERROR
-    countdown = countdown.strip()
-    if not _WHOLE_NUMBER.fullmatch(countdown) or not 1 <= int(countdown) <= 60:
+    countdown_value = _wholeNumber(countdown.strip())
+    if countdown_value is None or not 1 <= countdown_value <= 60:
         return None, COUNTDOWN_ERROR
-    return (laps_value, minutes_value, int(countdown)), None
+    return (laps_value, minutes_value, countdown_value), None
 
 
 def classKey(instance: object) -> str | None:
@@ -132,6 +141,8 @@ def endedText(code: int | None, text: str, folder: Path | None, replay_open: boo
         known = {"stopped": _STOPPED_TEXTS, "cancelled": _CANCELLED_TEXTS}.get(reason)
         if known is not None and source in known:
             return _with_replay(known[source], folder, replay_open)
+    if code != 0:
+        return f"Ended (exit {code}, {text})."  # a code no producer sends (walk.py:6-9); the code is the useful fact
     return f"Ended ({text})."  # a pair no producer sends; nothing raises
 
 
