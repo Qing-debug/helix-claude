@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 import pytest
-from view_runs import G, GIT_HEAD, REPO_ROOT, make_folder, make_legs_folder
+from view_runs import G, GIT_HEAD, REPO_ROOT, default_header, make_folder, make_legs_folder
 from view_tk import destroy_all, open_root
 
 from src.route_view import __main__ as cli
@@ -62,6 +62,19 @@ def test_11_a_folder_with_no_run_is_an_error_and_shows_no_window(tmp_path, capsy
     assert code == 2 and out == ""
     assert err.startswith("error: ") and str(empty) in err, err
     assert root.calls == ["withdraw", "destroy"]
+
+
+def test_11_a_run_the_view_cannot_show_is_an_error_and_shows_no_window(tmp_path, capsys, no_git, windows):
+    """RT-final-R-ADJ-D1 = A: a header time out of range (`load_folder` returns a Failure) prints one `error:` line with
+    the reason and exits 2, as a folder with no run does; it used to end in a traceback (exit 1)."""
+    folder = make_folder(tmp_path, G, default_header(wall_ns=10**30, perf_ns=5_000_000_000))
+    root = FakeRoot()
+    code = cli.main(["--follow", str(folder)], make_root=lambda: root, run_loop=False)
+    out, err = capsys.readouterr()
+    assert code == 2 and out == ""
+    assert err.startswith(f"error: {folder}: cannot show the run (OverflowError: "), err
+    assert err.count("\n") == 1 and err.endswith(")\n"), err
+    assert root.calls == ["withdraw", "destroy"] and windows == []
 
 
 def test_11_a_root_that_cannot_open_is_an_error(capsys, tmp_path, no_git):
