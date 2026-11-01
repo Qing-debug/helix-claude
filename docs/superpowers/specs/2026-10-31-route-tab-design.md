@@ -289,10 +289,14 @@ and the controls come back as for any end.
 Where the details go (H71): error details go to the app's console box (the Setup tab's `gui_console`, written by
 `MapleGUI._printToGUIConsole`, `gui.py:455-461`), not the terminal. That is the traceback of an exception that leaves
 `run()` (the worker's wrapper, 5.6) and (waits for Hong: RDO110-D3) every line a run in the app prints: the run
-driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>"), the live view's ("follow error: ...")
-and the idle live minimap's draw error ("live minimap error: ...", not again while it repeats).
+driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>"), the failure lines of the components under it
+(the stop control's, the cleanup's, the walker's and the step log's), the live view's ("follow error: ...") and the
+idle live minimap's draw error ("live minimap error: ...", not again while it repeats).
 `RunSession` and `LiveController` each gain a keyword seam for their lines (`log`, `report`) whose default prints as
-today, so the CLI walk is unchanged. The worker never touches Tk: it puts each line on a queue of the tab's own, which
+today, so the CLI walk is unchanged. The components under the session (`runtime.run_cleanup` and `StopControl`, the
+walker, `StepLog`) take a `log` keyword of their own, defaulting to the same stderr print; `RunSession` passes each its
+own `log` with the error flag set (RT-8c piece 4b, ruling orch 111; the walker is frozen, and this keyword is the one
+exception besides the step observer). The worker never touches Tk: it puts each line on a queue of the tab's own, which
 the 100 ms drain writes into the box before the run events. One method of the tab writes every line, with a flag for
 errors, so errors can be coloured later; there are no colours now (H71). A replay that fails to open would print
 "Replay not opened: <the reason>" there with the status line unchanged (H72), but no load path is silent any more:
