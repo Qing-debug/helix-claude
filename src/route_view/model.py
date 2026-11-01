@@ -42,6 +42,7 @@ import io
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -402,6 +403,10 @@ class RunModel:
         return "off the graph"
 
     def _stamp(self, t_ns: int | None) -> str:
+        header = self.header
+        if t_ns is not None and header.wall_ns is not None and header.perf_ns is not None:  # spec 5.10: time of day
+            ms = (header.wall_ns + t_ns - header.perf_ns + 500_000) // 1_000_000
+            return f"{datetime.fromtimestamp(ms // 1000):%H:%M:%S}.{ms % 1000:03d}"
         ms = 0 if t_ns is None or self._t0 is None else max(0, (t_ns - self._t0 + 500_000) // 1_000_000)
         seconds, ms = divmod(ms, 1000)
         minutes, seconds = divmod(seconds, 60)

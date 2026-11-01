@@ -35,7 +35,7 @@ Spec: `docs/superpowers/specs/2026-10-27-route-view-design.md` (5.4 the window, 
 - `window.py` and `follow.py` never set a window title (`.title(...)`, `.wm_title(...)`): the view lives inside the app's window and writes its title text to `title_label`. Only `__main__.py` sets a title, on its own root. Test 10's title check enforces it.
 - Never open a replay while a walk runs. A replay window takes focus when clicked, and the board's keys go to whichever window has focus (root `CLAUDE.md`, Safety rules).
 - The planned why line's route is `preview.path`; the panel's Route line is the hops' route (`model.py:14-15`). They can differ where the hops leave the path at an assumed landing (nine pairs on the FF2 map, none in the simulator runs).
-- The why-line time is the elapsed time since the run's first event (`model.py:420-421`) as `mm:ss.mmm` (`h:mm:ss.mmm` past an hour; `RunModel._stamp`, `model.py:404-409`). It is open with Hong (RV3-D6, built as option A). The header's `wall_ns` and `perf_ns` (`step_log.py:83-84`) are recorded and not read by anything yet (RV4-D2 A).
+- The why-line time is the local time of day, `HH:MM:SS.mmm`, from the header's `wall_ns` plus `t_ns - perf_ns` (`RunModel._stamp`, `model.py:405-409`; spec 5.10, H55 QB117). A header without `wall_ns` (sim runs, legs-only folders) keeps the elapsed time since the run's first event as `mm:ss.mmm` (`h:mm:ss.mmm` past an hour; `model.py:410-415`). `wall_ns` and `perf_ns` are declared at `step_log.py:96-97`.
 - The scale buttons are in the replay bar, so they are hidden while the view is live; open with Hong (RV80-ADJ-D1).
 
 ## Tests and commands

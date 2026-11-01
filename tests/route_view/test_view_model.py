@@ -8,6 +8,7 @@ asserts them against labels computed from `preview(...)` directly) and are not r
 
 import dataclasses
 import time
+from datetime import datetime
 
 import pytest
 from returns.pipeline import is_successful
@@ -205,6 +206,23 @@ def test_2_the_headers_settle_and_stall_values_are_the_ones_in_the_lines(tmp_pat
     folder = make_folder(tmp_path, events, default_header(params=params))
     assert _load(folder).why[1:] == ["00:01.000 no progress for 7.25 s (no plan yet): stall counted",
                                      "00:02.000 did not settle within 3.5 s"]
+
+
+def test_why_time_of_day_from_wall_ns(tmp_path):
+    # The header's wall_ns is the wall clock at perf_ns, so an event at t_ns is at wall_ns + (t_ns - perf_ns) (spec 5.10).
+    wall, perf = 1_761_900_000_000_000_000, 5_000_000_000
+    events = [("leg", 5.0, 0, 5, (49, 28), (101, 24)), ("reached", 66.234, (101, 24))]
+    model = _load(make_folder(tmp_path, events, default_header(wall_ns=wall, perf_ns=perf)))
+    at = wall + 61_234_000_000  # the reached event: t_ns = perf_ns + 61.234 s
+    stamp = datetime.fromtimestamp(at // 1_000_000_000).strftime("%H:%M:%S") + f".{at // 1_000_000 % 1000:03d}"
+    assert model.why[1] == f"{stamp} reached #6"
+
+
+def test_why_elapsed_without_wall_ns(tmp_path):
+    # A sim header has no wall_ns: its why lines keep the elapsed form from the first event.
+    events = [("leg", 5.0, 0, 5, (49, 28), (101, 24)), ("reached", 66.234, (101, 24))]
+    model = _load(make_folder(tmp_path, events, default_header(source="sim", wall_ns=None, perf_ns=None)))
+    assert model.why[1] == "01:01.234 reached #6"
 
 
 # 3 ---------------------------------------------------------------------------------------------------------------
