@@ -807,6 +807,22 @@ def test_controls_locked_during_run_and_back_after(make_rig, monkeypatch):
     assert (tab.state, tab.status_var.get()) == ("ended", "Ended: you pressed Stop.")  # the text stays (choice 8)
 
 
+def test_a_field_changed_just_before_start_does_not_overwrite_the_end_text(make_rig):
+    """A field edited after the last idle drain and Start pressed with no drain between (the sim tool's pattern): the
+    first drain after the worker is cleared must not read the edit as a change and put Ready over the end text."""
+    rig = make_rig()
+    tab = rig.tab
+    tab.laps_var.set("2")
+    made, thread = _start(rig)
+    made.on_event(_event("ended", "stopped/button", code=0))
+    thread.finish()
+    tab.drainEvents()
+    tab.drainEvents()
+
+    assert tab.worker is None
+    assert (tab.state, tab.status_var.get()) == ("ended", "Ended: you pressed Stop.")
+
+
 def test_start_twice_builds_one_session(make_rig):
     rig = make_rig()
     rig.tab.startRun()

@@ -11,10 +11,10 @@ run writes `minimap.png` and its step log, the recorder saves frames and the liv
 
 `measure` walks the same settings twice: "cli" (`RunSession.run()` on the main thread, no Tk), then "app" (a real
 `MapleGUI` window whose Route tab presses Start itself, 500 ms after the window starts, and closes once the tab's
-worker is gone; the finish is read from steps.jsonl). It compares the PC's time from the stimulus to the send (`reaction_ms - waited_ms`) of the two runs, prints a
-table and writes `timing.json` into the run root. Exit 0 with a verdict, whatever it says; exit 2 on a refusal (a run
-that did not finish all its laps, too few sends) or a setup failure. An agent may run it on an idle PC (H75): the window
-it opens takes the keyboard.
+worker is gone; the finish is read from steps.jsonl). It compares the PC's time from the stimulus to the send
+(`reaction_ms - waited_ms`) of the two runs, prints a table and writes `timing.json` into the run root. Exit 0 with a
+verdict, whatever it says; exit 2 on a refusal (a run that did not finish all its laps, too few sends) or a setup
+failure. An agent may run it on an idle PC (H75): the window it opens takes the keyboard.
 
 `manual` opens the same sim app with the tab's own app-focus check and waits for Hong (plan H-2); exit 0 when the window
 closes. It stays Hong's (H75). F12 does nothing in the sim app: its stop control installs no keyboard hook.
