@@ -487,6 +487,16 @@ def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roo
     assert not t.window.model.ended and _title(t.window).startswith("Route view · ended: max_laps · ")
 
 
+@pytest.mark.parametrize("reason", [None, ""])
+def test_an_end_line_without_a_reason_reads_ended_no_reason(tmp_path, roots, monkeypatch, reason):
+    """RDO110-R m5: an `end` line with a null (or empty) reason still ends the run, and the title's mode part reads
+    `ended: no reason` (a replay's title does too)."""
+    lines = [*LINES[:25], *event_lines([("end", 9.0, reason, 0)])]
+    t = _live(roots, monkeypatch, _live_folder(tmp_path, lines))
+    t.live.tick()
+    assert t.live.ended and t.window.live and len(t.after) == 0 and t.log == []
+    assert _title(t.window).split(" · ")[1] == "ended: no reason"
+
 
 def test_m2b_an_event_the_model_rejects_every_time_is_retried_once_then_skipped_and_said(tmp_path, roots, monkeypatch,
                                                                                          capsys):
