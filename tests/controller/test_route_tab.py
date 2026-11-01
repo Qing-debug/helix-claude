@@ -523,15 +523,60 @@ def test_minutes_and_countdown_reach_the_session(make_rig):
     assert (settings.laps, settings.minutes, settings.countdown_s) == (None, 1.5, 60)
 
 
-def test_may_walk_is_true_until_rt9(make_rig):
+def test_may_walk_reads_only_the_flag(make_rig, monkeypatch):
+    """Spec 9: the factory's `may_walk` is `not app_has_keyboard.is_set()`; the worker calls it, so it makes no Tk call
+    (a Tk focus read off the Tk thread raises here)."""
     rig = make_rig()
     rig.tab.startRun()
     may_walk = rig.sessions[0].may_walk
-    assert may_walk() is True  # nothing sets app_has_keyboard until RT-9
-    rig.tab.app_has_keyboard.set()
-    assert may_walk() is False
-    rig.tab.app_has_keyboard.clear()
-    assert may_walk() is True
+    tk_thread = threading.current_thread()
+    real_focus_get = tk.Misc.focus_get
+
+    def focus_get_on_the_tk_thread_only(self):
+        if threading.current_thread() is not tk_thread:
+            raise AssertionError("focus_get called off the Tk thread")
+        return real_focus_get(self)
+
+    monkeypatch.setattr(tk.Misc, "focus_get", focus_get_on_the_tk_thread_only)
+    answers, errors = [], []
+
+    def read_on_a_worker():
+        try:
+            answers.append(may_walk())
+        except BaseException as error:
+            errors.append(error)
+
+    for flag_set in (True, False, True):
+        if flag_set:
+            rig.tab.app_has_keyboard.set()
+        else:
+            rig.tab.app_has_keyboard.clear()
+        assert may_walk() is (not flag_set)
+        worker = threading.Thread(target=read_on_a_worker)
+        worker.start()
+        worker.join(5)
+    assert errors == [] and answers == [False, True, False]
+
+
+@pytest.mark.parametrize("focused, has_keyboard", [(True, True), (False, False)])
+def test_start_reads_the_flag_once_from_focus_get(make_rig, monkeypatch, focused, has_keyboard):
+    """Spec 9: at Start the flag is read once from Tk's focus record; Start is no rise that stops the run."""
+    rig = make_rig()
+    tab = rig.tab
+    reads = []
+
+    def focus_get():
+        reads.append(tab.state)
+        return tab.start_button if focused else None
+
+    if not focused:
+        tab.app_has_keyboard.set()  # a stale set flag is cleared by the read
+    monkeypatch.setattr(rig.gui.gui, "focus_get", focus_get)
+    made, _ = _start(rig)
+    assert reads == ["ready"]  # once, before Connecting
+    assert tab.app_has_keyboard.is_set() is has_keyboard
+    assert made.may_walk() is (not has_keyboard)
+    assert made.stops == [] and tab.state == "connecting"
 
 
 def test_frame_checks_off_skips_the_minimap_and_character_checks(make_rig, monkeypatch):
@@ -1972,3 +2017,128 @@ def test_a_minimap_error_is_one_console_line(make_rig):
     tab.drainEvents()
     lines = [entry for entry in tab.order if entry[0] == "console"]
     assert len(lines) == 1 and lines[0][1].startswith("live minimap error: ") and lines[0][2] is True
+
+
+# The app-focus flag and the app_focus stop (spec 9, H64; RT-9). The root's `focus_get` is patched: in the withdrawn
+# test root Tk's focus record stays empty, and RT-6's SendMessage test covers the real record.
+
+def _focus_on(rig, monkeypatch):
+    """Patch the root's `focus_get`; returns a setter: `focus(True)` names a widget of ours, `focus(False)` None."""
+    current = {"widget": None}
+    monkeypatch.setattr(rig.gui.gui, "focus_get", lambda: current["widget"])
+
+    def focus(has):
+        current["widget"] = rig.tab.stop_button if has else None
+    return focus
+
+
+def _reread_twice_each(tab, focus, values):
+    for value in values:
+        focus(value)
+        tab.rereadFocus()
+        tab.rereadFocus()
+
+
+def _to_state(rig, made, kind):
+    made.on_event(_event("countdown", seconds_left=3) if kind == "countdown" else _event("running", "Running."))
+    rig.tab.drainEvents()
+    assert rig.tab.state == kind
+
+
+def test_focus_rise_during_countdown_stops_once(make_rig, monkeypatch):
+    _rise_stops_once(make_rig, monkeypatch, "countdown")
+
+
+def test_focus_rise_while_running_stops_once(make_rig, monkeypatch):
+    _rise_stops_once(make_rig, monkeypatch, "running")
+
+
+def _rise_stops_once(make_rig, monkeypatch, kind):
+    """None then a widget, two re-reads each, is one rise and one `stop("app_focus")`; the state and the status line
+    stay (the `ended` that follows shows the text)."""
+    rig = make_rig()
+    tab = rig.tab
+    focus = _focus_on(rig, monkeypatch)
+    made, _ = _start(rig)
+    _to_state(rig, made, kind)
+    status = tab.status_var.get()
+    _reread_twice_each(tab, focus, [False, True])
+    assert made.stops == ["app_focus"]
+    assert tab.app_has_keyboard.is_set() and made.may_walk() is False
+    assert (tab.state, tab.status_var.get()) == (kind, status)
+    _reread_twice_each(tab, focus, [True])  # still the app: no second rise
+    assert made.stops == ["app_focus"]
+
+
+def test_focus_rise_does_nothing_before_start_while_connecting_and_after_end(make_rig, monkeypatch):
+    rig = make_rig()
+    tab = rig.tab
+    focus = _focus_on(rig, monkeypatch)
+    _reread_twice_each(tab, focus, [False, True, False, True])  # before Start: the flag follows, nothing to stop
+    assert tab.session is None and tab.app_has_keyboard.is_set() and tab.state == "ready"
+    focus(False)
+    made, thread = _start(rig)
+    assert tab.state == "connecting"
+    _reread_twice_each(tab, focus, [True, False, True])  # connecting: no key sent yet; the countdown's end reads it
+    assert made.stops == [] and tab.app_has_keyboard.is_set()
+    _reread_twice_each(tab, focus, [False])
+    made.on_event(_event("ended", "stopped/button", code=0))
+    thread.finish()
+    tab.drainEvents()
+    assert tab.state == "ended" and tab.worker is None
+    _reread_twice_each(tab, focus, [True, False, True])  # after the end
+    assert made.stops == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("stopped/app_focus", "Stopped: you clicked the app. Press Start to run again."),
+    ("cancelled/app_focus", "Stopped: you clicked the app. Press Start to run again."),
+    ("cancelled/countdown_focus",
+     "Not started: click the game first. Press Start, then click the game before the countdown ends."),
+])
+def test_app_focus_texts(make_rig, text, expected):
+    """H73 (Hong answered A); spec 5.5's `app_focus` and `countdown_focus` rows, on the status line after `ended`."""
+    assert endedText(0, text, None) == expected
+    rig = make_rig()
+    made, thread = _start(rig)
+    made.on_event(_event("ended", text, code=0))
+    thread.finish()
+    rig.tab.drainEvents()
+    assert rig.tab.status_var.get() == expected
+
+
+def test_focus_rise_then_stop_keeps_app_focus(make_rig, monkeypatch):
+    """H73 (Hong answered A): a press on Stop while walking is first a click on the app; the rise's stop lands first,
+    Stop still sends its own, and the session keeps the first trigger (`runtime.py:6`), so the click text shows."""
+    rig = make_rig()
+    tab = rig.tab
+    focus = _focus_on(rig, monkeypatch)
+    made, thread = _start(rig)
+    _to_state(rig, made, "running")
+    _reread_twice_each(tab, focus, [False, True])
+    tab.stopRun()
+    assert made.stops == ["app_focus", "button"]
+    assert (tab.state, tab.status_var.get()) == ("stopping", STOPPING)
+    made.on_event(_event("ended", "stopped/app_focus", code=0))
+    thread.finish()
+    tab.drainEvents()
+    assert tab.status_var.get() == "Stopped: you clicked the app. Press Start to run again."
+
+
+def test_focus_on_a_widget_tkinter_did_not_make_is_the_app(make_rig, monkeypatch):
+    """`focus_get()` raises KeyError when Tk's record names a widget Tk made itself (a Combobox drop-down's list,
+    tkinter's `nametowidget`): that is still one of our widgets, so the app has the keyboard."""
+    rig = make_rig()
+    tab = rig.tab
+    focus = _focus_on(rig, monkeypatch)
+    made, _ = _start(rig)
+    _to_state(rig, made, "countdown")
+
+    def popdown_focus():
+        raise KeyError("popdown")
+
+    focus(False)
+    tab.rereadFocus()
+    monkeypatch.setattr(rig.gui.gui, "focus_get", popdown_focus)
+    tab.rereadFocus()
+    assert tab.app_has_keyboard.is_set() and made.stops == ["app_focus"]

@@ -286,7 +286,7 @@ class RouteTab:
         self.session: RunSession | None = None  # annotated here: a class-level `session:` would hide the module
         self.worker = None
         self.size_thread = None
-        self.app_has_keyboard = threading.Event()  # nothing sets it until RT-9
+        self.app_has_keyboard = threading.Event()  # spec 9: set and cleared by rereadFocus on the Tk thread only
         self.status_var = tk.StringVar(master=parent)
         self.map_class_var = tk.StringVar(master=parent)
         self.laps_var = tk.StringVar(master=parent, value="")  # empty: until stopped
@@ -688,9 +688,10 @@ class RouteTab:
     def startRun(self) -> None:
         """The Start button: the field checks, then the six checks of spec 5.4 in order, stopping at the first that
         fails and writing its text to the status line (never a dialog). With all of them passed it builds the run's
-        session from the settings, locks the controls, shows Connecting and starts the worker. A press while a worker
-        exists (Start greyed out but pressed anyway, or pressed again while Stopping) does nothing: one worker at most.
-        Nor does one while the window waits to close (a drain may give Start back before the close poll runs).
+        session from the settings, reads the app-focus flag once (spec 9), locks the controls, shows Connecting and
+        starts the worker. A press while a worker exists (Start greyed out but pressed anyway, or pressed again while
+        Stopping) does nothing: one worker at most. Nor does one while the window waits to close (a drain may give
+        Start back before the close poll runs).
 
         Just before the worker starts, garbage is collected here and automatic collection is turned off until the
         worker is cleared (RT-8a I1). A worker that cannot be built or started ends the run on the tab at once, with
@@ -729,6 +730,7 @@ class RouteTab:
         self._ended_seen = False
         self._countdown_first = None
         self._polls_alive = 0
+        self.rereadFocus()  # spec 9: the flag is read once at Start (still idle here, and no worker: no stop)
         self._lockControls(True)
         self._showMinimap()  # before the collection below, so the dropped view is collected on this thread
         self.state = "connecting"
@@ -782,5 +784,31 @@ class RouteTab:
         self.stop_button.configure(state="normal" if locked else "disabled")
 
     def _mayWalk(self) -> bool:
-        """The session's `may_walk` (spec 9): the walk goes on unless the app has the keyboard; RT-9 sets the flag."""
+        """The session's `may_walk` (spec 9), called on the worker at the countdown's end: the walk starts unless the
+        app has the keyboard. It only reads the flag (a `threading.Event`, set and cleared by `rereadFocus` on the Tk
+        thread) and makes no Tk call."""
         return not self.app_has_keyboard.is_set()
+
+    def rereadFocus(self) -> None:
+        """The app-focus re-read (spec 9, H64), on the Tk thread only: the root's `<FocusIn>` and `<FocusOut>` bindings
+        schedule it with `after_idle` (`MapleGUI._setupGUI`) and Start calls it once. `focus_get()` reads Tk's own
+        record of which of our widgets has the keyboard (no Windows call): a widget sets `app_has_keyboard`, None
+        clears it. A KeyError from it means the record names a widget Tk made itself (a Combobox drop-down's list,
+        which tkinter's `nametowidget` does not know), still one of ours. Focus moving between two of our widgets
+        reads a widget both times, so it is no rise. On a rise (clear, then set) in the countdown or while walking the
+        user clicked the app: `session.stop("app_focus")`, which returns at once, after the flag is set (a worker
+        that reads the flag after the stop sees it set); the state and the status line wait for the `ended`, so a
+        press on Stop that follows still sends `button` (H73). Connecting is left alone: no key is sent yet, and
+        the countdown's end reads the flag (`_mayWalk`)."""
+        try:
+            has_keyboard = self._gui.gui.focus_get() is not None
+        except KeyError:
+            has_keyboard = True
+        rose = has_keyboard and not self.app_has_keyboard.is_set()
+        if has_keyboard:
+            self.app_has_keyboard.set()
+        else:
+            self.app_has_keyboard.clear()
+        run = self.session
+        if rose and run is not None and self.worker is not None and self.state in ("countdown", "running"):
+            run.stop("app_focus")
