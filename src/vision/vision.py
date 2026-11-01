@@ -80,6 +80,5 @@ def capture_and_process_minimap(sharedInfo):
             with sharedInfo.minimap_frame_lock:
                 sharedInfo.minimap_frame = cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB)
             minimap_frame_counter += 1
-            cv2.imshow("Minimap", minimap_frame)
-            cv2.waitKey(FRAME_DELAY_MS)  # for some reason, longer delay time == lower occurrence of camera.grab() returning none regardless of the content
+            time.sleep(FRAME_DELAY_MS / 1000)  # for some reason, longer delay time == lower occurrence of camera.grab() returning none regardless of the content
             time.sleep(THREAD_SLEEP_DURATION_S)  # give time for other threads (like the pathfinding thread) to run.
