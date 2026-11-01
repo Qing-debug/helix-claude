@@ -10,6 +10,7 @@ import tkinter as tk
 import weakref
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
+import types
 from types import SimpleNamespace
 
 import numpy as np
@@ -2032,6 +2033,14 @@ def _focus_on(rig, monkeypatch):
     return focus
 
 
+def _real_after_idle(rig, monkeypatch):
+    """Put the root's real `after` back over `make_gui`'s recorder, so `after_idle` (which calls `after('idle', ...)`)
+    really schedules and `update_idletasks()` runs it; returns the root."""
+    root = rig.gui.gui
+    monkeypatch.setattr(root, "after", types.MethodType(tk.Misc.after, root))
+    return root
+
+
 def _reread_twice_each(tab, focus, values):
     for value in values:
         focus(value)
@@ -2068,6 +2077,18 @@ def _rise_stops_once(make_rig, monkeypatch, kind):
     assert (tab.state, tab.status_var.get()) == (kind, status)
     _reread_twice_each(tab, focus, [True])  # still the app: no second rise
     assert made.stops == ["app_focus"]
+    # The same through the root's binding: each generated event schedules one re-read, which update_idletasks runs.
+    # `focus_get` stays patched: a generated <FocusIn> does not change Tk's focus record (plan review RA3 M6, I2).
+    root = _real_after_idle(rig, monkeypatch)
+    focus(False)
+    root.event_generate("<FocusOut>")
+    root.update_idletasks()
+    assert not tab.app_has_keyboard.is_set() and made.stops == ["app_focus"]
+    focus(True)
+    root.event_generate("<FocusIn>")
+    root.event_generate("<FocusIn>")
+    root.update_idletasks()
+    assert tab.app_has_keyboard.is_set() and made.stops == ["app_focus", "app_focus"]  # one more: one rise
 
 
 def test_focus_rise_does_nothing_before_start_while_connecting_and_after_end(make_rig, monkeypatch):
@@ -2142,3 +2163,53 @@ def test_focus_on_a_widget_tkinter_did_not_make_is_the_app(make_rig, monkeypatch
     monkeypatch.setattr(rig.gui.gui, "focus_get", popdown_focus)
     tab.rereadFocus()
     assert tab.app_has_keyboard.is_set() and made.stops == ["app_focus"]
+
+
+def test_focus_moving_between_our_widgets_is_not_a_click(make_rig, monkeypatch):
+    """Spec 9: focus moving between two of our widgets is a <FocusOut> and a <FocusIn> in a row; both re-reads see a
+    widget, so there is no rise and no stop. Every widget of the window has the root's tag in its bindtags, so the
+    root's binding sees both; the events are generated on the root because, in the withdrawn test root, Tk delivers a
+    generated focus event on a child widget to no binding at all (tried, RT-9)."""
+    rig = make_rig()
+    tab = rig.tab
+    made, _ = _start(rig)
+    _to_state(rig, made, "running")
+    reads = []
+
+    def focus_get():
+        reads.append(1)
+        return tab.minutes_entry
+
+    monkeypatch.setattr(rig.gui.gui, "focus_get", focus_get)
+    tab.app_has_keyboard.set()  # the app had the keyboard
+    root = _real_after_idle(rig, monkeypatch)
+    assert "." in tab.laps_entry.bindtags() and "." in tab.minutes_entry.bindtags()
+    root.event_generate("<FocusOut>")
+    root.event_generate("<FocusIn>")
+    root.update_idletasks()
+    assert len(reads) == 2  # both events reached the root's binding and each re-read ran
+    assert made.stops == [] and tab.app_has_keyboard.is_set()
+
+
+def test_focus_bindings_with_a_route_tab_schedule_one_reread_each(make_rig):
+    """Pre-flight m6: with a tab, <FocusIn> and <FocusOut> on the root each schedule one `after_idle` re-read
+    (`make_gui`'s recorder sees `after('idle', ...)`), added to the root's bindings."""
+    rig = make_rig()
+    root = rig.gui.gui
+    assert root.bind("<FocusIn>") and root.bind("<FocusOut>")
+    rig.scheduled.clear()
+    root.event_generate("<FocusIn>")
+    root.event_generate("<FocusOut>")
+    assert rig.scheduled == [("idle", rig.tab.rereadFocus), ("idle", rig.tab.rereadFocus)]
+
+
+def test_no_focus_binding_without_a_route_tab(make_gui):
+    """Pre-flight m6: with the factory None there is no tab, so nothing is bound and a focus event schedules nothing."""
+    gui, _, scheduled = make_gui(route_tab_factory=None)
+    root = gui.gui
+    assert gui.route_tab is None
+    assert root.bind("<FocusIn>") == "" and root.bind("<FocusOut>") == ""
+    scheduled.clear()
+    root.event_generate("<FocusIn>")
+    root.event_generate("<FocusOut>")
+    assert scheduled == []

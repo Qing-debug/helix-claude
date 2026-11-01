@@ -277,11 +277,15 @@ class MapleGUI:
         self.minimap_status_label = tk.Label(parent, text=MINIMAP_NOT_FOUND_LABEL, bg='lightblue')
         self.minimap_status_label.pack(side=tk.TOP, pady=10)
 
-        # The Route tab goes last so its constructor can read every Setup-tab widget (and the focus bindings that
-        # call it, RT-9, bind after this line). With the factory None (a test of the window alone) the tab stays an empty
-        # frame and route_tab is None.
+        # The Route tab goes last so its constructor can read every Setup-tab widget; the focus bindings that call it
+        # come after it, and only with a tab (spec 9: each focus event of the window schedules one re-read of Tk's
+        # focus record). With the factory None (a test of the window alone) the tab stays an empty frame, route_tab is
+        # None and nothing is bound.
         if self._route_tab_factory is not None:
             self.route_tab = self._route_tab_factory(self.route_tab_frame, self)
+        if (tab := self.route_tab) is not None:
+            for sequence in ("<FocusIn>", "<FocusOut>"):
+                self.gui.bind(sequence, lambda _event: self.gui.after_idle(tab.rereadFocus), add="+")
 
     def _minimapReady(self):
         """True once the minimap area exists. Before that, say so in the console and return False: the buttons that
