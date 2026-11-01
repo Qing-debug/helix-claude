@@ -138,8 +138,10 @@ class SimSetup:
 
 
 def load_sim() -> Result[SimSetup, str]:
-    """The route's reach and the FF2 terrain, read once on the main thread before the window or any run starts, so the
-    tool's only `redirect_stdout` (in `session._load_route`) never overlaps another (DBG115)."""
+    """The route's reach and the FF2 terrain, read once on the main thread before the window or any run starts. Its
+    `redirect_stdout` (in `session._load_route`) runs before any thread exists. Each run's own route load ends before
+    that run's first event and the live view's model load starts only after `running`, so no two swaps overlap
+    (DBG115)."""
     route = session._load_route(FIXTURE, Kanna())
     if not is_successful(route):
         return Failure(route.failure())
