@@ -33,6 +33,8 @@ Where the plan is silent (each decided here, local and reversible):
   (`RunSteps.ended`, V1), so the window must not follow it live.
 - A frame index line must be a JSON object with an int `t_ns` and a str `file`; a blank line is a bad line (as
   `StepTail`).
+- A `planned` line's `cost_to_go_s` is formatted when the event is read (`_on_planned`), so a value the panel cannot
+  show fails `load_folder`, not a later `step` (RT-ADJ-2-D1 = A).
 - `RunModel.open` catches every exception of the graph build (the contract says it never fails): the text becomes the
   `route not shown:` warning.
 """
@@ -313,6 +315,7 @@ class RunModel:
         self._slots: list[_Slot] = []
         self._previews: dict[tuple[Pos, Pos], Result[Preview, str]] = {}
         self._plan_preview: dict[int, Preview | None] = {}  # planned event index -> its preview
+        self._plan_cost: dict[int, str] = {}  # planned event index -> its `cost_to_go_s` as the panel shows it
         self._frame_times: list[int] = []
         self._planned_idx: list[int] = []
         self._leg_idx: list[int] = []
@@ -479,6 +482,7 @@ class RunModel:
 
     def _on_planned(self, i: int, event: StepEvent, stamp: str) -> list[str]:
         d = event.data
+        cost = f"{d['cost_to_go_s']:.1f}"  # formatted at read time, before any state change: a bad value fails the load
         pos = d["pos"]
         pv, tail = self._preview_for(pos)
         lines: list[str] = []
@@ -508,6 +512,7 @@ class RunModel:
             plan += f" (aim x {pv.hops[0].landing[0]})"
         lines.append(plan)
         self._plan_preview[i] = pv
+        self._plan_cost[i] = cost
         self._planned_idx.append(i)
         self._plan, self._since, self._character = i, [], pos
         return lines
@@ -659,7 +664,7 @@ class RunModel:
         lines: list[str] = []
         names = [self.label(p) for p in _dedupe(towards)]
         if names:
-            lines.append(f"Route   you -> {' -> '.join(names)}   {data['cost_to_go_s']:.1f} s")
+            lines.append(f"Route   you -> {' -> '.join(names)}   {self._plan_cost[p_idx]} s")
         lines.append("Hops")
         lines.extend(f"  {h.n} {h.text}   {h.keys}{'   SENT' if h.sent else ''}" for h in hops)
         return hops, route, first_landing, lines

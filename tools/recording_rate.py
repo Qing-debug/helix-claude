@@ -24,7 +24,7 @@ def _t_ns(line: str, which: str) -> int:
         t_ns = json.loads(line)["t_ns"]
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError(f"bad line in {INDEX_NAME}: {which} line is not a record with a t_ns ({error!r})") from error
-    if not isinstance(t_ns, int) or isinstance(t_ns, bool):  # as route_view/model.py:255
+    if not isinstance(t_ns, int) or isinstance(t_ns, bool):  # as route_view/model.py:257
         raise ValueError(f"bad line in {INDEX_NAME}: {which} line has a t_ns that is not an integer ({t_ns!r})")
     return t_ns
 

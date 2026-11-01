@@ -2669,6 +2669,26 @@ def test_open_a_run_that_cannot_be_shown_puts_the_reason_on_the_status_line(make
     assert tab.console[console:] == []
 
 
+def test_open_a_torn_run_whose_plan_cannot_be_drawn_keeps_the_view(make_rig, tmp_path):
+    """RT-ADJ-2-D1 = A: a plan's cost the panel cannot format used to load and then fail in the first draw, after Open
+    had dropped the old view (orphan widgets, no Back button). Now the load fails with the reason on the status line,
+    as for any value the model cannot show, and the shown view stays (spec 5.11)."""
+    rig = _hosting_rig(make_rig, tmp_path, cls=ConsoleLinesTab)
+    tab = rig.tab
+    folder = _saved_replay(rig)
+    _fill(rig)
+    _open(rig)
+    view = tab.view
+    assert view is not None and tab._backShown()
+    view_runs.make_folder(folder, [G[0], (*G[1][:6], "x", *G[1][7:]), G[2]])  # file ends in the plan with the bad cost
+    status, console = tab.status_var.get(), len(tab.console)
+    _open(rig)
+    assert status != tab.status_var.get() and str(folder) in tab.status_var.get()
+    assert "ValueError" in tab.status_var.get()
+    assert tab.view is view and _one_view(tab) and tab._backShown()
+    assert tab.console[console:] == []
+
+
 def test_open_with_no_row_selected_says_so_in_the_console(make_rig, tmp_path):
     """H72: a press on Open that opens nothing would be silent, so it prints one error line "Replay not opened: <the
     reason>" in the console box and changes neither the view nor the status line."""

@@ -641,6 +641,11 @@ def test_load_folder_fails_when_the_folder_has_no_run(tmp_path):
     ({"wall_ns": 10**30}, None, "OverflowError"),  # `datetime.fromtimestamp` past time_t
     ({"wall_ns": -10**18}, None, "OSError"),  # Windows: Errno 22 for a time before 1970 or after year 3000
     ({}, [("leg", 1.0, 0, 0, None, (113, 60)), ("stall", 2.0, "x")], "ValueError"),  # a wrong-typed field
+    # RT-ADJ-2-D1 = A: a plan's cost the panel cannot format failed only at `step`, so a run that ends in that plan,
+    # or has the whole of G after it, opened. Now it fails to load, as the other values do.
+    ({}, [G[0], (*G[1][:6], "x", *G[1][7:]), G[2]], "ValueError"),
+    ({}, [G[0], (*G[1][:6], None, *G[1][7:]), G[2]], "TypeError"),
+    ({}, [G[0], (*G[1][:6], "x", *G[1][7:]), *G[2:]], "ValueError"),  # the whole of G after it
 ])
 def test_load_folder_fails_on_a_value_it_cannot_show(tmp_path, header_changes, events, error):
     folder = make_folder(tmp_path, events, default_header(perf_ns=5_000_000_000, **header_changes))

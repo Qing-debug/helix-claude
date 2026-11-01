@@ -79,7 +79,7 @@ BAD_LAST_LINES = [
     "[1, 2]",  # not an object
     "not json",
     '{"t_ns": "x"}',  # not a number
-    '{"t_ns": true}',  # a bool is an int in Python (route_view/model.py:255 refuses it too)
+    '{"t_ns": true}',  # a bool is an int in Python (route_view/model.py:257 refuses it too)
     '{"t_ns": NaN}',
     '{"t_ns": Infinity}',
     '{"t_ns": 1.5}',
