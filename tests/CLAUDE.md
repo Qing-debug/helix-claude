@@ -7,7 +7,7 @@
 
 ## Speed
 
-- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 62 today: 42 in `tests/input`, 13 in `tests/route` (in `test_detection_check.py`, `test_preview_sim.py`, `test_route_preview.py`, `test_session.py`, `test_sim_steps.py`, `test_step_log.py` and `test_step_log_writer.py`) and 7 in `tests/route_view`. `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
+- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 63 today: 42 in `tests/input`, 14 in `tests/route` (in `test_detection_check.py`, `test_preview_sim.py`, `test_route_preview.py`, `test_route_tab_sim.py`, `test_session.py`, `test_sim_steps.py`, `test_step_log.py` and `test_step_log_writer.py`) and 7 in `tests/route_view`. `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
 - `tests/controller` takes about 3 s, `tests/route` about 32 s (about 22 s without its slow tests) and `tests/route_view` about 15 s (about 8 s without its slow tests); the rest of the full run is `tests/input`. Measured 2026-10-28 on the PC that ran the route view's docs check.
 
 ## Traps
