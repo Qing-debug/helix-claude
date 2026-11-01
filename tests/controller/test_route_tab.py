@@ -949,6 +949,28 @@ def test_run_lines_reach_the_console_box(make_rig):
     assert _console(rig.gui) == before.removesuffix("\n") + "walk failed: boom\nstopped: error\n\n"
 
 
+def test_lines_below_the_session_reach_the_console_box(make_rig, capsys):
+    """RT-8c piece 4b (ruling orch 111): the session hands its error line to the walker, the step log, the stop control
+    and run_cleanup (test_session.py pins that); called on a run thread, it reaches the console box as an error line at
+    the next drain, and nothing reaches the terminal."""
+    rig = make_rig(cls=ConsoleSpyTab, make_session=defaultSession)
+    tab = rig.tab
+    tab.startRun()
+    made = tab.session
+    assert isinstance(made, RunSession)
+    poster = threading.Thread(target=made._error_line, args=("cleanup failed: link.close: RuntimeError: x",))
+    poster.start()
+    poster.join()
+    assert "cleanup failed" not in _console(rig.gui)  # nothing touches Tk off its thread
+
+    tab.order.clear()
+    tab.drainEvents()
+
+    assert tab.order == [("console", "cleanup failed: link.close: RuntimeError: x", True)]
+    assert _console(rig.gui).endswith("cleanup failed: link.close: RuntimeError: x\n\n")
+    assert capsys.readouterr().err == ""
+
+
 # Garbage collection during a run (RT-8a I1, ruling RT-8a-review-D1 A): a collection on the worker that frees a Tk
 # object would call Tcl from it, so automatic collection is off while a worker lives and every collection runs on the
 # Tk thread: one just before the worker starts, one in the drain about every second.

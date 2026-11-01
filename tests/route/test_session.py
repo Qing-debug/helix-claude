@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 from returns.result import Failure, Success
 from test_walk_cli import (
+    BELOW_THE_SESSION,
     FIXTURE,
     REPO,
     TERRAIN,
@@ -28,6 +29,7 @@ from test_walk_cli import (
     _lines,
     _patch_walk_leg,
     _raise_kaboom,
+    break_below_the_session,
 )
 
 from src.classes.classes import Kanna
@@ -125,12 +127,13 @@ def env(monkeypatch, tmp_path):
         e.calls.append("wait_first_frame")
         return e.first
 
-    def make_stop(on_stop):
+    def make_stop(on_stop, *, log):
         if e.later_stop:
             stop = LaterStop(on_stop, e.log, e.stop_start, False, e.link)
         else:
             stop = HookStop(on_stop, e.log, e.stop_start, True, e.link)
         stop.on_start = e.on_start
+        stop.log_line = log
         e.stops.append(stop)
         return stop
 
@@ -656,3 +659,45 @@ def test_session_lines_go_to_log(env, tmp_path, capsys):
                             lambda text, error: lines.append((text, error)))
     assert len(lines) == 1 and lines[0][0].startswith("record failed: ") and lines[0][1] is True
     assert capsys.readouterr() == ("", "")
+
+
+def test_lines_below_the_session_go_to_log(env, monkeypatch, capsys):
+    """RT-8c piece 4b (H71; ruling orch 111): with `log` given, the lines printed below the session (the walker's two,
+    the step log's, run_cleanup's and the stop control's) reach it as error lines, in order, and none the terminal.
+    The CLI's side, word for word on stderr, is `test_k_lines_below_the_session_print_on_stderr_as_before`."""
+    env.lines = []
+    break_below_the_session(monkeypatch, env.link)
+    assert env.run() == 0
+    stop = env.stops[0]
+    assert stop.log_line is not None
+    stop.log_line("stop control: close hook failed: RuntimeError: y")
+    assert [(text, error) for text, error in env.lines if error] == [(text, True) for text in BELOW_THE_SESSION]
+    assert ("stopped: max_laps", False) in env.lines
+    assert capsys.readouterr() == ("", "")
+
+
+def test_session_hands_its_error_line_to_each_component(env, monkeypatch):
+    """The session builds the walker, the step log and the stop control, and calls run_cleanup, with one `log`: its
+    error line, which is its own `log` with the error flag set."""
+    env.lines = []
+    seen: dict[str, object] = {}
+    real_cleanup = runtime.run_cleanup
+
+    def cleanup(steps, *, log):
+        seen["run_cleanup"] = log
+        real_cleanup(steps, log=log)
+
+    monkeypatch.setattr(runtime, "run_cleanup", cleanup)
+
+    def run(self):
+        seen["walker"] = self._log_line
+        seen["step_log"] = vars(self._observer)["_log"]  # the observer is the session's StepLog
+        return Success(RunSummary(0, 0, "max_laps"))
+
+    monkeypatch.setattr(RouteWalker, "run", run)
+    made = env.build()
+    assert made.run() == 0
+    seen["stop_control"] = env.stops[0].log_line
+    assert seen == dict.fromkeys(("run_cleanup", "walker", "step_log", "stop_control"), made._error_line)
+    made._error_line("x")
+    assert env.lines[-1] == ("x", True)

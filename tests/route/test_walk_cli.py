@@ -2,11 +2,13 @@
 
 No test here installs a real hook except the Windows-only one marked below, and none sends a key."""
 
+import inspect
 import json
 import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,7 +20,7 @@ from returns.result import Failure, Result, Success
 from src.classes.classes import Kanna
 from src.input import input_layer
 from src.input.link import InputError
-from src.route import runtime, session, walk
+from src.route import runtime, session, step_log, walk
 from src.route.character import CharacterLocator
 from src.route.leg_log import LegOutcome, LegRecord, MemorySink, MoveEntry
 from src.route.runtime import StopControl
@@ -292,6 +294,83 @@ def test_trigger_before_start_calls_on_stop_once_started(hook, saved_sigint):
         stop.close()
 
 
+# ---- RT-8c piece 4b: the runtime's lines go through `log` (route tab H71); its default prints them on stderr as before
+
+def _raise_x() -> None:
+    raise RuntimeError("x")
+
+
+@pytest.mark.parametrize("given", [True, False])
+def test_run_cleanup_line_goes_to_log_or_stderr(capsys, given):
+    lines: list[str] = []
+    ran: list[str] = []
+    steps = [("a", _raise_x), ("b", lambda: ran.append("b"))]
+    if given:
+        runtime.run_cleanup(steps, log=lines.append)
+    else:
+        runtime.run_cleanup(steps)
+    assert ran == ["b"]  # the next step still runs
+    expected = "cleanup failed: a: RuntimeError: x"
+    assert lines == ([expected] if given else [])
+    assert capsys.readouterr() == ("", "" if given else expected + "\n")
+
+
+@pytest.mark.parametrize("given", [True, False])
+def test_stop_control_close_lines_go_to_log_or_stderr(monkeypatch, saved_sigint, capsys, given):
+    """A worker that does not end within the join and a close step that raises: one line each."""
+    def broken_remove() -> None:
+        raise RuntimeError("gone")
+
+    monkeypatch.setattr(StopControl, "_install_hook", lambda self: broken_remove)
+    monkeypatch.setattr(runtime, "_JOIN_S", 0.01)
+    release = threading.Event()
+
+    def on_stop() -> None:
+        release.wait(5.0)
+
+    lines: list[str] = []
+    stop = StopControl(on_stop, log=lines.append) if given else StopControl(on_stop)
+    assert is_successful(stop.start(sigint=False))
+    stop.trigger()
+    try:
+        stop.close()
+    finally:
+        release.set()
+        assert stop._worker is not None
+        stop._worker.join(5.0)
+    expected = ["stop control: the worker thread did not end (on_stop is still running)",
+                "stop control: close hook failed: RuntimeError: gone"]
+    assert lines == (expected if given else [])
+    assert capsys.readouterr() == ("", "" if given else "".join(line + "\n" for line in expected))
+
+
+def test_stop_control_passes_its_log_to_the_hook(monkeypatch):
+    """The hook's own two lines (`remove()` in `_install_keyboard_hook`) go to the stop control's `log`."""
+    seen: list[object] = []
+
+    def install(vk, on_key, *, log):
+        seen.append(log)
+        return lambda: None
+
+    monkeypatch.setattr(runtime, "_install_keyboard_hook", install)
+    lines: list[str] = []
+    StopControl(lambda: None, log=lines.append)._install_hook()
+    assert seen == [lines.append]
+
+
+def test_runtime_log_defaults_are_the_old_stderr_print(capsys):
+    for target in (runtime.run_cleanup, StopControl, runtime._install_keyboard_hook):
+        assert inspect.signature(target).parameters["log"].default is runtime._print_error, target
+    runtime._print_error("stop control: x")
+    assert capsys.readouterr() == ("", "stop control: x\n")
+
+
+def test_walk_hands_the_sessions_log_to_the_stop_control():
+    lines: list[str] = []
+    made = walk._make_stop_control(lambda: None, log=lines.append)
+    assert isinstance(made, StopControl) and made._log == lines.append
+
+
 def _shared(frame=None) -> SimpleNamespace:
     return SimpleNamespace(minimap_frame_lock=threading.Lock(), minimap_frame=frame)
 
@@ -392,6 +471,7 @@ class FakeStop:
         self.plays_at_trigger: int | None = None
         self.close_calls = 0
         self.sigint: bool | None = None  # what start() was called with (choice 16)
+        self.log_line: Callable[[str], None] | None = None  # the `log` the session built it with (RT-8c piece 4b)
 
     def start(self, sigint: bool = True):
         self.sigint = sigint
@@ -471,8 +551,9 @@ def sim(monkeypatch, tmp_path):
         env.link_calls += 1
         return env.link
 
-    def make_stop(on_stop):
+    def make_stop(on_stop, *, log):
         stop = FakeStop(on_stop, env.log, env.stop_start, env.stop_calls_on_stop, env.link)
+        stop.log_line = log
         env.stops.append(stop)
         return stop
 
@@ -752,6 +833,47 @@ def test_k_release_all_and_close_both_raising(sim, monkeypatch, capsys):
     assert sim.main("--laps", "1") == 0
     failed = [line for line in capsys.readouterr().err.splitlines() if line.startswith("cleanup failed:")]
     assert failed == ["cleanup failed: release_all: RuntimeError: r", "cleanup failed: link.close: RuntimeError: c"]
+
+
+BELOW_THE_SESSION = [  # RT-8c piece 4b: one line from each component below the session, in the order a run prints them
+    "leg log write failed (not reported again this run): disk full",  # the walker's sink failure
+    "route view observer failed, not called again this run: RuntimeError: boom",  # the walker's observer guard
+    "step log write failed (not reported again this run): bad event",  # the step log's writer
+    "step log: bad event",  # the session's own line about it
+    "cleanup failed: link.close: RuntimeError: x",  # run_cleanup
+    "stop control: close hook failed: RuntimeError: y",  # what the stop control prints, through the log it was given
+]
+
+
+def break_below_the_session(monkeypatch, link) -> None:
+    """Make the walker, the step log and run_cleanup each print one line (BELOW_THE_SESSION's first five)."""
+    real_run = RouteWalker.run
+
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    def run(self):
+        self._log(Failure("disk full"))
+        self._emit(boom)  # drops the step log as observer: its only event left is the cleanup's `end`
+        return real_run(self)
+
+    monkeypatch.setattr(RouteWalker, "run", run)
+    monkeypatch.setattr(step_log, "event_line", lambda event: Failure("bad event"))
+    link.close_raises = RuntimeError("x")
+
+
+def test_k_lines_below_the_session_print_on_stderr_as_before(sim, monkeypatch, capsys):
+    """The CLI is unchanged (RT-8c piece 4b): the walker's, the step log's, run_cleanup's and the stop control's lines
+    reach stderr through the session's default log, word for word, and none reaches stdout."""
+    sim.frame = np.zeros((4, 6, 3), np.uint8)  # minimap.png can be written, so the step log starts
+    break_below_the_session(monkeypatch, sim.link)
+    assert sim.main("--laps", "1") == 0
+    stop = sim.stops[0]
+    assert stop.log_line is not None
+    stop.log_line("stop control: close hook failed: RuntimeError: y")
+    out, err = capsys.readouterr()
+    assert err.splitlines() == BELOW_THE_SESSION
+    assert not any(line in out for line in BELOW_THE_SESSION)
 
 
 def test_k_keyboard_interrupt_in_a_step_is_reraised_after_the_last_step(sim):

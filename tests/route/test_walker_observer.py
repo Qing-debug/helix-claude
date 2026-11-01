@@ -112,7 +112,7 @@ class Rig:
     rngs: tuple
 
 
-def _rig(ff2, observer=None, *, noise=None, rg=None, config=SIM, positions=None, seed=1):
+def _rig(ff2, observer=None, *, noise=None, rg=None, config=SIM, positions=None, seed=1, log=None):
     """A sim rig as `sim/run.py:_replay_moves` builds one, with the four generators from one seed (as `_rngs`)."""
     rng_timing, rng_planner, rng_world, rng_positions = (
         np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(4))
@@ -126,7 +126,8 @@ def _rig(ff2, observer=None, *, noise=None, rg=None, config=SIM, positions=None,
     layer = InputLayer(spy, TimingModel(rng_timing))
     source = SimPositionSource(world, clock, noise.miss_p, rng_positions) if positions is None else positions
     sink = MemorySink()
-    walker = RouteWalker(rg, ff2.rotation, layer, source, clock, sink, rng_planner, config, observer=observer)
+    logged = {} if log is None else {"log": log}  # with no `log`, the walker's default (RT-8c piece 4b)
+    walker = RouteWalker(rg, ff2.rotation, layer, source, clock, sink, rng_planner, config, observer=observer, **logged)
     return Rig(walker, sink, link, spy, (rng_timing, rng_planner, rng_world, rng_positions))
 
 
@@ -412,6 +413,20 @@ def test_7_a_failing_observer_is_reported_once_and_never_called_again(ff2, capsy
     assert "route view observer failed" in err[0] and "boom" in err[0] and "RuntimeError" in err[0]
     assert [name for name, _ in observer.calls] == ["leg", "planned"]
     assert rig.sink.legs == plain.sink.legs and rig.sink.laps == plain.sink.laps
+
+
+@pytest.mark.parametrize("given", [True, False])
+def test_7_the_guard_and_a_sink_failure_report_through_log(ff2, monkeypatch, capsys, given):
+    """RT-8c piece 4b (route tab H71): the walker's two lines, the observer's failure and the first sink failure, go to
+    its `log` keyword once each and nothing to the terminal; with no `log` they are printed on stderr as before."""
+    lines: list[str] = []
+    rig = _rig(ff2, BoomOnPlanned(), log=lines.append if given else None)
+    monkeypatch.setattr(rig.sink, "write_leg", lambda record: Failure("disk full"))
+    assert is_successful(rig.walker.run())
+    expected = ["route view observer failed, not called again this run: RuntimeError: boom",
+                "leg log write failed (not reported again this run): disk full"]
+    assert lines == (expected if given else [])
+    assert capsys.readouterr() == ("", "" if given else "".join(line + "\n" for line in expected))
 
 
 # ---- 8. construction -----------------------------------------------------------------------------------------------

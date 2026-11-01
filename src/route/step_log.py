@@ -45,7 +45,7 @@ import queue
 import reprlib
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -457,13 +457,20 @@ def _leg_events(leg: Mapping[str, Any]) -> list[StepEvent]:
 _STOP = object()  # the writer thread's sentinel
 
 
+def _print_error(text: str) -> None:
+    """`StepLog`'s `log` default: the line on stderr, as the CLI prints it (its own copy: this module imports no other
+    module of the route package)."""
+    print(text, file=sys.stderr)
+
+
 class StepLog:
     """The walk's step observer (contract V3; it satisfies `walker.StepObserver` structurally and imports nothing from
     the walker). Each event method only puts a tuple of plain values on a `queue.SimpleQueue`, whose `put` never
     blocks; the daemon thread `step-log` encodes each one with `event_line` and appends it to `steps.jsonl` with one
     `write` and a `flush` (no fsync per line, spec 5.2). After `close` every call is dropped (RV3-D2 A2)."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, log: Callable[[str], None] = _print_error) -> None:
+        self._log = log  # the app run's log goes to the console box (route tab H71); the CLI's prints on stderr
         self._queue: queue.SimpleQueue[object] = queue.SimpleQueue()
         self._closed = False
         self._file: BinaryIO | None = None
@@ -623,7 +630,7 @@ class StepLog:
         handle.flush()
 
     def _fail(self, message: str) -> None:
-        """Keep the first failure and print it once."""
+        """Keep the first failure and report it once through `log`."""
         if self._failure is None:
             self._failure = message
-            print(f"step log write failed (not reported again this run): {message}", file=sys.stderr)
+            self._log(f"step log write failed (not reported again this run): {message}")

@@ -33,8 +33,9 @@ Where the plan is silent:
 
 Every line the session prints goes through its `log` keyword (route tab H71, RDO110-D3 A): the default,
 `_print_line`, prints it as walk always has (an error line on stderr, the rest on stdout), so the CLI is unchanged; the
-Route tab passes its own, which queues the line for the app's console box. Lines printed below the session (runtime's
-`run_cleanup` and stop control, the walker, the step log) are not this seam's and still print.
+Route tab passes its own, which queues the line for the app's console box. The components below the session (runtime's
+`run_cleanup` and stop control, the walker, the step log) get `_error_line`, the same `log` with the error flag set,
+through their own `log` keyword (RT-8c piece 4b, ruling orch 111).
 """
 
 import contextlib
@@ -109,6 +110,12 @@ class FrameHolder(Protocol):
 
     @property
     def minimap_frame(self) -> object: ...
+
+
+class MakeStop(Protocol):
+    """How `run()` builds its stop control: `runtime.StopControl` matches; `log` is the session's error line."""
+
+    def __call__(self, on_stop: Callable[[], None], *, log: Callable[[str], None]) -> runtime.StopControl: ...
 
 
 @dataclass(frozen=True)
@@ -301,7 +308,7 @@ class RunSession:
                  make_positions: Callable[[FrameHolder], PositionSource | Failure[str]] = runtime.make_positions,
                  wait_first_frame: Callable[[FrameHolder, float], Result[None, str]] = runtime.wait_first_frame,
                  make_link: Callable[[], RunLink] = BleLink, make_clock: Callable[[], Clock] = RealClock,
-                 make_stop: Callable[[Callable[[], None]], runtime.StopControl] = runtime.StopControl,
+                 make_stop: MakeStop = runtime.StopControl,
                  start_capture: Callable[[FrameHolder], object] | None = None,
                  may_walk: Callable[[], bool] | None = None,
                  sleep: Callable[[float], None] = time.sleep, sigint: bool = False,
@@ -346,6 +353,10 @@ class RunSession:
     def _flagged(self) -> bool:
         with self._stop_lock:
             return self._cancel is not None
+
+    def _error_line(self, text: str) -> None:
+        """The `log` the walker, the step log, the stop control and `run_cleanup` get: the session's own, as an error."""
+        self._log(text, True)
 
     def _on_stop(self) -> None:
         """The stop control's `on_stop`. It stops the walker only once `_hand_over` has handed it over:
@@ -470,9 +481,10 @@ class RunSession:
             sink = _LostLegSink(log, self._log)
             config = WalkerConfig(use_stimulus=True, leg_timeout_s=LEG_TIMEOUT_S, max_laps=s.laps)
             clock = self._make_clock()
-            step_log = StepLog()  # no I/O; every walk passes it (V7 step 3)
-            walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log)
-            stop = self._make_stop(self._on_stop)
+            step_log = StepLog(log=self._error_line)  # no I/O; every walk passes it (V7 step 3)
+            walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log,
+                                 log=self._error_line)
+            stop = self._make_stop(self._on_stop, log=self._error_line)
             sink.arm(stop.trigger, walker.stop_now)
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
@@ -608,5 +620,5 @@ class RunSession:
                 steps.append(("link.close", link.close))
             if stop_started and stop is not None:
                 steps.append(("stop.close", stop.close))
-            runtime.run_cleanup(steps)  # re-raises a held KeyboardInterrupt after every step ran (plan B19 cleanup)
+            runtime.run_cleanup(steps, log=self._error_line)  # re-raises a held KeyboardInterrupt after every step ran (plan B19 cleanup)
         return code

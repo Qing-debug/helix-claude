@@ -11,8 +11,8 @@ Windows-only names (`ctypes.wintypes`, `ctypes.WinDLL`, `ctypes.WINFUNCTYPE`) an
 functions only, so this module imports on Linux (plan hard rule 9).
 
 Where the plan is silent:
-- `close()` joins the worker and the hook thread for at most `_JOIN_S` each and prints a line to stderr if one is
-  still alive, as Feature A's listener does (`src/input/harness/listener.py:384-387`); it never waits for ever.
+- `close()` joins the worker and the hook thread for at most `_JOIN_S` each and writes a line through `log` if one
+  is still alive, as Feature A's listener does (`src/input/harness/listener.py:384-387`); it never waits for ever.
 - The hook swallows both the key-down and the key-up of the hotkey (PB-D2); only a key-down triggers.
 - A `trigger()` before `start()` is kept: the worker that `start()` launches then calls `on_stop` at once.
 - The lock is an `RLock` so a Ctrl+C on the main thread while it holds the lock cannot deadlock. If that Ctrl+C lands
@@ -43,10 +43,17 @@ _FRAME_POLL_S = 0.05   # wait_first_frame's polling period
 _NOT_INSTALLED = object()  # "start() did not install a SIGINT handler", kept apart from a previous handler of None
 
 
+def _print_error(text: str) -> None:
+    """The `log` default of `run_cleanup`, `StopControl` and the hook: the line on stderr, as the CLI prints it."""
+    print(text, file=sys.stderr)
+
+
 class StopControl:
-    def __init__(self, on_stop: Callable[[], None], hotkey_vk: int = 0x7B) -> None:  # 0x7B = F12 (PB-D2)
+    def __init__(self, on_stop: Callable[[], None], hotkey_vk: int = 0x7B, *,  # 0x7B = F12 (PB-D2)
+                 log: Callable[[str], None] = _print_error) -> None:
         self._on_stop = on_stop
         self._hotkey_vk = hotkey_vk
+        self._log = log  # the app run's log goes to the console box (route tab H71); the CLI's prints on stderr
         # Makes the first trigger() and the first close() one step each. Reentrant because Python runs the SIGINT
         # handler on the main thread between bytecodes, also while the main thread holds this lock (in trigger() from
         # walk's lost-leg sink, or in close()): a plain Lock would deadlock there (B19-R M1).
@@ -102,7 +109,7 @@ class StopControl:
 
     def _install_hook(self) -> Callable[[], None]:
         """The seam tests replace. Installs the hotkey hook on its own thread; returns remove()."""
-        return _install_keyboard_hook(self._hotkey_vk, self.trigger)
+        return _install_keyboard_hook(self._hotkey_vk, self.trigger, log=self._log)
 
     def _on_sigint(self, signum: int, frame: object) -> None:
         self.trigger("sigint")
@@ -121,7 +128,7 @@ class StopControl:
         self._wake.set()  # with no trigger the worker returns without calling on_stop
         worker.join(_JOIN_S)
         if worker.is_alive():
-            print("stop control: the worker thread did not end (on_stop is still running)", file=sys.stderr)
+            self._log("stop control: the worker thread did not end (on_stop is still running)")
 
     def _remove_hook(self) -> None:
         remove, self._remove = self._remove, None
@@ -136,15 +143,15 @@ class StopControl:
             signal.signal(signal.SIGINT, signal.default_int_handler if previous is None else previous)  # pyright: ignore[reportArgumentType]
         self._prev_sigint = _NOT_INSTALLED
 
-    @staticmethod
-    def _step(name: str, step: Callable[[], None]) -> None:
+    def _step(self, name: str, step: Callable[[], None]) -> None:
         try:
             step()
         except Exception as exc:
-            print(f"stop control: close {name} failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            self._log(f"stop control: close {name} failed: {type(exc).__name__}: {exc}")
 
 
-def _install_keyboard_hook(vk: int, on_key: Callable[[], None]) -> Callable[[], None]:
+def _install_keyboard_hook(vk: int, on_key: Callable[[], None], *,
+                           log: Callable[[str], None] = _print_error) -> Callable[[], None]:
     """A WH_KEYBOARD_LL hook on a daemon thread that calls `on_key()` on each key-down of `vk` and swallows that key.
 
     The pattern of Feature A's listener (`src/input/harness/listener.py:255-285`, `:368-388`). Raises `OSError`, after
@@ -217,11 +224,10 @@ def _install_keyboard_hook(vk: int, on_key: Callable[[], None]) -> Callable[[], 
     def remove() -> None:
         tid = state["tid"]
         if thread.is_alive() and tid is not None and not user32.PostThreadMessageW(tid, wm_quit, 0, 0):
-            print("stop control: could not post WM_QUIT to the hook thread", file=sys.stderr)
+            log("stop control: could not post WM_QUIT to the hook thread")
         thread.join(_JOIN_S)
         if thread.is_alive():
-            print("stop control: the hook thread did not exit; F12 may stay swallowed until the process ends",
-                  file=sys.stderr)
+            log("stop control: the hook thread did not exit; F12 may stay swallowed until the process ends")
 
     if not ready.wait(_HOOK_READY_S) or state["error"] is not None:
         error = state["error"] or "hook thread did not start"
@@ -260,16 +266,17 @@ def make_positions(shared) -> PositionSource | Failure[str]:
     return MinimapPositionSource(shared, located.unwrap())
 
 
-def run_cleanup(steps: Iterable[tuple[str, Callable[[], object]]]) -> None:
-    """Run every cleanup step in order (plan B19). A step that raises prints `cleanup failed: <name>: ...` and the
-    next step still runs; a `BaseException` (KeyboardInterrupt, SystemExit) is held and the first one re-raised after
-    every step ran."""
+def run_cleanup(steps: Iterable[tuple[str, Callable[[], object]]], *,
+                log: Callable[[str], None] = _print_error) -> None:
+    """Run every cleanup step in order (plan B19). A step that raises writes `cleanup failed: <name>: ...` through
+    `log` (by default on stderr) and the next step still runs; a `BaseException` (KeyboardInterrupt, SystemExit) is
+    held and the first one re-raised after every step ran."""
     held: BaseException | None = None
     for name, step in steps:
         try:
             step()
         except Exception as exc:
-            print(f"cleanup failed: {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            log(f"cleanup failed: {name}: {type(exc).__name__}: {exc}")
         except BaseException as exc:  # KeyboardInterrupt, SystemExit: hold it, keep going
             if held is None:
                 held = exc

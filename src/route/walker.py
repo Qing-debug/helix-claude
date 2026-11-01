@@ -20,13 +20,14 @@ Where the plan is silent:
   before `run` starts ends it at the first leg.
 - `run` releases the keys once on every return path, the empty-rotation `Failure` included (nothing was sent, so the
   call is harmless), and also when an exception leaves it.
-- A sink `Failure` is printed to stderr once per run, the first one, whether it came from `write_leg` or `write_lap`.
+- A sink `Failure` is reported through `log` (by default on stderr) once per run, the first one, whether it came from
+  `write_leg` or `write_lap`.
 - A lap record's `start_ns` is its first leg's `start_ns` and its `end_ns` is its last leg's `end_ns`; a leg that
   ends `STOPPED` or `LINK_DOWN` is written to the sink and counted in `RunSummary.legs`, its lap is not.
 - `max_laps` of 0 (or less) walks the approach leg only and returns reason `"max_laps"`.
 - The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
-  thread, and after its first exception it is reported once on stderr and not called again this run. With no observer
-  nothing else happens: each call site is one `is not None` test.
+  thread, and after its first exception it is reported once through `log` and not called again this run. With no
+  observer nothing else happens: each call site is one `is not None` test.
 """
 
 import math
@@ -55,6 +56,11 @@ _NS_PER_S = 1_000_000_000
 _LINK_DOWN = frozenset({InputError.LINK_LOST, InputError.NOT_CONNECTED})
 _GUARD_PERIOD_S = 0.05  # the stop guard sends release_all this often, in wall time (PB-D4)
 _GUARD_JOIN_S = 1.0     # how long run waits for the stop guard to end
+
+
+def _print_error(text: str) -> None:
+    """`RouteWalker`'s `log` default: the line on stderr, as the CLI prints it."""
+    print(text, file=sys.stderr)
 
 
 class Clock(Protocol):
@@ -128,6 +134,7 @@ class RouteWalker:
         config: WalkerConfig = WalkerConfig(),
         *,
         observer: StepObserver | None = None,
+        log: Callable[[str], None] = _print_error,
     ) -> None:
         self._rg = rg
         self._rotation = tuple(rotation)
@@ -143,6 +150,7 @@ class RouteWalker:
         self._guard: threading.Thread | None = None
         self._sink_failure_printed = False
         self._observer = observer
+        self._log_line = log  # the app run's log goes to the console box (route tab H71); `_log` is the sink check
 
     def walk_leg(self, lap: int, leg: int, src: Node | None, dst: Node) -> LegRecord:
         """Walk from the character's current position to `dst`; the record says how the leg ended."""
@@ -325,17 +333,16 @@ class RouteWalker:
         """A sink `Failure` is reported once per run and the walk goes on."""
         if not is_successful(written) and not self._sink_failure_printed:
             self._sink_failure_printed = True
-            print(f"leg log write failed (not reported again this run): {written.failure()}", file=sys.stderr)
+            self._log_line(f"leg log write failed (not reported again this run): {written.failure()}")
 
     def _emit(self, call: Callable[..., None], *args: object) -> None:
-        """Call one observer method. Its first exception is printed to stderr once and the observer is dropped for the
-        rest of the run (plan choice 2), so an observer bug never ends a walk."""
+        """Call one observer method. Its first exception is reported through `log` once and the observer is dropped
+        for the rest of the run (plan choice 2), so an observer bug never ends a walk."""
         try:
             call(*args)
         except Exception as exc:
             self._observer = None
-            print(f"route view observer failed, not called again this run: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
+            self._log_line(f"route view observer failed, not called again this run: {type(exc).__name__}: {exc}")
 
     def _settle(self) -> tuple[tuple[int, int] | None, bool]:
         """Wait for the character to stop moving after a move.

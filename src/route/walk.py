@@ -62,8 +62,8 @@ def _make_clock() -> Clock:
     return RealClock()
 
 
-def _make_stop_control(on_stop: Callable[[], None]):
-    return runtime.StopControl(on_stop)
+def _make_stop_control(on_stop: Callable[[], None], *, log: Callable[[str], None]):
+    return runtime.StopControl(on_stop, log=log)
 
 
 # ---- main -------------------------------------------------------------------------------------------------------------
