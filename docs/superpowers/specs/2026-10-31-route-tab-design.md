@@ -896,3 +896,99 @@ on), compute MB per hour from the `frames/` folder size, and set Start's free-sp
 floor (1 GB) from it (5.11), with the measured rate replacing "about 0.5 GB per hour" in the tab's Recording line.
 Hong then does section 9's manual check (simulator run, no game, no board), then checks an in-app 1-lap walk from
 Start (F12, Stop and a click on the app) and a replay; agents never press Start.
+
+## 12. As built (RT-14, written 2026-11-01)
+
+This section says what the code at `415dbf0` (the tip of `p1-route-tab` before this section) does where that is not
+what sections 1-11 say. Where this section and an earlier one disagree, this section is right. The build is not
+finished: section 12.5 lists what is still open. `python tools/check.py --full` at `415dbf0`: ruff, basedpyright,
+lint-imports and pytest all pass (2277 passed, 10 skipped).
+
+### 12.1 Commits (RT-1 to RT-13 part A)
+
+A task with two commits was built in two pieces: the implementer's "piece 1 of 2" commit, then the commit with the
+plan's own message. Hashes are in build order within a task.
+
+| Task | Commits | What |
+|---|---|---|
+| RT-1 | `f6faf91`, `b2e1aba`, `c86d7c0`, `08af38a` | `soak`, `session_starts` and `probe` ask "Is MapleStory closed? y/n" once instead of listing programs (H60); the last is the plan's commit |
+| RT-2a | `9174ac7`, `daa0334` | the walk's `--view`, the viewer spawn and the N1 tool removed (5.13) |
+| RT-2b | `9e7a9b4`, `5ba45be` | the walk's body moved into `RunSession` (`src/route/session.py`); `StopControl.start(sigint)` (5.6) |
+| RT-3 | `d31198d`, `be62163`, `e8305b2` | `RunSession` stop paths, cancel payload, countdown, `may_walk`, `ended` event, guarded recording; review minors |
+| RT-4 | `3925036`, `3f8eca4` | the route view packs into a Frame; the standalone view only replays; claim, ready and `win_focus` removed (5.9, 5.13) |
+| RT-5 | `94d0b94`, `cbe4a7d`, `267ccf4`, `e38ec10` | why lines in time of day; the live picture from the shared frame; a fix for a failing live frame |
+| RT-6 | `e6ae2f2`, `f590202` | the Setup and Route tabs in a Notebook; run lock, wheel scope, close handler (5.1, 5.7) |
+| RT-7 | `077a46b`, `1d1fd50`, `b9bafdb` | Route tab settings, the Start checks and the run texts (5.2-5.5); a fix for settings `int()` cannot read |
+| RT-8a | `eb7878b`, `6a80da3`, `d5f1f7e` | the worker, the event queue drain, the watchdog, Stop and the close wait; garbage collection kept on the Tk thread |
+| RT-8b | `1d22484`, `06cde84`, `7ca44f0` | the Route tab hosts the live view and its end-of-run replay (5.2, 5.8); review minors |
+| RT-8c | `2a705e2` (piece 1), `3b4edab` (2), `8526113` (3), `96b66a1` (4), `66eceb2` and `9715a11` (4b) | Hong's answers of 2026-11-01 (H68-H74): the docs; the idle live minimap in the view area (H70); the view kept frozen at the end with a "Back to live minimap" button (H68, H69); run lines to the console box (H71, H74); the lines below the session go to the run's log (ruling orch 111) |
+| RT-8c | `0545d92`, `eb915f1` | RDO110-D2 answer A: "Back to live minimap" also shows above a saved run's replay |
+| RT-8c review | `ad01073`, `0c89848`, `1a098b3`, `793bb06`, `827ab6a`, `4143def`, `2e37dd2`, `393693c` | RDO110-R minors, the stale line cites in source docstrings, and the root `CLAUDE.md` replay and walk bullets merged into spec 6.3's single bullet (DOC112) |
+| rulings | `2d88914` | H75 (an agent may run the simulator-only timing tool) and H76 (walker frozen but for the `log` keyword) |
+| RT-9 | `103376f`, `40e45c1`, `f23847f`, `c2cb675` | the app-focus flag, `may_walk` and the `app_focus` stop (H64, section 9) |
+| RT-10 | `d3d455c`, `2b4e470`, `feeb2cf`, `7fbb36c` | the saved-run list with sizes summed off the Tk thread (5.11) |
+| RT-11 | `662c56d`, `3330a45` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56) |
+| RT-12 | `7e3e676`, `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | the pin test for all 15 banned names; `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
+| RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
+
+### 12.2 RT-12's measurement: the in-app key path against the CLI's
+
+`python -u tools/route_tab_sim.py measure` (14 laps, 246 sends per mode, run folder
+`data/route_tab_sim/2026-11-01T192928Z/`; `data/` is gitignored). The table as it printed:
+
+```
+mode   sends  processing_ms median  processing_ms p95  no-wait share  reaction_ms median
+cli      246                   0.3                0.3           0.0%               223.7
+app      246                   0.3                0.4           0.0%               223.7
+over_threshold: false
+```
+
+`timing.json`: cli processing median 0.2566 ms, p95 0.3315 ms; app median 0.2632 ms, p95 0.3793 ms; no-wait share 0.0 in
+both; reaction median 223.671 ms in both (seed 1, noise off, so both modes walk the same 246 moves). The rules were
+MIN_SENDS 200, MEDIAN_GAP_MS 20, P95_MAX_MS 100 and NO_WAIT_GAP 0.05; none fired (gaps: median +0.007 ms, app p95
+0.38 ms, no-wait share +0 points), so the tab's key path adds nothing a person could see.
+
+What the simulator does not cover, as three lines. The tool's printout and `timing.json` carry the first two; the third
+is recorded here and in `src/route/CLAUDE.md` (the tool's own list is code and was not changed by this docs pass):
+
+- the F12 hook's own latency (the sim app's stop control installs no keyboard hook);
+- the real capture thread's load (the frame pump only stores a copy of one picture);
+- finding the character on a real frame (the sim's position source never looks at a real frame, so the cost of that and
+  its contention with the Tk thread are not in the figures).
+
+### 12.3 Where the build differs from sections 1-11
+
+- **Spec 6.1's refusal line, as RT-1 built it.** The line is `refused: MapleStory not confirmed closed (answer:
+  <answer>)`, and `<answer>` is the stripped answer, so an empty line gives `(answer: )`; `none` is printed only when no
+  input was read (standard input closed; `soak._read_answer` returns `Failure("none")`, `maple_check` at
+  `src/input/harness/soak.py:505-521`). Plan re-review RR3 judged this a fair reading of 6.1, not a change; this note
+  lets spec and code read the same. Ruling RTP96-D1 = A (by the orchestrator): `probe`, `soak` and `session_starts` all
+  exit 2 (`soak.EXIT_REFUSED`) on anything but `y`, an empty line and closed input included.
+- **RT-12-D2: when the measure tool closes the sim app.** The plan's step says the tool calls `destroy()` "once the tab is
+  Ended". That could hang: the idle drain that clears the worker also runs the readiness refresh, which can turn Ended
+  into Ready before the tool's 200 ms watch sees it (the first real `measure` run hung after both runs had finished).
+  `dac247f` closes the window once the tab's worker is gone instead; the finish is still read from `steps.jsonl`.
+- **Start records the inputs it used (`80f46ff`, RT-12-R m3).** A field changed just before Start, with no drain between,
+  made the drain that ended the run overwrite the end text with Ready. `RouteTab._readinessInputs` now feeds both the
+  readiness refresh and `startRun`, so a stop reason is not lost.
+- **The anti-cheat bullet's scope.** Spec 6.3's text says the name scan fails a name "outside `src/input/harness/`". The
+  scan reads `.py` files under `src/` and `tools/` except `src/input/harness/` (`scanned_files` in
+  `tests/test_anti_cheat_names.py`), and `tests/`, `docs/` and `firmware/` hold names on purpose, so the root
+  `CLAUDE.md` bullet says that (RT-11-R f1).
+- **Walker.** `walker.py` is frozen except for the step observer and the `log` keyword (RT-8c piece 4b, H71, H76,
+  ruling orch 111; `src/route/CLAUDE.md`, Traps).
+- **RT-13 part A.** `tools/recording_rate.py` ends a bad index line in one `error:` line and exit 2 (ruling RT-13-D1 = A;
+  RT-13-R M1, M3), as the repo's other CLIs do.
+
+### 12.4 Test counts
+
+At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14 in `tests/route`, 7 in
+`tests/route_view`), 10 skipped. The new test files are listed in `tests/CLAUDE.md`.
+
+### 12.5 Still open
+
+- RT-13 part B: the measured recording rate needs Hong's 10-minute recording (H-1 in the plan's "Hong's hands"). Until
+  then `START_FREE_BYTES` (2 GB), `RECORD_FLOOR_BYTES` (1 GB) and `RECORD_GB_PER_HOUR` (0.5) in
+  `src/route/session.py:85-87` are the provisional numbers of sections 5.2, 5.4 and 5.6.
+- Hong's hands: H-2 (`python tools/route_tab_sim.py manual`, clicks on the app) and H-3 (an in-app 1-lap walk with the
+  game and the board). No agent runs either.
