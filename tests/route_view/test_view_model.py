@@ -326,7 +326,37 @@ def test_4_an_event_the_model_cannot_read_leaves_it_as_it_was(tmp_path):
         assert render_text(live, live.step(k)) == render_text(whole, whole.step(k)), k
 
 
-# 5 ---------------------------------------------------------------------------------------------------------------
+def _handler_state(live):
+    """Every field the `leg` and `no_plan` handlers write, plus the bookkeeping `extend` restores on a rejection."""
+    return (len(live.events), list(live.why), dict(live._legs), list(live._leg_idx), live._lap, live._leg, live._target,
+            live._character, live._plan, list(live._since), live._t0, live._last_t, len(live._slots))
+
+
+def test_4_a_rejected_leg_or_no_plan_changes_no_handler_state(tmp_path):
+    """RT-ADJ-F3 (RT-ADJ-R m1): `_on_leg` and `_on_no_plan` wrote the state before a statement that can raise, so a
+    rejected event reset the plan in force, and a `leg` with `to: null` also indexed itself in `_legs` and `_leg_idx`
+    though it was never added. Each handler now builds what can raise before its first write."""
+    folder = make_folder(tmp_path)
+    live, events = _open_live(folder)
+    live.extend(events[:8])  # ends on a planned event: a plan is in force and one leg is known
+    assert live._plan == 7 and live._leg_idx == [0]
+    before = _handler_state(live)
+    rejected = [
+        StepEvent("leg", ns(9.0), {"lap": 0, "leg": 9, "to": None}),  # TypeError at the label
+        StepEvent("leg", ns(9.0), {"lap": [1], "leg": 2, "to": (105, 42)}),  # TypeError at the unhashable lap
+        StepEvent("no_plan", ns(9.0), {"pos": None, "why": "off-graph"}),  # TypeError in the why line
+    ]
+    for event in rejected:
+        with pytest.raises(TypeError):
+            live.extend([event])
+        assert _handler_state(live) == before
+    assert live.find_leg(0, 9) is None
+    live.extend(events[8:])  # the next good event takes the index it would have had
+    whole = _load(folder)
+    assert live.why == whole.why and live._leg_idx == whole._leg_idx and live._legs == whole._legs
+
+
+# 5---------------------------------------------------------------------------------------------------------------
 
 
 def test_5_a_changed_map_warns_and_still_draws(tmp_path):

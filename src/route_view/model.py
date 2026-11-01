@@ -480,11 +480,11 @@ class RunModel:
 
     def _on_leg(self, i: int, event: StepEvent, stamp: str) -> list[str]:
         d = event.data
+        name, where = self.label(d["to"]), _xy(d["to"])  # everything that can raise comes before the first state write
+        self._legs.setdefault((d["lap"], d["leg"]), i)
         self._lap, self._leg, self._target = d["lap"], d["leg"], d["to"]
         self._character, self._plan, self._since = None, None, []
-        self._legs.setdefault((d["lap"], d["leg"]), i)
         self._leg_idx.append(i)
-        name, where = self.label(d["to"]), _xy(d["to"])
         return [f"{stamp} lap {d['lap']} leg {d['leg']}: target {name if name == where else f'{name} {where}'}"]
 
     def _on_planned(self, i: int, event: StepEvent, stamp: str) -> list[str]:
@@ -593,8 +593,9 @@ class RunModel:
 
     def _on_no_plan(self, i: int, event: StepEvent, stamp: str) -> list[str]:
         d = event.data
+        line = f"{stamp} cannot plan from {_xy(d['pos'])}: {d['why']}"  # a bad pos raises here, before the state write
         self._character, self._plan, self._since = d["pos"], None, []
-        return [f"{stamp} cannot plan from {_xy(d['pos'])}: {d['why']}"]
+        return [line]
 
     def _on_stall(self, i: int, event: StepEvent, stamp: str) -> list[str]:
         best = event.data["best_cost_s"]
