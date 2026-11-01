@@ -507,7 +507,7 @@ class RouteTab:
         first poll runs now and which then polls every 100 ms. Built here and not at the countdown: the steps start
         now, and a view built earlier would say it has had no step for 10 s during a countdown of up to 60 s."""
         out = self._out
-        if out is None:
+        if out is None or self._closing is not None:
             return
         self._dropView()
         view = self._make_view(self.view_frame, out, None, live=True)

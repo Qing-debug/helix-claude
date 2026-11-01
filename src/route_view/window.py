@@ -279,10 +279,10 @@ class RouteViewWindow:
         self._update_title()
 
     def set_bar_enabled(self, enabled: bool) -> None:
-        """Grey out (False) or give back (True) every control of the replay bar (route tab plan C3, RT-8b): the Route
-        tab greys out the bar of a replay it keeps from Start until the live view replaces it (spec 5.2, H64). False
-        also stops playback, and while the bar is greyed out `go_to_leg` does nothing, because a disabled Entry still
-        fires its `<Return>` binding. The bar stays packed: `set_live` decides whether it is shown."""
+        """Grey out (False) or give back (True) the replay bar's controls (route tab plan C3, RT-8b; waits for Hong:
+        RTF98-4b-D1): the Route tab greys out the bar of a replay it keeps from Start until the live view replaces it
+        (spec 5.2, H64). False also stops playback, and while greyed out `go_to_leg` does nothing, because a disabled
+        Entry still fires its `<Return>` binding. The bar stays packed: `set_live` decides whether it shows."""
         if not enabled:
             self._stop_play()
         self._bar_enabled = enabled

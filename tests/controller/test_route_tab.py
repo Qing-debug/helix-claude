@@ -1639,6 +1639,23 @@ def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
     assert destroyed == [1] and rig.log == ["live0.stop", "view0.destroy"]
 
 
+def test_no_live_view_is_built_while_a_close_waits(make_rig, tmp_path):
+    """RT-8b review m3: a `running` drained while the window waits to close builds no live view and starts no polling
+    (the close would only tear it down), like `_onEnded` opens nothing then."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    made, thread = _start(rig)
+    _post(rig, made, _event("status", CONNECTING))
+    destroyed = []
+    tab.onAppClose(lambda: destroyed.append(1))
+    _post(rig, made, _event("running", "Running."))
+    assert rig.views == [] and tab.view is None and tab.live is None and rig.log == []
+    assert tab.status_var.get() == STOPPING
+    _finish(rig, made, thread, "stopped/window_close")
+    _run_close_poll(rig)
+    assert destroyed == [1] and rig.log == []
+
+
 @pytest.mark.parametrize("cyclic", [False, True])
 def test_the_kept_replays_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cyclic):
     """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the kept replay, frozen at Start with the rest,
