@@ -18,6 +18,7 @@ from PIL import Image
 from returns.result import Failure
 
 import src.gui.gui as gui_module
+import src.gui.live_minimap as live_minimap_module
 import src.gui.route_tab as route_tab_module
 import test_gui_character_buttons
 import test_gui_startup
@@ -1446,8 +1447,11 @@ def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
     assert called == ["Misc.focus", "Wm.attributes"]
 
 
-def test_route_tab_source_has_no_focus_or_dialog_names():
-    assert tk_bans.focus_problems(inspect.getsource(route_tab_module)) == []
+@pytest.mark.parametrize("module", [route_tab_module, live_minimap_module], ids=["route_tab", "live_minimap"])
+def test_route_tab_source_has_no_focus_or_dialog_names(module):
+    """Spec 5.12's source scan covers the tab and the idle minimap it hosts, which is drawn during Connecting and the
+    countdown (RDO110-R m3)."""
+    assert tk_bans.focus_problems(inspect.getsource(module)) == []
 
 
 @pytest.mark.parametrize("snippet, problem", [
