@@ -1,73 +1,34 @@
-"""Tests of the route view's live follower and its start-up handshake (route view plan task RV-8, tests 1-9; contract
-V6; spec 5.4, 5.7, 5.9 step 3).
+"""Tests of the route view's live follower (route view plan task RV-8, tests 1-8; contract V6; spec 5.4; route tab plan
+RT-4: the claim, ready and Win32 focus tests went with their code, spec 5.13).
 
 Every Tk root is real and withdrawn (`view_tk.open_root`), has no mainloop and records `after`; `withdraw` and
-`deiconify` are replaced by recorders that never call Tk's own, so nothing is ever shown and nothing takes focus. Each
-root is destroyed at teardown. The three Win32 calls are a `FakeFocus` that records them, the clock a `FakeClock`.
+`deiconify` are replaced by recorders that never call Tk's own, so nothing is ever shown and nothing takes focus, and a
+test that expects no window call checks the recorder. Each root is destroyed at teardown. The clock is a `FakeClock`.
 """
 
-import ctypes
 import os
 import statistics
-import sys
 import threading
 import time
-import tkinter as tk
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from returns.result import Failure, Success
 from test_view_window import _noise_png
-from view_runs import FF2, G, GIT_HEAD, REPO_ROOT, default_header, event_lines, make_folder, make_legs_folder, ns
+from view_runs import FF2, G, GIT_HEAD, REPO_ROOT, default_header, event_lines, ns
 from view_tk import destroy_all, open_root, record_after
 
-from src.route.step_log import MAP_COPY, STEPS_FILE, VIEW_CLAIM, VIEW_READY, header_line, parse_line
-from src.route_view import __main__ as cli
-from src.route_view import win_focus
+from src.route import step_log
+from src.route.step_log import MAP_COPY, STEPS_FILE, header_line, parse_line
 from src.route_view.follow import POLL_MS, SILENT_S, Follower, LiveController, Polled
 from src.route_view.model import FRAME_INDEX, FRAMES_DIR
 from src.route_view.window import RouteViewWindow
 
 SILENT = "no new steps for 10 s: the walk is still running or has crashed"
-HINT = "if the walk has ended, open this folder with --replay to step through it"
-CLICK_WARNING = "clicking here takes focus from the game"
+HINT = "if the walk has ended or crashed, see the console; the replay opens when it ends"  # plan choice 11
 HEADER = header_line(default_header()).unwrap()
 LINES = event_lines(G)  # 26 lines; the last is `end`
-
-
-class FakeFocus:
-    """`win_focus`'s three functions: records `(name, args)` (the root left out) in `calls` and in a shared `log`."""
-
-    def __init__(self, log=None, *, style=None, real=False, claim: Path | None = None):
-        self.calls = []
-        self.log = [] if log is None else log
-        self.style = Success(None) if style is None else style
-        self.real = real  # also ask the real `win_focus.wrapper_hwnd` (test 9a)
-        self.real_wrapper = None
-        self.claim = claim  # if given, whether it existed at each call is recorded in `claim_seen`
-        self.claim_seen = []
-
-    def _record(self, name, args):
-        self.calls.append((name, args))
-        self.log.append(name)
-        if self.claim is not None:
-            self.claim_seen.append(self.claim.exists())
-
-    def wrapper_hwnd(self, root):
-        self._record("wrapper_hwnd", ())
-        if self.real:
-            self.real_wrapper = win_focus.wrapper_hwnd(root)
-        return Success(1234)
-
-    def set_live_style(self, hwnd, live):
-        self._record("set_live_style", (hwnd, live))
-        return self.style
-
-    def show_first(self, root, hwnd):
-        self._record("show_first", (hwnd,))
-        return Success(None)
 
 
 class FakeClock:
@@ -94,14 +55,13 @@ def _recorded_root(roots, monkeypatch, log):
     return root, after
 
 
-def _live(roots, monkeypatch, folder, *, hidden=False, styled_hwnd=None, focus=None, clock=None):
+def _live(roots, monkeypatch, folder, *, clock=None):
     log = []
     root, after = _recorded_root(roots, monkeypatch, log)
     window = RouteViewWindow(root, folder, None, live=True)
-    focus = focus or FakeFocus()
-    live = LiveController(root, window, folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD, focus=focus,
-                          clock=clock or FakeClock(), hidden=hidden, styled_hwnd=styled_hwnd)
-    return SimpleNamespace(root=root, after=after, log=log, window=window, live=live, focus=focus)
+    live = LiveController(root, window, folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD,
+                          clock=clock or FakeClock())
+    return SimpleNamespace(root=root, after=after, log=log, window=window, live=live)
 
 
 def _live_folder(folder: Path, lines) -> Path:
@@ -146,6 +106,12 @@ def _spy_loads(monkeypatch, window) -> list[str]:
 
     monkeypatch.setattr(window, "_load_image", load)
     return loads
+
+
+def test_step_log_has_no_view_names():
+    """The viewer's files (`view.log`, `view.claim`, `view.ready`) went with the walk's viewer spawn (spec 5.13)."""
+    for name in ("VIEW_LOG", "VIEW_CLAIM", "VIEW_READY"):
+        assert not hasattr(step_log, name), name
 
 
 # Follower ---------------------------------------------------------------------------------------------------------
@@ -301,18 +267,18 @@ def test_4_a_torn_last_line_and_ten_silent_seconds(tmp_path, roots, monkeypatch)
     assert t.root.title().startswith("Route view · LIVE · ") and SILENT not in t.root.title()
     clock.t = SILENT_S - 0.1
     t.live.tick()
-    assert SILENT not in t.root.title() and "--replay" not in _status(t.window)
+    assert SILENT not in t.root.title() and _status(t.window) == ""
     clock.t = SILENT_S
     t.live.tick()
     assert t.root.title().startswith(f"Route view · LIVE · {SILENT} · ")
-    assert _status(t.window) == HINT and "--replay" in HINT
+    assert _status(t.window) == HINT and "console" in HINT
     assert t.after[-1] == (POLL_MS, t.live.tick)  # it keeps following
     _append(folder / STEPS_FILE, LINES[5][12:])
     clock.t = SILENT_S + 5
     t.live.tick()
     assert len(t.window.model.events) == 6
     assert t.root.title().startswith("Route view · LIVE · ") and SILENT not in t.root.title()
-    assert "--replay" not in _status(t.window)
+    assert _status(t.window) == ""
     clock.t = 2 * SILENT_S + 5  # ten more silent seconds from the sixth line
     t.live.tick()
     assert SILENT in t.root.title()
@@ -357,38 +323,43 @@ def test_5_one_more_line_on_fifty_thousand_is_cheap(tmp_path, roots, monkeypatch
 # 6 ----------------------------------------------------------------------------------------------------------------
 
 
-def test_6_at_end_a_styled_window_drops_the_style_and_is_shown_again(tmp_path, roots, monkeypatch):
+def test_end_switches_to_replay_without_window_calls(tmp_path, roots, monkeypatch):
     folder = _live_folder(tmp_path, LINES[:25])
-    t = _live(roots, monkeypatch, folder, styled_hwnd=1234)
+    t = _live(roots, monkeypatch, folder)
     t.live.tick()
-    assert t.after == [(POLL_MS, t.live.tick)] and t.log == [] and t.focus.calls == []
+    assert t.after == [(POLL_MS, t.live.tick)] and t.log == [] and t.window.live and not t.live.ended
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
-    assert t.focus.calls == [("set_live_style", (1234, False))]
-    assert t.log == ["withdraw", "deiconify"]
-    assert not t.window.live and t.window.bar.winfo_manager() == "pack"
+    assert t.window.live is False and t.live.ended is True
+    assert t.log == []  # neither `withdraw` nor `deiconify` was called on the root
+    assert t.window.bar.winfo_manager() == "pack"
     assert t.root.title().startswith("Route view · ended: max_laps · ")
-    assert len(t.after) == 1 and t.live.ended  # no further tick
+    assert len(t.after) == 1  # no further tick
     t.live.tick()
-    assert len(t.after) == 1 and t.log == ["withdraw", "deiconify"] and len(t.focus.calls) == 1
+    assert len(t.after) == 1 and t.log == []
 
 
-def test_6_at_end_a_hidden_window_is_only_shown(tmp_path, roots, monkeypatch):
-    folder = _live_folder(tmp_path, LINES[:25])
-    t = _live(roots, monkeypatch, folder, hidden=True)
+def test_stop_ends_the_ticks(tmp_path, roots, monkeypatch):
+    folder = _live_folder(tmp_path, LINES[:5])
+    t = _live(roots, monkeypatch, folder)
     t.live.tick()
-    assert t.log == []
-    _append(folder / STEPS_FILE, LINES[25])
+    assert len(t.after) == 1
+    t.live.stop()
+    t.live.stop()  # idempotent
     t.live.tick()
-    assert t.log == ["deiconify"] and t.focus.calls == []
-    assert not t.window.live and t.root.title().startswith("Route view · ended: max_laps · ")
+    assert len(t.after) == 1  # no further tick was scheduled
+    events, index, shown = len(t.window.model.events), t.window.index, t.window.shown_background
+    _append(folder / STEPS_FILE, LINES[5])  # what a tick queued before `stop()` would find
+    t.live.update()
+    assert len(t.window.model.events) == events and t.window.index == index
+    assert t.window.shown_background == shown and len(t.after) == 1
 
 
-def test_6_a_folder_that_ended_before_the_first_poll_touches_neither_style_nor_visibility(tmp_path, roots, monkeypatch):
+def test_a_folder_that_ended_before_the_first_poll_touches_no_window_call(tmp_path, roots, monkeypatch):
     folder = _live_folder(tmp_path, LINES)
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
-    assert t.log == [] and t.focus.calls == [] and not t.window.live and t.after == []
+    assert t.log == [] and not t.window.live and t.after == []
 
 
 # 7 ----------------------------------------------------------------------------------------------------------------
@@ -463,14 +434,12 @@ def test_m2_lines_read_in_a_failed_tick_go_into_the_model_on_the_next_one(tmp_pa
     assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
 
 
-@pytest.mark.parametrize("styled", [False, True])
-def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roots, monkeypatch, capsys, styled):
-    """RV-8 review m2: a hidden viewer still shows, and a styled one still loses the no-activate style, when the tick
-    that reads `end` fails after its poll (the walk is over, and the same error may come every tick)."""
+def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roots, monkeypatch, capsys):
+    """RV-8 review m2: the run still switches to replay when the tick that reads `end` fails after its poll (the walk
+    is over, and the same error may come every tick)."""
     folder = _live_folder(tmp_path, LINES[:25])
-    t = _live(roots, monkeypatch, folder, hidden=not styled, styled_hwnd=1234 if styled else None)
+    t = _live(roots, monkeypatch, folder)
     t.live.tick()
-    assert t.log == [] and t.focus.calls == []
 
     def boom(events):
         raise RuntimeError("x")
@@ -479,25 +448,7 @@ def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roo
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
     assert t.live.ended and len(t.after) == 1  # no further tick
-    if styled:
-        assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
-    else:
-        assert t.focus.calls == [] and t.log == ["deiconify"]
-    assert not t.window.live and "follow error: RuntimeError: x" in capsys.readouterr().out
-
-
-def test_m4_clearing_the_style_failing_at_end_is_reported_and_the_window_still_shown(tmp_path, roots, monkeypatch,
-                                                                                     capsys):
-    folder = _live_folder(tmp_path, LINES[:25])
-    focus = FakeFocus(style=Failure("denied"))
-    t = _live(roots, monkeypatch, folder, styled_hwnd=1234, focus=focus)
-    t.live.tick()
-    capsys.readouterr()
-    _append(folder / STEPS_FILE, LINES[25])
-    t.live.tick()
-    assert focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
-    assert capsys.readouterr().out == "focus call failed: denied\n" and _status(t.window) == "focus call failed: denied"
-    assert t.live.ended and not t.window.live
+    assert not t.window.live and t.log == [] and "follow error: RuntimeError: x" in capsys.readouterr().out
 
 
 
@@ -535,242 +486,22 @@ def test_m2b_an_event_the_model_rejects_every_time_is_retried_once_then_skipped_
 
 
 def test_m3_end_runs_at_most_once_even_if_a_call_inside_it_raises(tmp_path, roots, monkeypatch, capsys):
-    """RV-9 review m3: `set_live(False)` raising inside `_end` must not make `update`'s error path run `_end` again
-    (a second style clear, withdraw and deiconify)."""
+    """RV-9 review m3: `set_live(False)` raising inside `_end` must not make `update`'s error path run `_end` again."""
     folder = _live_folder(tmp_path, LINES[:25])
-    t = _live(roots, monkeypatch, folder, styled_hwnd=1234)
+    t = _live(roots, monkeypatch, folder)
     t.live.tick()
     capsys.readouterr()
+    calls = []
 
     def boom(live):
+        calls.append(live)
         raise RuntimeError("x")
 
     monkeypatch.setattr(t.window, "set_live", boom)
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
     assert t.live.ended and len(t.after) == 1
-    assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
+    assert calls == [False] and t.log == []
     assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
     t.live.update()  # an ended controller does nothing more
-    assert t.focus.calls == [("set_live_style", (1234, False))] and t.log == ["withdraw", "deiconify"]
-
-
-# 9 ----------------------------------------------------------------------------------------------------------------
-
-
-class _Out:
-    """Stands in for stdout: each printed line goes into the shared log as "out:<line>"."""
-
-    def __init__(self, log):
-        self.log = log
-
-    def write(self, text):
-        for line in text.splitlines():
-            if line.strip():
-                self.log.append("out:" + line)
-        return len(text)
-
-    def flush(self):
-        pass
-
-
-def _main(roots, monkeypatch, args, focus, log, folder):
-    """`cli.main(args)` with a withdrawn root whose `deiconify` and `update_idletasks` are recorded in `log` (on
-    Windows the latter also runs the real one: it keeps the root withdrawn, RV6 I1)."""
-    made = SimpleNamespace(root=None, after=None, idle_saw_claim=[])
-
-    def make_root():
-        root, after = _recorded_root(roots, monkeypatch, log)
-        real_idle = root.update_idletasks
-
-        def idle():
-            log.append("update_idletasks")
-            made.idle_saw_claim.append((folder / VIEW_CLAIM).exists())
-            if sys.platform == "win32":
-                real_idle()
-
-        monkeypatch.setattr(root, "update_idletasks", idle)
-        made.root, made.after = root, after
-        return root
-
-    monkeypatch.setattr(cli, "_git_head", lambda: GIT_HEAD)
-    monkeypatch.setattr(sys, "stdout", _Out(log))
-    made.code = cli.main(args, make_root=make_root, run_loop=False, focus=focus, clock=FakeClock())
-    return made
-
-
-def _texts(widget) -> list[str]:
-    out = []
-    for child in widget.winfo_children():
-        if isinstance(child, (tk.Label, tk.Button)):
-            out.append(str(child.cget("text")))
-        out += _texts(child)
-    return out
-
-
-def _button(widget, text) -> tk.Button:
-    for child in widget.winfo_children():
-        if isinstance(child, tk.Button) and child.cget("text") == text:
-            return child
-        found = _button(child, text) if child.winfo_children() else None
-        if found is not None:
-            return found
-    return None  # type: ignore[return-value]
-
-
-def _order_checks(log):
-    """In a and d: `window built in` before any focus call, `first show: root.state() = ` after `show_first`."""
-    built = next(i for i, e in enumerate(log) if e.startswith("out:window built in "))
-    first_show = [i for i, e in enumerate(log) if e.startswith("out:first show: root.state() = ")]
-    assert built < log.index("wrapper_hwnd")
-    assert len(first_show) == 1 and first_show[0] > log.index("show_first")
-    assert log[first_show[0]] == "out:first show: root.state() = withdrawn"  # the fake showed nothing
-
-
-def test_9a_a_live_folder_with_ready_claims_styles_shows_without_activating_and_writes_ready(tmp_path, roots,
-                                                                                               monkeypatch):
-    folder = _live_folder(tmp_path, LINES[:5])
-    log = []
-    focus = FakeFocus(log, real=True, claim=folder / VIEW_CLAIM)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0
-    assert log.count("update_idletasks") == 1 and made.idle_saw_claim == [False]
-    assert log.index("update_idletasks") < log.index("wrapper_hwnd")
-    assert focus.calls == [("wrapper_hwnd", ()), ("set_live_style", (1234, True)), ("show_first", (1234,))]
-    assert focus.claim_seen == [True, True, True]  # the claim comes right before the focus calls
-    assert (folder / VIEW_CLAIM).exists()
-    assert (folder / VIEW_READY).read_text(encoding="ascii") == str(os.getpid())
-    assert not (folder / "view.ready.tmp").exists()
-    assert "deiconify" not in log and made.root.state() == "withdrawn"
-    _order_checks(log)
-    assert made.after == [(POLL_MS, made.after[0][1])]  # the first tick ran and scheduled the next
-    if sys.platform == "win32":
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.GetParent.argtypes = [ctypes.c_void_p]
-        user32.GetParent.restype = ctypes.c_void_p
-        assert focus.real_wrapper == Success(user32.GetParent(made.root.winfo_id()))
-
-
-def test_9b_a_lost_claim_follows_hidden_and_shows_only_at_end(tmp_path, roots, monkeypatch):
-    folder = _live_folder(tmp_path, LINES[:5])
-    (folder / VIEW_CLAIM).touch()
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0 and focus.calls == [] and "deiconify" not in log
-    assert made.root.state() == "withdrawn" and not (folder / VIEW_READY).exists()
-    assert not any(e.startswith("out:first show") for e in log)
-    _append(folder / STEPS_FILE, b"".join(LINES[5:]))
-    made.after[-1][1]()  # the scheduled tick
-    assert log.count("deiconify") == 1 and focus.calls == []
-    assert made.root.title().startswith("Route view · ended: max_laps · ")
-
-
-def test_9c_a_finished_folder_with_ready_opens_as_a_replay_without_a_claim(tmp_path, roots, monkeypatch):
-    folder = make_folder(tmp_path)
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0 and focus.calls == [] and log.count("deiconify") == 1
-    assert not (folder / VIEW_CLAIM).exists() and not (folder / VIEW_READY).exists()
-    assert made.root.title().startswith("Route view · ended: max_laps · ")
-    assert any(e.startswith("out:window built in ") for e in log)
-
-
-def test_9d_a_live_folder_without_ready_styles_and_shows_but_takes_no_claim(tmp_path, roots, monkeypatch):
-    folder = _live_folder(tmp_path, LINES[:5])
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder)], focus, log, folder)
-    assert made.code == 0
-    assert focus.calls == [("wrapper_hwnd", ()), ("set_live_style", (1234, True)), ("show_first", (1234,))]
-    assert not (folder / VIEW_CLAIM).exists() and not (folder / VIEW_READY).exists() and "deiconify" not in log
-    _order_checks(log)
-
-
-def test_9e_a_failed_focus_call_falls_back_to_deiconify_and_the_warning(tmp_path, roots, monkeypatch):
-    folder = _live_folder(tmp_path, LINES[:5])
-    log = []
-    focus = FakeFocus(log, style=Failure("denied"))
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0 and log.count("deiconify") == 1
-    assert [c[0] for c in focus.calls] == ["wrapper_hwnd", "set_live_style"]  # no show after a failed style
-    assert "out:focus call failed: denied" in log
-    assert log.index("out:focus call failed: denied") < log.index("deiconify")
-    assert CLICK_WARNING in _texts(made.root)
-    assert (folder / VIEW_CLAIM).exists() and (folder / VIEW_READY).exists()
-    assert any(e.startswith("out:first show: root.state() = ") for e in log)
-
-
-def test_9f_a_legs_only_folder_with_ready_is_a_replay_without_a_claim(tmp_path, roots, monkeypatch):
-    folder = make_legs_folder(tmp_path)
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0 and focus.calls == [] and log.count("deiconify") == 1
-    assert not (folder / VIEW_CLAIM).exists() and not (folder / VIEW_READY).exists()
-    assert made.root.title().startswith("Route view · REPLAY (from legs.jsonl) · ")
-
-
-def test_9g_replay_opens_a_folder_without_end_as_a_replay(tmp_path, roots, monkeypatch):
-    folder = make_folder(tmp_path, G[:25])
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--replay"], focus, log, folder)
-    assert made.code == 0 and focus.calls == [] and log.count("deiconify") == 1
-    assert not (folder / VIEW_CLAIM).exists()
-    assert made.root.title().startswith("Route view · REPLAY (did not end) · ")
-    _button(made.root, "|<").invoke()
-    assert "1 / 25" in _texts(made.root)
-    _button(made.root, ">|").invoke()
-    assert "25 / 25" in _texts(made.root)
-
-
-def test_9h_replay_with_ready_is_refused_before_any_window(tmp_path, monkeypatch, capsys):
-    folder = _live_folder(tmp_path, LINES[:5])
-    made = []
-    focus = FakeFocus()
-    code = cli.main(["--follow", str(folder), "--replay", "--ready", str(folder / VIEW_READY)],
-                    make_root=lambda: made.append(1), run_loop=False, focus=focus, clock=FakeClock())
-    out, err = capsys.readouterr()
-    assert code == 2 and made == [] and focus.calls == [] and out == ""
-    assert err == "error: --replay cannot be used with --ready\n"
-    assert not (folder / VIEW_CLAIM).exists() and not (folder / VIEW_READY).exists()
-
-
-def test_9i_replay_on_a_finished_folder_is_the_same_as_without_it(tmp_path, roots, monkeypatch):
-    folder = make_folder(tmp_path)
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--replay"], focus, log, folder)
-    assert made.code == 0 and focus.calls == [] and log.count("deiconify") == 1
-    assert not (folder / VIEW_CLAIM).exists()
-    assert made.root.title().startswith("Route view · ended: max_laps · ")
-
-
-def test_m4_a_claim_failing_with_another_oserror_follows_hidden_as_a_lost_claim(tmp_path, roots, monkeypatch):
-    """RV-8 review m4: any OSError on the claim (here a PermissionError, not FileExistsError) is the safe side."""
-    folder = _live_folder(tmp_path, LINES[:5])
-    real_open = open
-
-    def denied(path, *args, **kwargs):
-        if Path(path).name == VIEW_CLAIM:
-            raise PermissionError(13, "denied", str(path))
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr(cli, "open", denied, raising=False)
-    log = []
-    focus = FakeFocus(log)
-    made = _main(roots, monkeypatch, ["--follow", str(folder), "--ready", str(folder / VIEW_READY)], focus, log,
-                 folder)
-    assert made.code == 0 and focus.calls == [] and "deiconify" not in log
-    assert made.root.state() == "withdrawn" and not (folder / VIEW_READY).exists()
-    assert not (folder / VIEW_CLAIM).exists()
-    _append(folder / STEPS_FILE, b"".join(LINES[5:]))
-    made.after[-1][1]()  # the scheduled tick
-    assert log.count("deiconify") == 1 and focus.calls == []
+    assert calls == [False] and t.log == []

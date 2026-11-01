@@ -56,9 +56,6 @@ from returns.result import Failure, Result, Success
 STEPS_FILE = "steps.jsonl"
 MAP_COPY = "map.csv"
 SNAPSHOT = "minimap.png"
-VIEW_LOG = "view.log"
-VIEW_CLAIM = "view.claim"
-VIEW_READY = "view.ready"
 VERSION = 1
 
 # Field names after "ev" and "t_ns", in this order, per event (spec 5.2 table). "run" has no t_ns.

@@ -3,12 +3,12 @@
 `Follower` reads the complete new lines of `steps.jsonl` and `frames/index.jsonl` since its last poll (a line without
 its newline waits for the next poll). `LiveController` polls it every `POLL_MS` from Tk's event loop, grows the model,
 redraws only when something changed (decoding only the newest frame), says so when no step has come for `SILENT_S`,
-and at `end` switches the window to replay: the no-activate style is cleared, a hidden window is shown.
+and at `end` switches the window to replay (`set_live(False)`; it makes no call on the root). `stop()` ends the ticks:
+after it `tick()` and `update()` return at once, because a tick already queued with `after` can still fire.
 
 Where the plan is silent (each decided here, local and reversible):
-- The controller owns the `Follower`; `__main__` builds the controller before the claim and calls `update()` (one poll,
-  no scheduling) as its synchronous first poll, then sets `hidden` / `styled_hwnd` once the claim and the first show
-  are done (PF81 m11: the first poll is the controller's own, nothing is read twice).
+- The controller owns the `Follower`; a caller that wants a synchronous first poll calls `update()` (one poll, no
+  scheduling) before `tick()` (PF81 m11: the first poll is the controller's own, nothing is read twice).
 - "A new line" for the silence clock is a new step event (a bad line or a frame is not a step).
 - Leaving the silence clears the status line (the `--replay` hint) before the redraw, which sets any read error again.
 - An error is printed once per distinct message (a repeat of the last one is not printed again).
@@ -19,16 +19,12 @@ Where the plan is silent (each decided here, local and reversible):
 """
 
 import time
+import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
-
-from returns.pipeline import is_successful
-from returns.result import Result
 
 from src.route.step_log import STEPS_FILE, RunHeader, StepEvent, StepTail
-from src.route_view import win_focus
 from src.route_view.model import FRAME_INDEX, FRAMES_DIR, RunModel, read_frame_index
 from src.route_view.window import RouteViewWindow
 
@@ -36,15 +32,7 @@ POLL_MS = 100
 SILENT_S = 10.0  # spec 5.4
 LIVE = "LIVE"
 SILENT_MODE = "LIVE · no new steps for 10 s: the walk is still running or has crashed"  # spec 5.4, word for word
-REPLAY_HINT = "if the walk has ended, open this folder with --replay to step through it"  # RV4-D1 A
-
-
-class Focus(Protocol):
-    """`win_focus`'s three functions (tests pass a fake)."""
-
-    def wrapper_hwnd(self, root: Any) -> Result[int, str]: ...
-    def set_live_style(self, hwnd: int, live: bool) -> Result[None, str]: ...
-    def show_first(self, root: Any, hwnd: int) -> Result[None, str]: ...
+REPLAY_HINT = "if the walk has ended or crashed, see the console; the replay opens when it ends"  # plan choice 11
 
 
 @dataclass(frozen=True)
@@ -91,18 +79,14 @@ class Follower:
 
 
 class LiveController:
-    def __init__(self, root: Any, window: RouteViewWindow, folder: Path, *, repo_root: Path,
-                 current_git_head: str | None, focus: Focus = win_focus, clock: Callable[[], float] = time.monotonic,
-                 hidden: bool, styled_hwnd: int | None) -> None:
+    def __init__(self, root: tk.Misc, window: RouteViewWindow, folder: Path, *, repo_root: Path,
+                 current_git_head: str | None, clock: Callable[[], float] = time.monotonic) -> None:
         self._root = root
         self.window = window
         self._folder = Path(folder)
         self._repo_root = repo_root
         self._current_git_head = current_git_head
-        self._focus = focus
         self._clock = clock
-        self.hidden = hidden  # the walk took the claim: the window stays withdrawn until `end`
-        self.styled_hwnd = styled_hwnd  # the wrapper that got the no-activate style; cleared at `end`
         self.follower = Follower(self._folder)
         self.ended = False
         self.bad_lines = 0
@@ -118,18 +102,24 @@ class LiveController:
         self._frames: list[tuple[int, str]] = []
         self._end_read = False  # an `end` line has been read (whether or not it reached the model)
         self._printed: str | None = None
+        self._stopped = False
+
+    def stop(self) -> None:
+        """No further tick is scheduled, and `update()` and `tick()` return at once from here on. Idempotent. A tick
+        already queued with `after` can fire after the owner destroyed the window; it finds this flag and returns."""
+        self._stopped = True
 
     def tick(self) -> None:
-        """One poll, then the next one in `POLL_MS` unless the run has ended."""
+        """One poll, then the next one in `POLL_MS` unless the run has ended or `stop()` was called."""
         self.update()
-        if not self.ended:
+        if not self.ended and not self._stopped:
             self._root.after(POLL_MS, self.tick)
 
     def update(self) -> None:
         """One poll and redraw; never raises (hard rule 5): an error goes to the status line and stdout. Lines the
-        failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window is
-        shown and its style cleared, RV-8 review m2): the walk is over, and the same error may come every tick."""
-        if self.ended:
+        failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window
+        switches to replay, RV-8 review m2): the walk is over, and the same error may come every tick."""
+        if self.ended or self._stopped:
             return
         try:
             self._update()
@@ -205,19 +195,12 @@ class LiveController:
             self._end()
 
     def _end(self) -> None:
-        """`end` read (spec 5.4, 5.7): stop following, give the window its normal styles back, show it, replay. Runs at
-        most once: if a call in it raises, `update`'s error path does not run it again (RV-9 review m3)."""
+        """`end` read (spec 5.4): stop following and switch the window to replay. No call on the root and no callback:
+        the owner learns of the end from `ended`. Runs at most once: if a call in it raises, `update`'s error path does
+        not run it again (RV-9 review m3)."""
         if self.ended:
             return
         self.ended = True
-        if self.styled_hwnd is not None:
-            cleared = self._focus.set_live_style(self.styled_hwnd, False)
-            if not is_successful(cleared):
-                self._report(f"focus call failed: {cleared.failure()}")
-            self._root.withdraw()  # hidden and shown again so the taskbar sees the change (spec 5.7, part of N1)
-            self._root.deiconify()
-        elif self.hidden:
-            self._root.deiconify()  # never styled: shown for the first time, already in replay (spec 5.9 step 3)
         self.window.set_live(False)  # the title's mode becomes `ended: <reason>`
 
     def _report(self, text: str) -> None:

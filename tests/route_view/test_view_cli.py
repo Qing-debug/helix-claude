@@ -10,10 +10,11 @@ import subprocess
 import sys
 
 import pytest
-from view_runs import GIT_HEAD, REPO_ROOT, make_folder
+from view_runs import G, GIT_HEAD, REPO_ROOT, make_folder, make_legs_folder
 from view_tk import destroy_all, open_root
 
 from src.route_view import __main__ as cli
+from src.route_view.window import RouteViewWindow
 
 
 class FakeRoot:
@@ -30,6 +31,20 @@ class FakeRoot:
 
     def destroy(self):
         self.calls.append("destroy")
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    """Every `RouteViewWindow` that `main` builds, in order (the real class, only recorded)."""
+    made = []
+
+    class Spy(RouteViewWindow):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(cli, "RouteViewWindow", Spy)
+    return made
 
 
 @pytest.fixture
@@ -85,6 +100,39 @@ def test_12_a_run_folder_opens_a_window_on_its_last_step(tmp_path, capsys, monke
         destroy_all([root])
 
 
+def test_cli_always_replays(tmp_path, capsys, monkeypatch, no_git, windows):
+    """Plan choice 10: the standalone command only replays. A folder without `end` opens as a replay too, `--replay` is
+    accepted and ignored, `--ready` is gone (argparse exits 2), and a legs-only folder is a replay of its legs."""
+    (tmp_path / "unfinished").mkdir()
+    (tmp_path / "legs").mkdir()
+    unfinished = make_folder(tmp_path / "unfinished", G[:25])
+    roots = []
+    try:
+        for args in (["--follow", str(unfinished)], ["--follow", str(unfinished), "--replay"]):
+            root = open_root()
+            roots.append(root)
+            monkeypatch.setattr(root, "deiconify", lambda: None)
+            assert cli.main(args, make_root=lambda: root, run_loop=False) == 0
+            window = windows[-1]
+            assert window.live is False and window.model is not None and not window.model.ended
+            assert window.bar.winfo_manager() == "pack"  # the replay bar is there
+        legs = make_legs_folder(tmp_path / "legs")
+        root = open_root()
+        roots.append(root)
+        monkeypatch.setattr(root, "deiconify", lambda: None)
+        assert cli.main(["--follow", str(legs)], make_root=lambda: root, run_loop=False) == 0
+        assert windows[-1].live is False and windows[-1].model.origin == "legs"
+        assert len(windows) == 3
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as stop:
+            cli.main(["--follow", str(unfinished), "--ready", str(unfinished / "view.ready")], make_root=FakeRoot,
+                     run_loop=False)
+        assert stop.value.code == 2 and "--ready" in capsys.readouterr().err
+        assert not (unfinished / "view.ready").exists() and len(windows) == 3
+    finally:
+        destroy_all(roots)
+
+
 def test_12_the_time_starts_right_after_the_docstring():
     """The first two statements after the docstring are `import time` and `_T0 = time.perf_counter()` (plan RV-7)."""
     tree = ast.parse((REPO_ROOT / "src" / "route_view" / "__main__.py").read_text(encoding="utf-8"))
@@ -119,8 +167,9 @@ def test_13_help_names_the_options_and_the_focus_warning():
     done = subprocess.run([sys.executable, "-m", "src.route_view", "--help"], cwd=REPO_ROOT, capture_output=True,
                           text=True, timeout=120)
     assert done.returncode == 0, done.stderr
-    for option in ("--follow", "--ready", "--replay"):
+    for option in ("--follow", "--replay"):
         assert option in done.stdout
+    assert "--ready" not in done.stdout
     # argparse fills the description with textwrap.fill at the subprocess's 80 columns, so the phrase may wrap (RV6 m3)
     assert ("Never open a replay while a walk runs: clicking it takes focus from the game."
             in " ".join(done.stdout.split()))
