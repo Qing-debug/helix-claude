@@ -283,8 +283,9 @@ def make_rig(make_gui, monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def _collector_back_on():
     """Start turns automatic garbage collection off until the drain clears the worker (RT-8a I1); a test that leaves
-    its fake worker alive must not leave it off for the tests after it."""
+    its fake worker alive must not leave it off, or the objects Start froze frozen, for the tests after it."""
     yield
+    gc.unfreeze()
     gc.enable()
 
 
@@ -293,10 +294,10 @@ MAIN = threading.main_thread().name  # the test's thread stands for the Tk threa
 
 @pytest.fixture
 def gc_calls(monkeypatch):
-    """Every `gc.collect`, `gc.disable` and `gc.enable` call during the test as (name, thread name); the real function
-    still runs."""
+    """Every `gc.collect`, `gc.disable`, `gc.enable`, `gc.freeze` and `gc.unfreeze` call during the test as (name,
+    thread name); the real function still runs."""
     calls = []
-    for name in ("collect", "disable", "enable"):
+    for name in ("collect", "disable", "enable", "freeze", "unfreeze"):
         def spy(*args, _real=getattr(gc, name), _name=name, **kwargs):
             calls.append((_name, threading.current_thread().name))
             return _real(*args, **kwargs)
@@ -922,18 +923,21 @@ def test_collector_is_off_during_a_run_and_on_once_after_it(make_rig, gc_calls, 
     rig = make_rig()
     made, thread = _start(rig)
 
-    assert gc_calls == [("collect", MAIN), ("disable", MAIN)]  # on the Tk thread, before the worker starts
+    assert gc_calls == [("collect", MAIN), ("disable", MAIN), ("freeze", MAIN)]  # Tk thread, before the worker starts
     assert thread.collector_on_at_start is False and not gc.isenabled()
+    assert gc.get_freeze_count() > 0  # what exists at Start is skipped by the drain's collections (ruling orch 108)
 
     _end_run(rig, made, thread, how)
 
-    assert gc.isenabled() and gc_calls[2:] == [("enable", MAIN)]
+    assert gc.isenabled() and gc_calls[3:] == [("unfreeze", MAIN), ("enable", MAIN)]
+    assert gc.get_freeze_count() == 0
     rig.tab.drainEvents()
     rig.tab.drainEvents()
-    assert gc_calls[2:] == [("enable", MAIN)]  # exactly once
+    assert gc_calls[3:] == [("unfreeze", MAIN), ("enable", MAIN)]  # exactly once
     if not how.startswith("close"):
         _, again = _start(rig)  # a later run turns it off again
-        assert again.collector_on_at_start is False and gc_calls[3:] == [("collect", MAIN), ("disable", MAIN)]
+        assert again.collector_on_at_start is False
+        assert gc_calls[5:] == [("collect", MAIN), ("disable", MAIN), ("freeze", MAIN)]
 
 
 def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_calls):
@@ -953,7 +957,7 @@ def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_c
     thread.finish()
     for _ in range(20):
         rig.tab.drainEvents()
-    assert gc_calls == [("collect", MAIN)] * 2 + [("enable", MAIN)]  # no worker: no more collections
+    assert gc_calls == [("collect", MAIN)] * 2 + [("unfreeze", MAIN), ("enable", MAIN)]  # no worker: no more
 
 
 @pytest.fixture
@@ -1019,11 +1023,38 @@ def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
     assert _state(rig.gui.load_map_button) == "normal"
     assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
     assert gc.isenabled()
-    assert [name for name, _ in gc_calls] == ([] if failing == "make_thread" else ["collect", "disable", "enable"])
+    assert [name for name, _ in gc_calls] == ([] if failing == "make_thread"
+                                              else ["collect", "disable", "freeze", "unfreeze", "enable"])
+    assert gc.get_freeze_count() == 0
 
     tab.drainEvents()  # the readiness refresh gives Start back and keeps the Ended text (choice 8)
     assert _state(tab.start_button) == "normal"
     assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+
+
+class EndRaisesTab(SpyTab):
+    """`_onEnded` raises, as a replay that cannot be built could (RT-8a fix re-review minor)."""
+
+    def _onEnded(self, code, text):
+        super()._onEnded(code, text)
+        raise RuntimeError("replay boom")
+
+
+def test_a_dead_worker_is_cleared_when_on_ended_raises(make_rig, gc_calls):
+    rig = make_rig(cls=EndRaisesTab)
+    tab = rig.tab
+    _, thread = _start(rig)
+    thread.finish()  # dead with no `ended`: the watchdog ends the run and `_onEnded` raises
+
+    with pytest.raises(RuntimeError, match="replay boom"):
+        tab.drainEvents()
+
+    assert tab.worker is None and tab.state == "ended"
+    assert gc.isenabled() and gc.get_freeze_count() == 0 and gc_calls[-2:] == [("unfreeze", MAIN), ("enable", MAIN)]
+    assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
+    assert rig.scheduled[-1][1] == tab.drainEvents  # the loop goes on
+    tab.drainEvents()  # nothing left to end: `_onEnded` is not called again, and Start comes back
+    assert len(tab.calls) == 1 and _state(tab.start_button) == "normal"
 
 
 @pytest.mark.parametrize("replay", [False, True])
@@ -1239,6 +1270,7 @@ def test_close_destroys_after_10_s(make_rig, capsys, gc_calls):
     assert capsys.readouterr().out == CLOSE_GAVE_UP + "\n"  # one console line
     assert made.stops == ["window_close"] and thread.is_alive()  # never joined: a daemon, it dies with the process
     assert not gc.isenabled() and ("enable", MAIN) not in gc_calls  # left off: the process is exiting (RT-8a I1)
+    assert ("unfreeze", MAIN) not in gc_calls
 
 
 _MISC_CALLS = ("focus_set", "focus", "focus_force", "tkraise", "lift", "grab_set")

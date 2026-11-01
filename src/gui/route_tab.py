@@ -192,7 +192,9 @@ CLOSE_GAVE_UP_TEXT = "The run's cleanup did not finish in 10 s; closing anyway."
 # Python's cycle collector runs on whichever thread allocates past its threshold. On the worker it could free a Tk
 # object (a Variable's or an image's `__del__` calls Tcl), which waits for the Tk thread with no timeout and can deadlock
 # it on a lock both take (the event queue's). So while a worker lives automatic collection is off and every collection
-# runs on the Tk thread: one just before the worker starts, then one every GC_EVERY_POLLS drains (RT-8a I1).
+# runs on the Tk thread: one just before the worker starts, then one every GC_EVERY_POLLS drains (RT-8a I1). The
+# objects that exist at Start are frozen (`gc.freeze()`) until the worker is cleared, so the periodic collection walks
+# only what the run made since, not the whole app (about 1.5 ms instead of about 23 ms; ruling orch 108).
 GC_EVERY_POLLS = 10  # about once a second at POLL_MS
 RouteState = Literal["not_ready", "ready", "connecting", "countdown", "running", "stopping", "ended"]
 _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "stopping")  # Start pressed, cleanup not done
@@ -411,12 +413,14 @@ class RouteTab:
             self._drainQueue()
             worker = self.worker
             if worker is not None and not worker.is_alive():
-                self._drainQueue()
-                if not self._ended_seen:
-                    self._endWithoutEnded()
-                self._clearWorker()
-                if self._closing is None:
-                    self._lockControls(False)
+                try:
+                    self._drainQueue()
+                    if not self._ended_seen:
+                        self._endWithoutEnded()
+                finally:  # an `_onEnded` that raises must not leave the worker set and the collector off for good
+                    self._clearWorker()
+                    if self._closing is None:
+                        self._lockControls(False)
             elif worker is not None:
                 self._polls_alive += 1
                 if self._polls_alive % GC_EVERY_POLLS == 0:
@@ -434,11 +438,12 @@ class RouteTab:
         self._say(_unexpectedEndText(self._out, replay_open))
 
     def _clearWorker(self) -> None:
-        """The worker has ended or never started: forget it and turn automatic garbage collection back on if Start
-        turned it off, once per run (RT-8a I1)."""
+        """The worker has ended or never started: forget it and, if Start turned automatic garbage collection off,
+        unfreeze what Start froze and turn it back on, once per run (RT-8a I1, ruling orch 108)."""
         self.worker = None
         if self._collector_off:
             self._collector_off = False
+            gc.unfreeze()
             gc.enable()
 
     def _say(self, text: str) -> None:
@@ -598,6 +603,7 @@ class RouteTab:
             worker = self._make_thread(target=self._work, args=(run,), name="route-run", daemon=True)
             gc.collect()
             gc.disable()
+            gc.freeze()
             self._collector_off = True
             worker.start()
         except BaseException:
