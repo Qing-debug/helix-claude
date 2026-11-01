@@ -314,7 +314,8 @@ class RunSession:
         self._control: runtime.StopControl | None = None   # the "started" bit: the stop control once start() succeeded
         self._stop_asked = False                           # the stop control's on_stop has run
         self._walking: RouteWalker | None = None           # the walker, once the walk begins
-        self._stopped: tuple[str, str | None] | None = None  # stop.json's reason and trigger source, once written
+        # stop.json's reason and trigger source, once the cleanup's stop.json step ran (even if its write failed)
+        self._stopped: tuple[str, str | None] | None = None
 
     def stop(self, source: str) -> None:
         """Ask the run to stop; any thread, returns at once (spec 5.6). Before `StopControl.start()` has succeeded
@@ -334,22 +335,29 @@ class RunSession:
             return self._cancel is not None
 
     def _on_stop(self) -> None:
-        """The stop control's `on_stop`. It stops the walker only once `_begin_walk` has handed it over:
+        """The stop control's `on_stop`. It stops the walker only once `_hand_over` has handed it over:
         `walker.stop_now()` starts a guard thread that ends only when `walker.run()` has finished (walker.py:278-287),
-        and a run cancelled before the walk never calls `walker.run()`."""
+        and a run cancelled before the walk, or left by an exception before `walker.run()`, never calls it."""
         with self._stop_lock:
             self._stop_asked = True
             walker = self._walking
         if walker is not None:
             walker.stop_now()
 
-    def _begin_walk(self, walker: RouteWalker) -> bool:
-        """Hand `walker` to `_on_stop`; `False` (cancel, do not walk) if `on_stop` ran after the countdown's checks."""
+    def _stop_asked_now(self) -> bool:
+        """`on_stop` has run: the countdown's end cancels (the real stop control runs it later than `trigger`)."""
         with self._stop_lock:
-            if self._stop_asked:
-                return False
+            return self._stop_asked
+
+    def _hand_over(self, walker: RouteWalker) -> None:
+        """Hand `walker` to `_on_stop`, right before `walker.run()`. If `on_stop` ran since the countdown's end, stop
+        the walker here instead, so `run()` stops at its first check. Under the lock, exactly one of the two calls
+        `stop_now`."""
+        with self._stop_lock:
             self._walking = walker
-            return True
+            asked = self._stop_asked
+        if asked:
+            walker.stop_now()
 
     def _stop_stamp(self, stop: runtime.StopControl | None) -> tuple[int | None, str | None]:
         """stop.json's `trigger_ns` and `trigger_source`: the cancel flag's if it was set (spec 5.6), else the stop
@@ -466,7 +474,8 @@ class RunSession:
                 if self._cancel is not None:
                     stop.trigger(self._cancel[1])
 
-            # Spec 5.9 step 1 (V7 step 4); from here on the only return is `return code`.
+            # Spec 5.9 step 1 (V7 step 4); from here on the only returns are the cancel at the countdown's end and
+            # `return code`.
             head = _git_head()
             wrote = _write_run_files(out, s.map_csv, first_frame, step_log, lambda sha: RunHeader(
                 source="walk", clock="perf_counter_ns", map=MAP_COPY, map_sha256=sha, character=s.character,
@@ -501,7 +510,9 @@ class RunSession:
                     break
             if stop.trigger_source is None and self._may_walk is not None and not self._may_walk():
                 stop.trigger("countdown_focus")  # section 9: the app still had the keyboard
-            if stop.trigger_source is not None or not self._begin_walk(walker):
+            # The countdown's last check, also at 0 s (no step). `trigger_source` covers a trigger whose `on_stop` has
+            # not run yet (the real stop control runs it later, on its worker); `_stop_asked_now` covers the reverse.
+            if stop.trigger_source is not None or self._stop_asked_now():
                 stop_payload = {"reason": "cancelled"}  # stopped before the walk: no recorder, timer or walk
                 return 0
 
@@ -519,6 +530,7 @@ class RunSession:
 
             error: str | None = None
             summary: RunSummary | None = None
+            self._hand_over(walker)  # last, so an exception before walker.run() leaves no stop guard behind
             try:
                 ran = walker.run()
             except Exception as exc:
@@ -564,9 +576,9 @@ class RunSession:
             if stop_payload is not None:
                 def write_stop(payload: dict = stop_payload, sc: runtime.StopControl | None = stop) -> None:
                     trigger_ns, source = self._stop_stamp(sc)
+                    self._stopped = (payload["reason"], source)  # first: `ended` keeps them if the write fails
                     out.mkdir(parents=True, exist_ok=True)  # a cancel can come before the leg log made the folder
                     _write_json(out / _STOP, {**payload, "trigger_ns": trigger_ns, "trigger_source": source})
-                    self._stopped = (payload["reason"], source)
                     print(f"stopped: {payload['reason']}" + (f" ({source})" if source is not None else ""))
                 steps.append(("stop.json", write_stop))
             if run_log is not None:  # on the walker's thread, after run() returned (RV-2: calls racing close are dropped)

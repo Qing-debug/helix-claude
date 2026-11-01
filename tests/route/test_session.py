@@ -76,10 +76,30 @@ class HookStop(FakeStop):
         return super().start(sigint)
 
 
+class LaterStop(HookStop):
+    """`HookStop` built with `calls_on_stop=False`: like the real `StopControl` (runtime.py `_work`), `trigger` sets
+    `trigger_source` at once and `on_stop` runs later on another thread, here when `deliver()` is called or at
+    `close()` (the real worker's last chance, `_end_worker`)."""
+
+    delivered = False
+
+    def deliver(self) -> None:
+        if self.trigger_source is not None and not self.delivered:
+            self.delivered = True
+            worker = threading.Thread(target=self.on_stop, name="stop-worker")
+            worker.start()
+            worker.join()
+
+    def close(self) -> None:
+        self.deliver()
+        super().close()
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     """FF2 terrain, noise off, start at (113, 60), one SimClock everywhere, one lap, no countdown, a shared frame set.
-    The fake stop control calls `on_stop` from `trigger`, as the real worker does; `RouteWalker.run` counts its calls."""
+    The fake stop control calls `on_stop` from `trigger`; with `env.later_stop` it calls it later from another thread,
+    as the real worker does (`LaterStop`). `RouteWalker.run` counts its calls."""
     rg, rotation = session._load_route(FIXTURE, Kanna()).unwrap()
     clock = SimClock()
     params = SimParams()
@@ -88,7 +108,7 @@ def env(monkeypatch, tmp_path):
     e = SimpleNamespace(log=[], calls=[], stops=[], events=[], sleeps=[], walks=0, out=tmp_path / "run",
                         rotation=rotation, shared=runtime.SharedFrame(), map_csv=FIXTURE, laps=1, countdown_s=0.0,
                         first=Success(None), stop_start=Success(None), on_start=None, on_sleep=None, may_walk=None,
-                        make_clock=lambda: clock, session=None)
+                        make_clock=lambda: clock, session=None, later_stop=False, on_event=None)
     e.shared.minimap_frame = np.zeros((4, 6, 3), np.uint8)
     e.link = HookLink(SimLink(world, clock, params), e.log)
     e.positions = SimPositionSource(world, clock, 0.0, np.random.default_rng(1))
@@ -105,7 +125,10 @@ def env(monkeypatch, tmp_path):
         return e.first
 
     def make_stop(on_stop):
-        stop = HookStop(on_stop, e.log, e.stop_start, True, e.link)
+        if e.later_stop:
+            stop = LaterStop(on_stop, e.log, e.stop_start, False, e.link)
+        else:
+            stop = HookStop(on_stop, e.log, e.stop_start, True, e.link)
         stop.on_start = e.on_start
         e.stops.append(stop)
         return stop
@@ -128,7 +151,8 @@ def env(monkeypatch, tmp_path):
     def build() -> RunSession:
         settings = RunSettings(map_csv=e.map_csv, character="kanna", laps=e.laps, minutes=None,
                                countdown_s=e.countdown_s, seed=1, out=e.out)
-        e.session = RunSession(settings, e.shared, on_event=e.events.append, make_positions=make_positions,
+        on_event = e.on_event if e.on_event is not None else e.events.append
+        e.session = RunSession(settings, e.shared, on_event=on_event, make_positions=make_positions,
                                wait_first_frame=wait_first_frame, make_link=lambda: e.link, make_clock=e.make_clock,
                                make_stop=make_stop, start_capture=start_capture, may_walk=e.may_walk, sleep=sleep)
         return e.session
@@ -303,6 +327,134 @@ def test_may_walk_true_walks(env):
     assert _json(env.out / "stop.json")["reason"] == "max_laps"
 
 
+# ---- the real stop control's later on_stop (RT-3 review m4, RT-3-S1) -------------------------------------------------
+
+def _cancelled_before_the_walk(env, capsys, source: str) -> None:
+    assert _kinds(env.events) == ["status", "ended"]  # countdown 0: no countdown event, no `running`
+    stop_json = _json(env.out / "stop.json")
+    assert (stop_json["reason"], stop_json["trigger_source"]) == ("cancelled", source)
+    assert env.walks == 0
+    assert not (env.out / "frames").exists()  # no recorder
+    assert _ended(env.events).text == f"cancelled/{source}"
+    assert capsys.readouterr().out.splitlines()[-1] == f"stopped: cancelled ({source})"
+    assert env.stops[0].delivered  # on_stop ran at the latest in the cleanup, with no walker handed over
+    assert _no_run_thread_left()
+
+
+def test_stop_pending_at_start_with_no_countdown(env, capsys):
+    """RT-3-S1 (kept): a stop pending when the stop control starts, with a 0 s countdown, cancels at the gate even
+    though `on_stop` has not run yet; `may_walk` is not asked."""
+    asked: list[bool] = []
+
+    def may_walk() -> bool:
+        asked.append(True)
+        return True
+
+    env.later_stop = True
+    env.may_walk = may_walk
+    env.on_start = lambda: env.session.stop("button")
+    assert env.run() == 0
+    assert asked == []
+    _cancelled_before_the_walk(env, capsys, "button")
+
+
+def test_may_walk_false_with_no_countdown(env, capsys):
+    """`may_walk()` False triggers `countdown_focus`; the gate cancels before the later `on_stop` has run."""
+    asked: list[bool] = []
+
+    def may_walk() -> bool:
+        asked.append(False)
+        return False
+
+    env.later_stop = True
+    env.may_walk = may_walk
+    assert env.run() == 0
+    assert asked == [False]
+    _cancelled_before_the_walk(env, capsys, "countdown_focus")
+
+
+def test_on_stop_after_the_gates_trigger_check_cancels(env, monkeypatch, capsys):
+    """Review m4: a stop lands after the gate read `trigger_source`, and the worker runs `on_stop` before the gate's
+    second check; the run cancels and the walker is never handed over."""
+    real = RunSession._stop_asked_now
+
+    def stop_lands_first(self) -> bool:
+        self.stop("button")
+        env.stops[-1].deliver()
+        return real(self)
+
+    env.later_stop = True
+    monkeypatch.setattr(RunSession, "_stop_asked_now", stop_lands_first)
+    assert env.run() == 0
+    assert env.session._walking is None
+    _cancelled_before_the_walk(env, capsys, "button")
+
+
+def test_stop_after_the_gate_stops_the_walk_at_its_first_check(env, monkeypatch):
+    """A stop between the countdown's end and `walker.run()` (here while `running` is posted): `on_stop` finds no
+    walker yet, so `_hand_over` stops it; the walk starts and ends at its first check, `stopped/<source>`."""
+    def on_event(event: RunEvent) -> None:
+        env.events.append(event)
+        if event.kind == "running":
+            env.session.stop("button")
+
+    env.on_event = on_event
+    assert env.run() == 0
+    assert env.walks == 1
+    assert env.stops[0].plays_at_trigger == env.link.plays  # no move played after the stop
+    stop_json = _json(env.out / "stop.json")
+    assert (stop_json["reason"], stop_json["trigger_source"]) == ("stopped", "button")
+    assert _ended(env.events).text == "stopped/button"
+    assert _no_run_thread_left()
+
+
+@pytest.mark.parametrize("when", ["before_the_error", "in_the_cleanup"])
+def test_error_before_the_walk_leaves_no_stop_guard(env, monkeypatch, when):
+    """Review m3: an exception after the countdown but before `walker.run()`, with a stop landing before it or in the
+    cleanup before `stop.close`, leaves no `route-stop-guard` thread (the walker is handed over only at `run()`)."""
+    def on_event(event: RunEvent) -> None:
+        env.events.append(event)
+        if event.kind == "running":
+            if when == "before_the_error":
+                env.session.stop("button")
+            raise RuntimeError("tab gone")
+
+    real_close = env.link.close
+
+    def close() -> None:
+        if when == "in_the_cleanup":
+            env.session.stop("button")
+        real_close()
+
+    monkeypatch.setattr(env.link, "close", close)
+    env.on_event = on_event
+    with pytest.raises(RuntimeError, match="tab gone"):
+        env.build().run()
+    assert _ended(env.events).code is None
+    assert env.walks == 0
+    assert env.stops[0].triggers == ["button"]
+    assert _no_run_thread_left()
+
+
+@pytest.mark.parametrize("stop_before_run", [True, False])
+def test_failed_stop_json_still_ends_with_its_reason(env, monkeypatch, capsys, stop_before_run):
+    """Review m2: `stop.json`'s reason and source reach `ended` even when writing the file fails."""
+    real_write = session._write_json
+
+    def write(path, payload) -> None:
+        if path.name == "stop.json":
+            raise OSError("disk full")
+        real_write(path, payload)
+
+    monkeypatch.setattr(session, "_write_json", write)
+    run_session = env.build()
+    if stop_before_run:
+        run_session.stop("button")
+    assert run_session.run() == 0
+    assert _ended(env.events).text == ("cancelled/button" if stop_before_run else "max_laps/")
+    assert "cleanup failed: stop.json: OSError: disk full\n" in capsys.readouterr().err
+
+
 # ---- the order inside run(), exit codes and recording ----------------------------------------------------------------
 
 @pytest.mark.parametrize("broken", [None, "map", "icon"])
@@ -415,7 +567,7 @@ class NewFrames:
         return np.zeros((4, 6, 3), np.uint8)
 
 
-def test_recorder_oserror_is_one_warning(env, monkeypatch):
+def test_recorder_oserror_is_one_warning(env, monkeypatch, capsys):
     def full_disk(*args, **kwargs) -> bool:
         raise OSError("disk full")
 
@@ -423,9 +575,10 @@ def test_recorder_oserror_is_one_warning(env, monkeypatch):
     assert env.run() == 0
     assert _warnings(env.events) == ["Recording stopped: OSError: disk full. The walk goes on."]
     assert env.walks == 1
+    assert "record failed: OSError: disk full\n" in capsys.readouterr().err  # RT-3-S2 (kept)
 
 
-def test_record_guarded_failure_is_one_warning(tmp_path):
+def test_record_guarded_failure_is_one_warning(tmp_path, capsys):
     out_dir = tmp_path / "frames"
     out_dir.mkdir()
     (out_dir / INDEX_NAME).write_text("", encoding="utf-8")  # record refuses to overwrite: a Failure
@@ -434,9 +587,11 @@ def test_record_guarded_failure_is_one_warning(tmp_path):
     assert len(events) == 1 and events[0].kind == "warning"
     assert events[0].text.startswith("Recording stopped: ") and events[0].text.endswith(". The walk goes on.")
     assert "already exists" in events[0].text
+    err = capsys.readouterr().err  # the old line, word for word (RT-3-S2)
+    assert err.startswith("record failed: ") and "already exists" in err and err.count("\n") == 1
 
 
-def test_record_guarded_stops_below_the_floor(monkeypatch, tmp_path):
+def test_record_guarded_stops_below_the_floor(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(session, "DISK_CHECK_FRAMES", 3)
     monkeypatch.setattr(session, "RECORD_FPS", 1000.0)
     monkeypatch.setattr(session, "free_bytes", lambda path: session.RECORD_FLOOR_BYTES - 1)
@@ -445,6 +600,8 @@ def test_record_guarded_stops_below_the_floor(monkeypatch, tmp_path):
     session._record_guarded(NewFrames(), out_dir, threading.Event(), events.append)  # nothing else sets the event
     assert len(_lines(out_dir / INDEX_NAME)) == 3  # the 3rd frame is saved before record's stop check
     assert [(event.kind, event.text) for event in events] == [("warning", _low_space_text(out_dir))]
+    assert capsys.readouterr().err == (f"record stopped: less than {session.RECORD_FLOOR_BYTES / 2**30:g} GB free on "
+                                       f"{session.drive_name(out_dir)}\n")  # RT-3-S2 (kept)
 
 
 def test_disk_check_constants():
