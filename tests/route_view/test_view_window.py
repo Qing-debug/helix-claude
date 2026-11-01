@@ -245,6 +245,58 @@ def test_4_show_reads_one_picture_through_the_named_loader(tmp_path, make_window
     assert seen == ["frame_000001.png", "frame_000002.png"]
 
 
+# live picture (route tab plan RT-5 piece 2a: C3's `picture`, choice 12) -----------------------------------------------
+
+
+def _live_image(colour=(7, 8, 9)) -> Image.Image:
+    return Image.new("RGB", (162, 82), colour)
+
+
+def test_picture_wins_over_files(tmp_path, make_window, monkeypatch):
+    folder = make_folder(tmp_path)
+    _write_frames(folder)
+    Image.new("RGB", (162, 82), (9, 9, 9)).save(folder / "minimap.png")
+    window = make_window(folder)
+    seen = []
+    real = window._load_image
+    monkeypatch.setattr(window, "_load_image", lambda path: (seen.append(path.name), real(path))[1])
+    image = _live_image()
+    window.show(4, picture=image)
+    assert window.shown_image is image and window.shown_background == "live" and window.background_ok
+    window.show(4, background="frame_000002.png", picture=image)  # a named file does not beat it either
+    assert window.shown_image is image and seen == []
+    assert _canvas_size(window) == (648, 328)
+    window._redraw_here()  # this window is not live, so it kept nothing: the files are used again
+    assert window.shown_background == "frames/frame_000002.png" and seen == ["frame_000002.png"]  # the named one
+
+
+def test_window_keeps_the_picture_while_live(tmp_path, make_window, monkeypatch):
+    folder = make_folder(tmp_path)
+    _write_frames(folder)
+    window = make_window(folder, live=True)
+    seen = []
+    real = window._load_image
+    monkeypatch.setattr(window, "_load_image", lambda path: (seen.append(path.name), real(path))[1])
+    image = _live_image()
+    window.show(0, picture=image)
+    window._redraw_here()
+    assert window.shown_image is image and window.shown_background == "live"
+    window._redraw()
+    assert window.shown_image is image and window.shown_background == "live"
+    window.show(1)  # a show with no picture keeps drawing the kept one
+    assert window.shown_image is image and seen == []
+    (bg,) = window.canvas.find_withtag("bg")
+    assert window.canvas.itemcget(bg, "image") == str(window.shown_photo)
+    newer = _live_image((1, 2, 3))
+    window.show(1, picture=newer)
+    window._redraw_here()
+    assert window.shown_image is newer
+    window.set_live(False)
+    window._redraw_here()  # the kept picture is dropped: this step's file is read
+    assert window.shown_background.startswith("frames/") and window.shown_image is not newer
+    assert seen != []
+
+
 # 5 ---------------------------------------------------------------------------------------------------------------
 
 

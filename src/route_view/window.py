@@ -67,7 +67,7 @@ Pos = tuple[int, int]
 
 
 class RouteViewWindow:
-    shown_background: str  # "frames/<file>" | "minimap.png" | "dark": what the canvas shows now
+    shown_background: str  # "frames/<file>" | "minimap.png" | "live" | "dark": what the canvas shows now
     shown_image: Image.Image | None  # that picture at the minimap's own size (RGB), None for the dark canvas
     shown_photo: ImageTk.PhotoImage | None  # the scaled picture the canvas holds (the same object while a read fails)
     background_ok: bool  # False when the last `show` asked for a picture file and could not read it
@@ -87,6 +87,7 @@ class RouteViewWindow:
         self.background_ok = True
         self._view: StepView | None = None
         self._background: str | None = None  # the `background` of the last show, kept for a redraw at a new scale
+        self._picture: Image.Image | None = None  # the live picture of the last `show(picture=)`; kept only while `live`
         self._mode_override: str | None = None
         self._extra_warnings: list[str] = []
         self._read_error: str | None = None  # the status text a failed read set; cleared by the next good read
@@ -206,10 +207,18 @@ class RouteViewWindow:
         self._reset_model_state()
         self._redraw()
 
-    def show(self, k: int, *, background: str | None = None) -> None:
-        """Draw step `k`. `background` (live, RV-8) is a file in `frames/` to use instead of the step's own frame."""
+    def show(self, k: int, *, background: str | None = None, picture: Image.Image | None = None) -> None:
+        """Draw step `k`. `background` (live, RV-8) is a file in `frames/` to use instead of the step's own frame.
+        `picture` (RGB, minimap size; route tab plan C3, choice 12) wins over every file and shows as `"live"`. While
+        the window is `live` it keeps the last `picture`, so a `show` without one (and `_redraw`, `_redraw_here`) draws
+        it again; `set_live(False)` drops it. A window that is not live draws `picture` once and keeps nothing."""
         model = self.model
         self._background = background
+        if self.live:
+            if picture is not None:
+                self._picture = picture
+            else:
+                picture = self._picture
         self.sync_why()
         view: StepView | None = None
         if model is not None and model.events:
@@ -218,7 +227,10 @@ class RouteViewWindow:
         else:
             self.index = None
         self._view = view
-        self._update_background(view, background)
+        if picture is not None:
+            self._update_live_picture(picture)
+        else:
+            self._update_background(view, background)
         self._draw(view)
         self._update_panel(view)
         self._update_controls(view)
@@ -261,6 +273,8 @@ class RouteViewWindow:
             self.bar.pack_forget()
         elif self.bar.winfo_manager() != "pack":
             self.bar.pack(side="bottom", fill="x", after=self.status_label)
+        if not live:
+            self._picture = None
         self._update_title()
 
     def set_mode(self, text: str) -> None:
@@ -489,6 +503,12 @@ class RouteViewWindow:
             return  # the last good picture (or the dark canvas) stays
         self._clear_read_error()
         self._use_picture(label, image)
+
+    def _update_live_picture(self, picture: Image.Image) -> None:
+        """A given picture needs no file, so no read failed: no stale status, and the last `show` has a good picture."""
+        self.background_ok = True
+        self._clear_read_error()
+        self._use_picture("live", picture)
 
     def _clear_read_error(self) -> None:
         """Forget a failed read; its status text goes too, unless something else has replaced it."""
