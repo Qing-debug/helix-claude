@@ -695,14 +695,19 @@ class RunModel:
 
 
 def load_folder(folder: Path, *, repo_root: Path, current_git_head: str | None) -> Result[RunModel, str]:
-    """`read_run` + the frame index + `RunModel.open` + `extend` + `add_frames`; Failure only when `read_run` fails."""
+    """`read_run` + the frame index + `RunModel.open` + `extend` + `add_frames`. Failure when `read_run` fails, or when
+    `extend` raises on a line holds a value the model cannot show (a damaged or hand-edited file: a time out of range,
+    a wrong-typed field); the text names the folder and the exception."""
     folder = Path(folder)
     run = read_run(folder)
     if not is_successful(run):
         return Failure(run.failure())
     steps = run.unwrap()
     model = RunModel.open(folder, steps.header, steps.origin, repo_root=repo_root, current_git_head=current_git_head)
-    model.extend(steps.events)
+    try:
+        model.extend(steps.events)
+    except Exception as e:  # the why-line handlers format raw values: any failure here is a value the model cannot show
+        return Failure(f"{folder}: cannot show the run ({type(e).__name__}: {e})")
     try:
         index = (folder / FRAMES_DIR / FRAME_INDEX).read_bytes()
     except OSError:
