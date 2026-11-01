@@ -10,8 +10,8 @@ long as in a board run. A frame pump stores a fixed minimap-sized picture every 
 run writes `minimap.png` and its step log, the recorder saves frames and the live view redraws.
 
 `measure` walks the same settings twice: "cli" (`RunSession.run()` on the main thread, no Tk), then "app" (a real
-`MapleGUI` window whose Route tab presses Start itself, 500 ms after the window starts, and closes once the tab is
-Ended). It compares the PC's time from the stimulus to the send (`reaction_ms - waited_ms`) of the two runs, prints a
+`MapleGUI` window whose Route tab presses Start itself, 500 ms after the window starts, and closes once the tab's
+worker is gone; the finish is read from steps.jsonl). It compares the PC's time from the stimulus to the send (`reaction_ms - waited_ms`) of the two runs, prints a
 table and writes `timing.json` into the run root. Exit 0 with a verdict, whatever it says; exit 2 on a refusal (a run
 that did not finish all its laps, too few sends) or a setup failure. An agent may run it on an idle PC (H75): the window
 it opens takes the keyboard.
