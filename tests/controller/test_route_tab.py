@@ -7,7 +7,7 @@ import inspect
 import json
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import tkinter as tk
 import weakref
 from pathlib import Path
@@ -2341,6 +2341,35 @@ def test_rows_newest_first_with_label(make_rig, tmp_path):
     tab.startPolling()
     assert _rows(tab) == tuple(f"{label}  {SIZE_PENDING}" for _, label in expected)
     tab.size_thread.join()
+
+
+def test_laps_are_the_whole_lines_of_laps_jsonl(tmp_path):
+    """Plan choice 13: a last line with no newline (a crash mid-write) is not a lap."""
+    _saved_folder(tmp_path, "run", session=_session("2026-10-30T09:00:00+00:00", "a.csv"))
+    laps_file = tmp_path / "run" / "laps.jsonl"
+    laps_file.write_bytes(b'{"lap": 1}\n{"lap": 2')
+    assert savedRuns(tmp_path)[0].label.endswith("  a  1 lap")
+    laps_file.write_bytes(b'{"lap": 1}\n{"lap": 2}\n{"lap"')
+    assert savedRuns(tmp_path)[0].label.endswith("  a  2 laps")
+
+
+def test_start_time_is_shown_in_local_time_and_a_zoneless_one_is_utc(tmp_path, monkeypatch):
+    """The local zone is pinned to UTC+9 (this PC may be UTC+0, where a dropped conversion would pass): a UTC stamp
+    shows nine hours on, a zone-less one is read as UTC (so it shows the same), a +09:00 one shows as written."""
+    nine = timezone(timedelta(hours=9))
+
+    class NineLocal(datetime):
+        def astimezone(self, tz=None):
+            if tz is None and self.tzinfo is None:  # a naive time is local time: nothing to shift
+                return self.replace(tzinfo=nine)
+            return super().astimezone(tz or nine)
+
+    monkeypatch.setattr(route_tab_module, "datetime", NineLocal)
+    for name, start in (("a", "2026-10-30T09:00:00+00:00"), ("b", "2026-10-30T09:00:00"),
+                        ("c", "2026-10-30T18:00:00+09:00"), ("d", "2026-10-30T20:00:00+11:00")):
+        _saved_folder(tmp_path, name, session=_session(start, "m.csv"))
+    labels = {run.folder.name: run.label for run in savedRuns(tmp_path)}
+    assert labels == {name: "2026-10-30 18:00  m  ? laps" for name in "abcd"}
 
 
 def test_folder_size_sums_every_file_below(tmp_path):
