@@ -1632,6 +1632,50 @@ def test_back_to_live(make_rig, tmp_path):
     assert minimap.draws == draws + 1 and tab.status_var.get() == ended == "Ended: all laps done."
 
 
+def _host_replay(rig, folder):
+    """A saved run's replay hosted as RT-10's Open will host it: the idle minimap hidden, the replay in `view_frame`,
+    the Back button shown (`_showBack`). Open is not built yet (RT-10), so this stands in for it."""
+    tab = rig.tab
+    _write_run(folder, G)
+    tab._hideMinimap()
+    tab.view = tab._make_view(tab.view_frame, folder, None, live=False)
+    tab._showBack()
+    return tab.view
+
+
+def test_back_over_a_saved_runs_replay(make_rig, tmp_path):
+    """RDO110-D2, answer A (Hong, QB155): "Back to live minimap" shows above a saved run's replay as above a kept run
+    view; it drops the replay and shows the idle live minimap, drawn again from the next drain on."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    view = _host_replay(rig, tmp_path / "saved")
+    assert _one_view(tab) and tab.view is view and not view.live and tab._backShown()
+    assert tab.back_button.cget("text") == "Back to live minimap"
+    draws = minimap.draws
+    tab.drainEvents()
+    assert minimap.draws == draws  # hidden under the replay: not drawn
+    tab.back_button.invoke()
+    assert tab.view is None and tab.live is None and _packed(tab) == [minimap.canvas] and not tab._backShown()
+    assert rig.log == ["view0.destroy"]
+    tab.drainEvents()
+    assert minimap.draws == draws + 1
+
+
+def test_start_leaves_a_saved_runs_replay(make_rig, tmp_path):
+    """RDO110-D2, answer A: Start, once its checks pass, drops a saved run's replay and its Back button, as it drops a
+    kept run view (H70)."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    _host_replay(rig, tmp_path / "saved")
+    _start(rig)
+    assert rig.log == ["view0.destroy"] and tab.view is None and _packed(tab) == [minimap.canvas]
+    assert not tab._backShown()
+
+
 def test_live_view_reads_the_shared_frame(make_rig, tmp_path):
     rig = _hosting_rig(make_rig, tmp_path)
     made, _ = _start(rig)

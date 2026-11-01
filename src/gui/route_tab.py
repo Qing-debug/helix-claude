@@ -591,13 +591,14 @@ class RouteTab:
         self._showBack()
 
     def backToLive(self) -> None:
-        """The "Back to live minimap" button (spec 5.2, H69): the kept run view goes and the idle live minimap shows;
-        the button hides with the view (`_dropView`). The status line keeps the run's Ended text."""
+        """The "Back to live minimap" button (spec 5.2, H69, RDO110-D2 answer A): the kept run view or the saved run's
+        replay goes and the idle live minimap shows; the button hides with the view (`_dropView`). The status line keeps
+        the run's Ended text."""
         self._showMinimap()
 
     def _showBack(self) -> None:
-        """Show "Back to live minimap" above the view area, while a kept run view is shown (H69). (open: RDO110-D2) A
-        saved run's replay (RT-10) would show it too."""
+        """Show "Back to live minimap" above the view area, while a kept run view is shown (H69) or a saved run's replay
+        (RDO110-D2, answer A; RT-10's Open hosts its replay the same way and calls this)."""
         if not self._backShown():
             self._back_frame.pack(side=tk.TOP, fill=tk.X, padx=8, before=self.view_frame)
 
@@ -620,7 +621,7 @@ class RouteTab:
 
     def _dropView(self) -> None:
         """Stop the live view's polling and destroy the hosted view, if there is one; no view is left in `view_frame`,
-        and the Back button, which shows only with a kept view, hides."""
+        and the Back button, which shows only with a kept view or a replay, hides."""
         live, view = self.live, self.view
         self.live = None
         self.view = None
