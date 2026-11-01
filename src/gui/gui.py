@@ -37,6 +37,7 @@ class MapleGUI:
     notebook: ttk.Notebook
     setup_tab: tk.Frame
     route_tab_frame: tk.Frame
+    scroll_canvas: tk.Canvas  # scrolls the Setup tab's column; set by _setupScrollableContainer, used by _onMouseWheel
 
     def __init__(self, controller = None, sharedInfo = None, *, route_tab_factory = None):
         self.minimap_canvas_width = None
@@ -85,14 +86,19 @@ class MapleGUI:
         # Make the inner frame's width track the canvas width so children can fill horizontally
         scroll_canvas.bind('<Configure>', lambda e: scroll_canvas.itemconfig(inner_window_id, width=e.width))
 
-        # Mouse wheel scroll (Windows: event.delta is ±120 per notch)
-        def _on_mousewheel(event):
-            if isinstance(event.widget, (tk.Text, tk.Listbox)):
-                return  # let the inner scrollable widget handle its own scroll
-            scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-        scroll_canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        self.scroll_canvas = scroll_canvas
+        scroll_canvas.bind_all('<MouseWheel>', self._onMouseWheel)
 
         return inner
+
+    def _onMouseWheel(self, event):
+        """Mouse wheel scroll (Windows: event.delta is ±120 per notch). bind_all catches every widget of the window, so
+        it acts only while the Setup tab is shown: the Route tab's canvas and slider keep their own wheel (spec 5.7)."""
+        if not self.isSetupTabShown():
+            return
+        if isinstance(event.widget, (tk.Text, tk.Listbox)):
+            return  # let the inner scrollable widget handle its own scroll
+        self.scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
 
     def _captureBaseFontSizes(self):
         # Record each named font's original size so zoom is relative to defaults, not previous zoom state.
@@ -149,6 +155,18 @@ class MapleGUI:
 
     def isSetupTabShown(self):
         return self.notebook.select() == str(self.setup_tab)
+
+    def setRunLocked(self, locked):
+        """Grey out the Setup tab for a run, or bring it back (spec 5.1): the eleven buttons and the class picker. The
+        console Text stays editable on purpose: a disabled Text drops _printToGUIConsole's inserts. The tab's header
+        is left alone (RTF98-1-D1 answer A: it stays selectable)."""
+        state = "disabled" if locked else "normal"
+        for button in (self.draw_blue_node_button, self.draw_orange_node_button, self.clear_gui_console_button,
+                       self.clear_gui_minimap_button, self.load_map_button, self.open_editor_button,
+                       self.setup_agent_button, self.display_graph_button, self.connect_character_node_button,
+                       self.delete_node_button, self.get_path_button):
+            button.configure(state=state)
+        self.character_picker.configure(state="disabled" if locked else "readonly")
 
     def _onClose(self):
         """WM_DELETE_WINDOW: the Route tab decides when the window may go (it waits for a live run's cleanup)."""
@@ -470,11 +488,15 @@ class MapleGUI:
 
     #draws minimap on GUI
     def _updateCanvas(self):
+        # While a run is live and the Setup tab is hidden nobody sees this picture: skip it, so the walker shares the
+        # interpreter with one redraw (the Route tab's) instead of two (spec 5.7). The 10 ms loop itself goes on.
+        picture_unseen = (self.route_tab is not None and self.route_tab.isRunLive()
+                          and not self.isSetupTabShown())
         # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
         # The vision thread stores a new array for every frame (src/vision/vision.py:81), so the array read here is not mutated.
         with self.sharedInfo.minimap_frame_lock:
             frame = self.sharedInfo.minimap_frame
-        if frame is not None:
+        if frame is not None and not picture_unseen:
             canvas = self.minimap_canvas
             if canvas is None:
                 canvas = self._createMinimapCanvas(frame)

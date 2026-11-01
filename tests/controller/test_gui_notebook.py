@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import test_gui_startup
+from test_gui_startup import _console, _frame
 
 make_gui = test_gui_startup.make_gui  # the fixture, shared (no conftest.py under tests/)
 
@@ -37,6 +38,21 @@ SETUP_BUTTON_TEXTS = [
 
 def _is_under(widget, ancestor) -> bool:
     return str(widget).startswith(str(ancestor) + ".")
+
+
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
+def _locked_widgets(gui) -> list:
+    """The eleven buttons spec 5.1 greys out during a run (C4): draw blue, draw orange, clear console, clear drawn
+    nodes, Load Map, Open Map Editor and the five dev buttons."""
+    return [gui.draw_blue_node_button, gui.draw_orange_node_button, gui.clear_gui_console_button,
+            gui.clear_gui_minimap_button, gui.load_map_button, gui.open_editor_button, gui.setup_agent_button,
+            gui.display_graph_button, gui.connect_character_node_button, gui.delete_node_button,
+            gui.get_path_button]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="sends Windows' own focus messages to Tk's window")
@@ -136,3 +152,70 @@ def test_close_hands_destroy_to_the_route_tab(make_gui):
     gui._onClose()
 
     assert closed == [gui.gui.destroy]
+
+
+def test_run_lock_disables_exactly_these(make_gui):
+    gui, _, _ = make_gui(route_tab_factory=None)
+    buttons = _locked_widgets(gui)
+    clickable = [w for w in _descendants(gui.setup_tab) if w.winfo_class() in ("Button", "TCombobox")]
+    assert len(buttons) == 11 and set(clickable) == {*buttons, gui.character_picker}  # none missed, none extra
+
+    gui.setRunLocked(True)
+
+    assert [str(b.cget("state")) for b in buttons] == ["disabled"] * 11
+    assert str(gui.character_picker.cget("state")) == "disabled"
+    assert str(gui.gui_console.cget("state")) == "normal"  # a disabled Text drops _printToGUIConsole's inserts
+    gui._printToGUIConsole("still printing")
+    assert "still printing" in _console(gui)
+    assert gui.notebook.tab(gui.setup_tab, "state") == "normal"  # RTF98-1-D1 answer A: the header stays selectable
+
+    gui.setRunLocked(False)
+
+    assert [str(b.cget("state")) for b in buttons] == ["normal"] * 11
+    assert str(gui.character_picker.cget("state")) == "readonly"
+    assert str(gui.gui_console.cget("state")) == "normal"
+    assert gui.notebook.tab(gui.setup_tab, "state") == "normal"
+
+
+def test_wheel_only_on_setup_tab(make_gui, monkeypatch):
+    gui, _, _ = make_gui(route_tab_factory=None)
+    scrolled = []
+    monkeypatch.setattr(gui.scroll_canvas, "yview_scroll", lambda *args: scrolled.append(args))
+    event = SimpleNamespace(widget=gui.setup_tab, delta=-120)  # one notch down
+
+    gui.notebook.select(gui.route_tab_frame)
+    gui._onMouseWheel(event)
+    assert scrolled == []
+
+    gui.notebook.select(gui.setup_tab)
+    gui._onMouseWheel(event)
+    assert scrolled == [(1, "units")]
+
+
+def test_update_canvas_skips_drawing_while_live_on_route_tab(make_gui, monkeypatch):
+    live = {"now": True}
+    stub = SimpleNamespace(isRunLive=lambda: live["now"], onAppClose=lambda destroy: None)
+    gui, _, scheduled = make_gui(frame=_frame(), route_tab_factory=lambda parent, owner: stub)
+    drawn = []
+    real_photo_image = test_gui_startup.gui_module.ImageTk.PhotoImage
+
+    def photo_image(*args, **kwargs):
+        drawn.append(True)
+        return real_photo_image(*args, **kwargs)
+
+    monkeypatch.setattr(test_gui_startup.gui_module, "ImageTk", SimpleNamespace(PhotoImage=photo_image))
+
+    gui.notebook.select(gui.route_tab_frame)
+    gui._updateCanvas()
+    assert drawn == [] and gui.minimap_canvas is None  # live and the Route tab shown: no picture
+    assert scheduled[-1] == (10, gui._updateCanvas)  # the 10 ms loop goes on
+
+    live["now"] = False
+    gui._updateCanvas()
+    assert len(drawn) == 1 and gui.minimap_canvas is not None  # not live: it draws, shown or not
+    assert scheduled[-1] == (10, gui._updateCanvas)
+
+    live["now"] = True
+    gui.notebook.select(gui.setup_tab)
+    gui._updateCanvas()
+    assert len(drawn) == 2  # live but the Setup tab is shown: it draws
