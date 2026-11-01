@@ -125,6 +125,34 @@ def test_route_loads_once_before_any_session(monkeypatch, setup, tmp_path):
                                                       lambda event: None, lambda: True, lambda t, e: None)
 
 
+def test_main_loads_the_route_first_on_the_main_thread(monkeypatch):
+    """DBG115: `main` runs `load_sim` (the only `redirect_stdout`) once, on the main thread, before the frame pump,
+    the window or any run; so no two swaps of `sys.stdout` can overlap."""
+    order: list[tuple[str, threading.Thread]] = []
+    real_load = session._load_route
+
+    def load(*args):
+        order.append(("load", threading.current_thread()))
+        return real_load(*args)
+
+    def note(name, result=None):
+        def hook(*args, **kwargs):
+            order.append((name, threading.current_thread()))
+            return result
+        return hook
+
+    monkeypatch.setattr(session, "_load_route", load)
+    monkeypatch.setattr(route_tab_sim.FramePump, "start", note("pump"))
+    monkeypatch.setattr(route_tab_sim, "run_manual", note("manual", 0))
+    monkeypatch.setattr(route_tab_sim, "measure", note("measure", 0))
+
+    for mode in ("manual", "measure"):
+        order.clear()
+        assert route_tab_sim.main([mode]) == 0
+        assert [name for name, _ in order] == ["load", "pump", mode]
+        assert order[0][1] is threading.main_thread()
+
+
 def test_real_time_sim_clock():
     clock = route_tab_sim.RealTimeSimClock()
     assert isinstance(clock, SimClock)
