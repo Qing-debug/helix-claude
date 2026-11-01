@@ -9,26 +9,34 @@ hosted route view: the run's live view (RT-8b), kept in place and frozen at the 
 (no replay opens, H68, H69, RT-8c), and the idle live minimap shown when no view is (`src/gui/live_minimap.py`, RT-8c,
 H70). Every line a run in the app prints (the worker's traceback, the session's lines, the live view's and the idle
 minimap's errors) goes to the Setup tab's console box, not the terminal, through `_toConsole` (H71; RDO110-D3 A). The
-app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
+app-focus flag and its stop (RT-9), and the saved-run list (spec 5.11, RT-10): its rows (`savedRuns`, `formatSize`),
+filled by `startPolling` and Refresh, with each folder's size summed off the Tk thread (`folderSize`, the
+`saved-run-sizes` thread) and drained like the run's events.
 """
+import contextlib
 import gc
+import json
 import math
+import os
 import queue
 import re
 import threading
 import time
 import tkinter as tk
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from returns.pipeline import is_successful
 from returns.result import Result
 
 from src.gui.live_minimap import LiveMinimap
 from src.route import session
+from src.route.leg_log import LAPS_FILE, LEGS_FILE
 from src.route.session import FrameHolder, RunEvent, RunSession, RunSettings
+from src.route.step_log import STEPS_FILE
 from src.route_view.follow import LiveController
 from src.route_view.model import RunModel, load_folder
 from src.route_view.window import RouteViewWindow
@@ -163,6 +171,92 @@ def countdownText(first: int, left: int) -> str:
     return "Click the game now. Starting in " + " ... ".join(counts) + ending
 
 
+# spec 5.11 and plan choice 13: the saved-run list
+SIZE_PENDING_TEXT = "size ..."  # a row's size until the size thread has summed its folder
+_UNREAD = "?"  # a field of a row that cannot be read
+_SESSION_FILE = "session.json"  # the run's settings, as `session.py` writes them (`_SESSION` there)
+
+
+class SavedRun(NamedTuple):
+    """One run of the saved-run list: its folder and its row's label without the size (choice 13)."""
+    folder: Path
+    label: str
+
+
+def savedRuns(run_root: Path) -> list[SavedRun]:
+    """The run folders directly under `run_root` that hold `steps.jsonl` or `legs.jsonl` (spec 5.11), newest first
+    (their names are UTC stamps), each labelled `<local start time>  <map file stem>  <N> laps` (plan choice 13): the
+    start time from `session.json`'s `start_utc` in local time, the map from its `map`, N the lines of `laps.jsonl`,
+    and `?` for what cannot be read. A missing or unreadable `run_root` gives an empty list. No sizes: the size
+    thread sums those. Never raises."""
+    try:
+        children = list(run_root.iterdir())
+    except OSError:
+        return []
+    runs = [child for child in children if (child / STEPS_FILE).is_file() or (child / LEGS_FILE).is_file()]
+    return [SavedRun(folder, _runLabel(folder)) for folder in sorted(runs, key=lambda folder: folder.name, reverse=True)]
+
+
+def _runLabel(folder: Path) -> str:
+    start = map_stem = laps = _UNREAD
+    try:
+        info = json.loads((folder / _SESSION_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # missing, unreadable, not UTF-8 or not JSON
+        info = None
+    if isinstance(info, dict):
+        start = _localStart(info.get("start_utc"))
+        map_path = info.get("map")
+        if isinstance(map_path, str) and Path(map_path).stem:
+            map_stem = Path(map_path).stem
+    try:
+        laps = str((folder / LAPS_FILE).read_bytes().count(b"\n"))  # whole lines: one per lap done
+    except OSError:
+        pass
+    return f"{start}  {map_stem}  {laps} laps"
+
+
+def _localStart(value: object) -> str:
+    """`start_utc` (an ISO time; one with no zone is read as UTC) as local `%Y-%m-%d %H:%M`, else `?`."""
+    if not isinstance(value, str):
+        return _UNREAD
+    try:
+        when = datetime.fromisoformat(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        return when.astimezone().strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OverflowError, OSError):  # not a time, or out of the local clock's range
+        return _UNREAD
+
+
+def folderSize(folder: Path) -> int:
+    """The bytes of every file under `folder`, summed with `os.scandir` (spec 5.11; no Tk: the size thread runs it).
+    An entry or a folder that cannot be read (OSError) is skipped; links are not followed."""
+    total = 0
+    pending = [os.fspath(folder)]
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(entry.path)
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def formatSize(n: int) -> str:
+    """Plan choice 13: `<n> MB` (2^20 bytes, rounded) below 1000 MB, else `<x.y> GB` (2^30 bytes), as Explorer."""
+    megabytes = round(n / 2**20)
+    if megabytes < 1000:
+        return f"{megabytes} MB"
+    return f"{n / 2**30:.1f} GB"
+
+
 # ---- the tab ------------------------------------------------------------------------------------------------------
 
 # spec 5.2 (the Ready row) and 5.4 (the checks). The texts of checks 3 and 4 are the plan's (RT-7); the rest are the spec's.
@@ -280,6 +374,10 @@ class RouteTab:
         self._closing: tuple[Callable[[], None], float] | None = None  # (destroy, clock at the press) while it waits
         self._collector_off = False  # Start turned automatic garbage collection off and nothing has turned it back on
         self._polls_alive = 0  # drains that found this run's worker alive (the periodic collection's count)
+        self._saved: list[SavedRun] = []  # the saved-run list's runs, one per row, in its order (RT-10)
+        # (generation, folder, bytes) from the size thread, drained here; a fill bumps the generation (RT-10)
+        self._size_results: queue.SimpleQueue[tuple[int, Path, int]] = queue.SimpleQueue()
+        self._size_generation = 0
         self.state = "not_ready"
         self.view = None
         self.live = None
@@ -340,7 +438,7 @@ class RouteTab:
         header = tk.Frame(saved)
         header.pack(side=tk.TOP, fill=tk.X)
         tk.Label(header, text="Saved runs").pack(side=tk.LEFT)
-        self.refresh_button = tk.Button(header, text="Refresh")  # RT-10 gives these two their commands
+        self.refresh_button = tk.Button(header, text="Refresh", command=self.refreshSavedRuns)
         self.refresh_button.pack(side=tk.RIGHT)
         self.open_button = tk.Button(header, text="Open")
         self.open_button.pack(side=tk.RIGHT, padx=8)
@@ -410,14 +508,15 @@ class RouteTab:
             self.state = "not_ready" if problem else "ready"
 
     def startPolling(self) -> None:
-        """Read git's HEAD once and start the 100 ms drain. Only `MapleGUI.start` calls it, so a test that builds the
-        window never runs git or schedules a drain."""
+        """Read git's HEAD once, fill the saved-run list (RT-10) and start the 100 ms drain. Only `MapleGUI.start`
+        calls it, so a test that builds the window never runs git, lists `data/route` or schedules a drain."""
         self._head = self._git_head()
+        self.refreshSavedRuns()
         self._gui.gui.after(POLL_MS, self.drainEvents)
 
     def drainEvents(self) -> None:
         """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued console lines (`_drainLines`), its queued
-        events, then the watchdog, then the
+        events, the saved-run sizes queued so far (`_drainSizes`, RT-10), then the watchdog, then the
         readiness refresh (only with no worker, no close waiting and an idle state), then one redraw of the idle live
         minimap while it is shown and the Route tab is in front (spec 5.2). It reschedules itself in a `finally`, so a
         step that raises does not end the loop.
@@ -430,6 +529,7 @@ class RouteTab:
         try:
             self._drainLines()
             self._drainQueue()
+            self._drainSizes()
             worker = self.worker
             if worker is not None and not worker.is_alive():
                 try:
@@ -822,3 +922,64 @@ class RouteTab:
         finally:
             if self.state in ("countdown", "running"):
                 run.stop("app_focus")
+
+    # -- saved runs (spec 5.11, RT-10) ----------------------------------------------------------------------------------
+
+    def refreshSavedRuns(self) -> None:
+        """Refresh, and the first fill from `startPolling` (spec 5.11): list the run folders again (`savedRuns`, on
+        the Tk thread: one directory listing and two small reads per run), every row ending "size ...", and start a
+        `saved-run-sizes` daemon thread that sums their sizes off the Tk thread. Each fill is a new generation: what an
+        older size thread still posts is dropped (`_drainSizes`), and that thread stops before its next folder. The
+        thread is always a real `threading.Thread`, never `make_thread` (the run's worker only: a test's inline thread
+        would sum on the Tk thread), kept in `size_thread`."""
+        self._size_generation += 1
+        generation = self._size_generation
+        self._saved = savedRuns(self._run_root)
+        with self._editableList() as listbox:
+            listbox.delete(0, tk.END)
+            listbox.insert(tk.END, *(f"{run.label}  {SIZE_PENDING_TEXT}" for run in self._saved))
+        thread = threading.Thread(target=self._sumSizes, args=(generation, [run.folder for run in self._saved]),
+                                  name="saved-run-sizes", daemon=True)
+        self.size_thread = thread
+        thread.start()
+
+    def _sumSizes(self, generation: int, folders: list[Path]) -> None:
+        """The size thread's body: no Tk. Each folder's `folderSize` goes on `_size_results` as `(generation, folder,
+        bytes)`; that queue is a `queue.SimpleQueue`, whose `put` runs in C and holds no lock the Tk thread's drain
+        waits on. Before each folder it reads the tab's generation (an int only the Tk thread sets) and ends once a
+        newer fill has begun."""
+        for folder in folders:
+            if generation != self._size_generation:
+                return
+            self._size_results.put((generation, folder, folderSize(folder)))
+
+    def _drainSizes(self) -> None:
+        """Write each queued size of the current generation into its row; an older generation's are dropped."""
+        while True:
+            try:
+                generation, folder, size = self._size_results.get_nowait()
+            except queue.Empty:
+                return
+            if generation != self._size_generation:
+                continue
+            for index, run in enumerate(self._saved):
+                if run.folder == folder:
+                    with self._editableList() as listbox:
+                        selected = index in listbox.curselection()
+                        listbox.delete(index)
+                        listbox.insert(index, f"{run.label}  {formatSize(size)}")
+                        if selected:
+                            listbox.selection_set(index)
+                    break
+
+    @contextlib.contextmanager
+    def _editableList(self) -> Iterator[tk.Listbox]:
+        """The list, enabled for one edit and set back after it: a disabled Listbox ignores insert, delete and selection
+        changes (Tk), and a run disables it while sizes may still arrive."""
+        listbox = self.runs_list
+        state = listbox.cget("state")
+        listbox.configure(state="normal")
+        try:
+            yield listbox
+        finally:
+            listbox.configure(state=state)

@@ -4,8 +4,10 @@ text), then the tab itself on `make_gui`'s withdrawn root, built on fakes: no bo
 Same real-Tk-root setup as test_gui_startup.py (skipped where Tk cannot open a display; `after` only records)."""
 import gc
 import inspect
+import json
 import sys
 import threading
+from datetime import datetime
 import tkinter as tk
 import weakref
 from pathlib import Path
@@ -26,7 +28,8 @@ import test_gui_startup
 import tk_bans
 from src.classes.classes import Kanna
 from src.gui.live_minimap import LiveMinimap
-from src.gui.route_tab import RouteTab, classKey, countdownText, defaultSession, endedText, validateSettings
+from src.gui.route_tab import (RouteTab, SavedRun, classKey, countdownText, defaultSession, endedText, folderSize,
+                               formatSize, savedRuns, validateSettings)
 from src.route import session
 from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunEvent, RunSession, RunSettings
 from src.route.step_log import SNAPSHOT, STEPS_FILE
@@ -2279,3 +2282,160 @@ def test_no_focus_binding_without_a_route_tab(make_gui):
     root.event_generate("<FocusIn>")
     root.event_generate("<FocusOut>")
     assert scheduled == []
+
+
+# ---- RT-10: the saved-run list, its size thread and Refresh (spec 5.11, plan choice 13) ---------------------------
+
+SIZE_PENDING = "size ..."
+
+
+def _local(start_utc):
+    return datetime.fromisoformat(start_utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _saved_folder(root, name, *, files=("steps.jsonl",), session=None, laps=None, frames_bytes=0):
+    """A run folder `root/name` holding the (empty) `files`, `session.json` when `session` is given, `laps` lines in
+    `laps.jsonl` when given, and one frame file of `frames_bytes` bytes under `frames/` when non-zero."""
+    folder = root / name
+    folder.mkdir(parents=True)
+    for file in files:
+        (folder / file).write_bytes(b"")
+    if session is not None:
+        (folder / "session.json").write_text(json.dumps(session), encoding="utf-8")
+    if laps is not None:
+        (folder / "laps.jsonl").write_bytes(b'{"lap": 0}\n' * laps)
+    if frames_bytes:
+        (folder / "frames").mkdir()
+        (folder / "frames" / "frame_000000.png").write_bytes(b"\0" * frames_bytes)
+    return folder
+
+
+def _session(start_utc, map_path):
+    return {"start_utc": start_utc, "map": map_path, "class": "kanna"}
+
+
+def _three_runs(root):
+    """Two runs with `steps.jsonl`, one with only `legs.jsonl`, and a folder with neither and a file (left out). Returns
+    the expected (folder name, label) pairs, newest first (choice 13)."""
+    _saved_folder(root, "2026-10-30T090000Z", session=_session("2026-10-30T09:00:00+00:00",
+                                                               r"C:\maps\fossil_foundry_2.csv"), laps=3)
+    _saved_folder(root, "2026-10-31T101500Z", session=_session("2026-10-31T10:15:00+00:00", "maps/arcana.csv"), laps=0)
+    _saved_folder(root, "2026-10-29T080000Z", files=("legs.jsonl",),
+                  session=_session("2026-10-29T08:00:00+00:00", "maps/fossil_foundry_2.csv"), laps=1)
+    _saved_folder(root, "2026-11-01T070000Z", files=(), session=_session("2026-11-01T07:00:00+00:00", "x.csv"))
+    (root / "notes.txt").write_text("not a run")
+    return [("2026-10-31T101500Z", f"{_local('2026-10-31T10:15:00+00:00')}  arcana  0 laps"),
+            ("2026-10-30T090000Z", f"{_local('2026-10-30T09:00:00+00:00')}  fossil_foundry_2  3 laps"),
+            ("2026-10-29T080000Z", f"{_local('2026-10-29T08:00:00+00:00')}  fossil_foundry_2  1 laps")]
+
+
+def _rows(tab):
+    return tab.runs_list.get(0, tk.END)
+
+
+def test_rows_newest_first_with_label(make_rig, tmp_path):
+    root = tmp_path / "route"  # make_rig's run_root
+    expected = _three_runs(root)
+    assert savedRuns(root) == [SavedRun(root / name, label) for name, label in expected]
+    tab = make_rig().tab
+    tab.startPolling()
+    assert _rows(tab) == tuple(f"{label}  {SIZE_PENDING}" for _, label in expected)
+    tab.size_thread.join()
+
+
+def test_folder_size_sums_every_file_below(tmp_path):
+    (tmp_path / "a").write_bytes(b"x" * 10)
+    (tmp_path / "frames" / "deeper").mkdir(parents=True)
+    (tmp_path / "frames" / "frame_000000.png").write_bytes(b"x" * 1000)
+    (tmp_path / "frames" / "deeper" / "b").write_bytes(b"x" * 5)
+    assert folderSize(tmp_path) == 1015
+    assert folderSize(tmp_path / "missing") == 0  # OSError: nothing summed, nothing raised
+
+
+def test_sizes_come_from_the_thread_through_the_queue(make_rig, tmp_path, monkeypatch):
+    root = tmp_path / "route"
+    _saved_folder(root, "2026-10-30T090000Z", session=_session("2026-10-30T09:00:00+00:00", "a.csv"),
+                  frames_bytes=3 * 2**20)
+    _saved_folder(root, "2026-10-31T101500Z", session=_session("2026-10-31T10:15:00+00:00", "b.csv"),
+                  frames_bytes=5 * 2**20)
+    on, real = [], route_tab_module.folderSize
+    monkeypatch.setattr(route_tab_module, "folderSize",
+                        lambda folder: (on.append(threading.current_thread()), real(folder))[1])
+    rig = make_rig()
+    tab = rig.tab
+    tab.startPolling()
+    thread = tab.size_thread
+    assert isinstance(thread, threading.Thread) and thread.name == "saved-run-sizes" and thread.daemon
+    thread.join()
+    assert [row.endswith(SIZE_PENDING) for row in _rows(tab)] == [True, True]  # only the drain writes a row
+    tab.drainEvents()
+    assert [row.rsplit("  ", 1)[1] for row in _rows(tab)] == ["5 MB", "3 MB"]
+    assert on == [thread, thread]  # summed on the size thread only, never on the Tk thread
+    assert rig.threads == []  # never built with make_thread (plan review RA3 M3)
+
+
+def test_no_fill_before_start_polling(make_rig, tmp_path):
+    _three_runs(tmp_path / "route")
+    tab = make_rig().tab  # built by make_gui, and drained once
+    tab.drainEvents()
+    assert tab.runs_list.size() == 0 and tab.size_thread is None
+    tab.startPolling()
+    first = tab.size_thread
+    assert tab.runs_list.size() == 3 and isinstance(first, threading.Thread)
+    first.join()
+    for _ in range(3):
+        tab.drainEvents()
+    assert tab.runs_list.size() == 3 and tab.size_thread is first  # filled once: the drain does not list again
+
+
+def test_refresh_drops_old_results(make_rig, tmp_path, monkeypatch):
+    """Spec 5.11: a Refresh while a sum is running starts a new one and drops the old results; the old thread stops
+    before its next folder."""
+    root = tmp_path / "route"
+    for name in ("2026-10-30T090000Z", "2026-10-31T101500Z"):
+        _saved_folder(root, name, session=_session("2026-10-30T09:00:00+00:00", "a.csv"))
+    release, calls = threading.Event(), []
+
+    def size(folder):
+        calls.append(folder)
+        if len(calls) == 1:  # the first sum is still running when Refresh is pressed
+            assert release.wait(10)
+            return 7 * 2**30
+        return 2 * 2**20
+
+    monkeypatch.setattr(route_tab_module, "folderSize", size)
+    tab = make_rig().tab
+    tab.startPolling()
+    first = tab.size_thread
+    tab.refresh_button.invoke()
+    second = tab.size_thread
+    assert second is not first
+    second.join()
+    release.set()
+    first.join()  # its one result, of the old generation, is queued after the new ones
+    assert [row.endswith(SIZE_PENDING) for row in _rows(tab)] == [True, True]
+    tab.drainEvents()
+    assert [row.rsplit("  ", 1)[1] for row in _rows(tab)] == ["2 MB", "2 MB"]
+    assert len(calls) == 3  # the old thread summed one folder, then saw the new generation and stopped
+
+
+def test_no_run_root_is_an_empty_list(make_rig, tmp_path):
+    """Review Focus 3: a fresh clone has no data/route: an empty list, and Refresh raises nothing."""
+    missing = tmp_path / "no_route_yet"
+    assert savedRuns(missing) == []
+    tab = make_rig(run_root=missing).tab
+    tab.startPolling()
+    tab.size_thread.join()
+    tab.refresh_button.invoke()
+    tab.size_thread.join()
+    tab.drainEvents()
+    assert tab.runs_list.size() == 0 and not missing.exists()
+
+
+def test_format_size():
+    """Choice 13: MB of 2^20 bytes, rounded, below 1000 MB; GB of 2^30 bytes with one decimal from there on."""
+    assert formatSize(312 * 2**20) == "312 MB"
+    assert formatSize(1_234_000_000) == "1.1 GB"  # 1.149 * 2^30
+    assert formatSize(0) == "0 MB"
+    assert formatSize(int(999.4 * 2**20)) == "999 MB"
+    assert formatSize(int(999.6 * 2**20)) == "1.0 GB"  # 1000 MB once rounded: shown in GB
