@@ -14,8 +14,9 @@ spec is settled.*
 replay at the end of a run, and the run's last live picture and why lines stay frozen with a "Back to live minimap"
 button (5.2); the live minimap in the view area whenever the tab is idle (5.2); error details in the app's console box,
 not the terminal (5.5); the click text for a Stop press during a walk (5.5, section 9); and the Setup tab staying
-clickable during a run (5.1). Three choices made to carry them out wait for a ruling, each marked `(waits for Hong:
-RDO110-D<n>)`.*
+clickable during a run (5.1). Three choices made to carry them out waited for a ruling: RDO110-D2 is answered A by
+Hong, RDO110-D3 is A by orchestrator ruling (orch 110; Hong may still overturn it), and RDO110-D1 still waits for Hong,
+marked `(waits for Hong: RDO110-D1)`.*
 
 ## 1. Summary
 
@@ -288,7 +289,8 @@ and the controls come back as for any end.
 
 Where the details go (H71): error details go to the app's console box (the Setup tab's `gui_console`, written by
 `MapleGUI._printToGUIConsole`, `gui.py:455-461`), not the terminal. That is the traceback of an exception that leaves
-`run()` (the worker's wrapper, 5.6) and (waits for Hong: RDO110-D3) every line a run in the app prints: the run
+`run()` (the worker's wrapper, 5.6) and (orchestrator ruling RDO110-D3 = A, orch 110; Hong may still overturn it)
+every line a run in the app prints: the run
 driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>"), the failure lines of the components under it
 (the stop control's, the cleanup's, the walker's and the step log's), the live view's ("follow error: ...") and the
 idle live minimap's draw error ("live minimap error: ...", not again while it repeats; a good draw in between ends the
