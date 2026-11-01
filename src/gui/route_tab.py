@@ -799,7 +799,11 @@ class RouteTab:
         user clicked the app: `session.stop("app_focus")`, which returns at once, after the flag is set (a worker
         that reads the flag after the stop sees it set); the state and the status line wait for the `ended`, so a
         press on Stop that follows still sends `button` (H73). Connecting is left alone: no key is sent yet, and
-        the countdown's end reads the flag (`_mayWalk`)."""
+        the countdown's end reads the flag (`_mayWalk`). But a rise that finds the tab still connecting first shows
+        the events queued so far (`_drainQueue`) and tests the state again (RT-9-R m1): a drain step that blocked the
+        Tk thread for the whole countdown schedules the next step only once it returns, so the click's idle re-read
+        runs first, while the worker's `countdown` and `running` still wait on the queue; the state is tested again
+        even if showing them raises."""
         try:
             has_keyboard = self._gui.gui.focus_get() is not None
         except KeyError:
@@ -810,5 +814,11 @@ class RouteTab:
         else:
             self.app_has_keyboard.clear()
         run = self.session
-        if rose and run is not None and self.worker is not None and self.state in ("countdown", "running"):
-            run.stop("app_focus")
+        if not rose or run is None or self.worker is None:
+            return
+        try:
+            if self.state == "connecting":
+                self._drainQueue()
+        finally:
+            if self.state in ("countdown", "running"):
+                run.stop("app_focus")

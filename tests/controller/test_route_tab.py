@@ -2111,6 +2111,72 @@ def test_focus_rise_does_nothing_before_start_while_connecting_and_after_end(mak
     assert made.stops == []
 
 
+def _idle_real_timers_recorded(rig, monkeypatch):
+    """Make `after_idle` (`after('idle', ...)`) really schedule, so `update_idletasks()` runs it, while `after(ms, ...)`
+    stays `make_gui`'s recorder: no timer is ever due here, as the drain's next step is not yet due when the Tk thread
+    comes back from a stall (RT-9-R m1). Returns the root."""
+    root = rig.gui.gui
+    record = root.after
+
+    def after(ms, func):
+        return tk.Misc.after(root, ms, func) if ms == "idle" else record(ms, func)
+    monkeypatch.setattr(root, "after", after)
+    return root
+
+
+@pytest.mark.parametrize("queued", [("countdown",), ("countdown", "running")])
+def test_focus_rise_with_the_runs_events_still_queued_stops(make_rig, monkeypatch, queued):
+    """RT-9-R m1: one drain step blocks the Tk thread for the whole countdown (here the idle minimap's draw, the step's
+    last part, after its queue drain), the worker's `countdown` (and `running`) wait on the queue, and the user clicks
+    the app meanwhile. The drain's next step is scheduled in its `finally`, after the stall, so it is not due when the
+    Tk thread comes back, and Tcl runs the click's idle re-read first (`Tcl_DoOneEvent` runs idle callbacks only when
+    no event is queued; a timer becomes an event only once due): the re-read finds the tab still `connecting`. It
+    drains the queue first, so it tests the run's real state, and the click stops the run (spec 9)."""
+    rig = make_rig(make_minimap=FakeMinimap)
+    tab = rig.tab
+    _route_tab_in_front(rig)
+    focus = _focus_on(rig, monkeypatch)
+    made, _ = _start(rig)
+    assert tab.state == "connecting" and not tab.app_has_keyboard.is_set()
+    root = _idle_real_timers_recorded(rig, monkeypatch)
+
+    def stalled_draw():  # the worker goes on and the user clicks the app while the Tk thread is blocked here
+        for kind in queued:
+            made.on_event(_event("countdown", seconds_left=3) if kind == "countdown" else _event("running", "Running."))
+        focus(True)
+        root.event_generate("<FocusIn>")
+
+    monkeypatch.setattr(tab.live_minimap, "draw", stalled_draw)
+    rig.scheduled.clear()
+    tab.drainEvents()
+    assert tab.state == "connecting" and made.stops == []
+    assert rig.scheduled == [(route_tab_module.POLL_MS, tab.drainEvents)]  # the next drain: recorded, never run here
+    root.update_idletasks()  # the click's re-read runs before the next drain
+    assert made.stops == ["app_focus"] and tab.app_has_keyboard.is_set()
+    assert tab.state == queued[-1]
+    assert (tab.view is not None) == (queued[-1] == "running")  # a drained `running` still builds the live view
+
+
+def test_focus_rise_stops_even_if_showing_the_queued_running_raises(make_rig, monkeypatch):
+    """RT-9-R m1: the re-read's drain shows a queued `running` (the state, then `_onRunning`); a view that fails to
+    build raises out of the re-read, on to Tk's callback handler, but only after the click's stop."""
+    rig = make_rig()
+    tab = rig.tab
+    focus = _focus_on(rig, monkeypatch)
+    made, _ = _start(rig)
+    made.on_event(_event("countdown", seconds_left=3))
+    made.on_event(_event("running", "Running."))
+
+    def broken_view():
+        raise RuntimeError("view")
+
+    monkeypatch.setattr(tab, "_onRunning", broken_view)
+    focus(True)
+    with pytest.raises(RuntimeError, match="view"):
+        tab.rereadFocus()
+    assert made.stops == ["app_focus"] and tab.state == "running"
+
+
 @pytest.mark.parametrize("text, expected", [
     ("stopped/app_focus", "Stopped: you clicked the app. Press Start to run again."),
     ("cancelled/app_focus", "Stopped: you clicked the app. Press Start to run again."),
