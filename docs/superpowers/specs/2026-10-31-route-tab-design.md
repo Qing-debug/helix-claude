@@ -927,8 +927,8 @@ plan's own message. Hashes are in build order within a task.
 | rulings | `2d88914` | H75 (an agent may run the simulator-only timing tool) and H76 (walker frozen but for the `log` keyword) |
 | RT-9 | `103376f`, `40e45c1`, `f23847f`, `c2cb675` | the app-focus flag, `may_walk` and the `app_focus` stop (H64, section 9) |
 | RT-10 | `d3d455c`, `2b4e470`, `feeb2cf`, `7fbb36c` | the saved-run list with sizes summed off the Tk thread (5.11) |
-| RT-11 | `662c56d`, `3330a45` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56) |
-| RT-12 | `7e3e676`, `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | the pin test for all 15 banned names; `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
+| RT-11 | `662c56d`, `3330a45`, `7e3e676` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56); the pin test for all 15 banned names (`7e3e676`, RT-11-R m1) |
+| RT-12 | `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
 | RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
@@ -946,7 +946,7 @@ over_threshold: false
 `timing.json`: cli processing median 0.2566 ms, p95 0.3315 ms; app median 0.2632 ms, p95 0.3793 ms; no-wait share 0.0 in
 both; reaction median 223.671 ms in both (seed 1, noise off, so both modes walk the same 246 moves). The rules were
 MIN_SENDS 200, MEDIAN_GAP_MS 20, P95_MAX_MS 100 and NO_WAIT_GAP 0.05; none fired (gaps: median +0.007 ms, app p95
-0.38 ms, no-wait share +0 points), so the tab's key path adds nothing a person could see.
+0.38 ms, no-wait share +0 points), so, in the simulator and apart from the three gaps below, the tab's key path adds nothing a person could see.
 
 What the simulator does not cover, as three lines. The tool's printout and `timing.json` carry all three (the third was
 added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is the one place the docs spell them out:
@@ -961,7 +961,7 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
 - **Spec 6.1's refusal line, as RT-1 built it.** The line is `refused: MapleStory not confirmed closed (answer:
   <answer>)`, and `<answer>` is the stripped answer, so an empty line gives `(answer: )`; `none` is printed only when no
   input was read (standard input closed; `soak._read_answer` returns `Failure("none")`, `maple_check` at
-  `src/input/harness/soak.py:505-521`). Plan re-review RR3 judged this a fair reading of 6.1, not a change; this note
+  `src/input/harness/soak.py:504-521`). Plan re-review RR3 judged this a fair reading of 6.1, not a change; this note
   lets spec and code read the same. Ruling RTP96-D1 = A (by the orchestrator): `probe`, `soak` and `session_starts` all
   exit 2 (`soak.EXIT_REFUSED`) on anything but `y`, an empty line and closed input included.
 - **RT-12-D2: when the measure tool closes the sim app.** The plan's step says the tool calls `destroy()` "once the tab is
