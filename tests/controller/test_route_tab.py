@@ -949,6 +949,34 @@ def test_run_lines_reach_the_console_box(make_rig):
     assert _console(rig.gui) == before.removesuffix("\n") + "walk failed: boom\nstopped: error\n\n"
 
 
+class LateLineTab(ConsoleSpyTab):
+    """Runs `late` once, right after the first `_drainLines` of a step returns: what the worker does between that drain
+    and the step's read of the event queue."""
+
+    late = None
+
+    def _drainLines(self):
+        super()._drainLines()
+        late, self.late = self.late, None
+        if late is not None:
+            late()
+
+
+def test_a_line_put_just_before_ended_is_written_before_the_end_shows(make_rig):
+    """RDO110-R m2: the worker puts its last line and then `ended`; if both land after the step's line drain but before
+    its event read, the line is still written to the box before the `ended` is shown (not a step, 100 ms, later)."""
+    rig = make_rig(cls=LateLineTab)
+    tab = rig.tab
+    made, _thread = _start(rig)
+    tab.late = lambda: (made.log("cleanup failed: link.close: RuntimeError: x", True),
+                        made.on_event(_event("ended", "error/", code=6)))
+    tab.order.clear()
+
+    tab.drainEvents()
+
+    assert tab.order == [("console", "cleanup failed: link.close: RuntimeError: x", True), ("event", "ended")]
+
+
 def test_lines_below_the_session_reach_the_console_box(make_rig, capsys):
     """RT-8c piece 4b (ruling orch 111): the session hands its error line to the walker, the step log, the stop control
     and run_cleanup (test_session.py pins that); called on a run thread, it reaches the console box as an error line at

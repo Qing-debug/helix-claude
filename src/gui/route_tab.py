@@ -504,12 +504,16 @@ class RouteTab:
             self._toConsole(text, error)
 
     def _drainQueue(self) -> None:
-        """Show every event queued so far, in order."""
+        """Show every event queued so far, in order. Before an `ended` is shown the queued console lines are written
+        again: the run puts its last lines before `ended`, and one may have arrived after this step's line drain
+        (RDO110-R m2)."""
         while True:
             try:
                 event = self._events.get_nowait()
             except queue.Empty:
                 return
+            if event.kind == "ended":
+                self._drainLines()
             self._showEvent(event)
 
     def _showEvent(self, event: RunEvent) -> None:
