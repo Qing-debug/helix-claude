@@ -264,7 +264,7 @@ def read_frame_index(data: bytes) -> tuple[list[tuple[int, str]], int]:
 
 
 def _build_graph(map_path: Path, header: RunHeader) -> Result[tuple[RouteGraph, MapleAgent], str]:
-    """The route graph as `session._load_route` (`session.py:180-194`) builds it, from the header's class and params."""
+    """The route graph as `session._load_route` (`session.py:198-212`) builds it, from the header's class and params."""
     maker = _CLASSES.get(header.character)
     if maker is None:
         return Failure(f"unknown class {header.character}")
