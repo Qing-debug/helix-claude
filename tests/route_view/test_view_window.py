@@ -567,27 +567,17 @@ def _bar_controls(window) -> list:
             *window.play_buttons.values(), window.lap_entry, window.leg_entry, *window.scale_buttons.values()]
 
 
-def test_8_set_bar_enabled_greys_out_the_replay_bar_and_gives_it_back(tmp_path, make_window):
-    """Route tab plan C3 (RT-8b): the bar of a replay kept from Start is greyed out until the live view replaces it;
-    playback stops, and Enter in a lap or leg entry does nothing while it is."""
+def test_8_the_bar_is_never_greyed_out_and_enter_jumps_to_the_leg(tmp_path, make_window):
+    """Route tab plan C3 as changed by H70 (RT-8c): nothing is kept from Start, so the bar has no greyed-out state
+    (`set_bar_enabled` is gone) and Enter in a lap or leg entry always jumps."""
     window = make_window(make_folder(tmp_path))
     controls = _bar_controls(window)
     assert len(controls) == 4 + 1 + 1 + 2 + 2 + len(window.scale_buttons)
     assert all(str(c.cget("state")) == "normal" for c in controls)
+    assert not hasattr(window, "set_bar_enabled") and not hasattr(window, "_bar_enabled")
     window.btn_first.invoke()
-    window.toggle_play(1.0)
-    assert window._speed == 1.0
-    window.set_bar_enabled(False)
-    assert window._speed is None
-    assert [str(c.cget("state")) for c in controls] == ["disabled"] * len(controls)
-    assert window.bar.winfo_manager() == "pack"  # still shown: set_live decides that
-    status = window._status.get()
     window.lap_var.set("0")
     window.leg_var.set("6")  # a leg that starts at another step (16)
-    window.go_to_leg()
-    assert window.index == 0 and window._status.get() == status
-    window.set_bar_enabled(True)
-    assert [str(c.cget("state")) for c in controls] == ["normal"] * len(controls)
     window.go_to_leg()
     assert window.index == 16
 

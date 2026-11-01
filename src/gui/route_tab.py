@@ -4,9 +4,10 @@ This module is `src.gui`'s one door to the run driver: it imports `src.route.ses
 (import-linter contract "gui reaches input only through the run driver"). The pure helpers below hold the words and the
 rules the tab shows (settings checks, the class key, the end-of-run texts, the countdown line); none of them touches Tk.
 `RouteTab` is the tab itself: the top area, the readiness line, Start, the run's worker thread, the 100 ms drain of its
-event queue with the dead-worker watchdog, Stop, the close handler that waits for a live run's cleanup (RT-8a), and the
-hosted route view: the run's live view and its replay at the end (RT-8b). The app-focus flag (RT-9) and the saved-run
-list (RT-10) are added to it by those tasks.
+event queue with the dead-worker watchdog, Stop, the close handler that waits for a live run's cleanup (RT-8a), the
+hosted route view: the run's live view and its replay at the end (RT-8b), and the idle live minimap shown when no view
+is (`src/gui/live_minimap.py`, RT-8c, H70). The app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by
+those tasks.
 """
 import gc
 import math
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING, Literal
 from returns.pipeline import is_successful
 from returns.result import Result
 
+from src.gui.live_minimap import LiveMinimap
 from src.route import session
 from src.route.leg_log import LEGS_FILE
 from src.route.session import FrameHolder, RunEvent, RunSession, RunSettings
@@ -240,6 +242,7 @@ class RouteTab:
     countdown_var: tk.StringVar
     runs_list: tk.Listbox
     view_frame: tk.Frame
+    live_minimap: LiveMinimap
     view: RouteViewWindow | None
     live: LiveController | None
     worker: threading.Thread | None
@@ -255,6 +258,7 @@ class RouteTab:
                  make_live: Callable[..., LiveController] = LiveController,
                  load_run: Callable[..., Result[RunModel, str]] = load_folder,
                  git_head: Callable[[], str | None] = session._git_head,
+                 make_minimap: Callable[..., LiveMinimap] = LiveMinimap,
                  frame_checks: bool = True) -> None:
         self._gui = gui
         self._make_session = make_session
@@ -267,6 +271,7 @@ class RouteTab:
         self._make_live = make_live
         self._load_run = load_run
         self._git_head = git_head
+        self._make_minimap = make_minimap  # RT-8c: the idle live minimap (H70)
         self._frame_checks = frame_checks
         self._head: str | None = None  # git's HEAD, read once by startPolling and handed to every live view and replay
         self._events: queue.Queue[RunEvent] = queue.Queue()  # the session's on_event (the worker's put), drained here
@@ -290,11 +295,13 @@ class RouteTab:
         self.minutes_var = tk.StringVar(master=parent, value="")  # empty: no limit
         self.countdown_var = tk.StringVar(master=parent, value="5")
         self._build(parent)
+        self._showMinimap()
         self._refreshReadiness()
 
     def _build(self, parent: tk.Misc) -> None:
         """The widgets of spec 5.2: the top area, the saved-runs area at the bottom and the container the view will be
-        hosted in between them. No dialog, no Toplevel, no Combobox (spec 5.12)."""
+        hosted in between them, with the idle live minimap's canvas built (not packed) in it. No dialog, no Toplevel,
+        no Combobox (spec 5.12)."""
         top = tk.Frame(parent)
         top.pack(side=tk.TOP, fill=tk.X, padx=8, pady=6)
         tk.Label(top, textvariable=self.map_class_var, anchor="w").pack(side=tk.TOP, fill=tk.X)
@@ -348,6 +355,7 @@ class RouteTab:
 
         self.view_frame = tk.Frame(parent)
         self.view_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.live_minimap = self._make_minimap(self.view_frame, self._gui)
 
     # -- what the Setup tab holds ------------------------------------------------------------------------------------
 
@@ -407,8 +415,9 @@ class RouteTab:
 
     def drainEvents(self) -> None:
         """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued events, then the watchdog, then the
-        readiness refresh (only with no worker, no close waiting and an idle state). It reschedules itself in a
-        `finally`, so a step that raises does not end the loop.
+        readiness refresh (only with no worker, no close waiting and an idle state), then one redraw of the idle live
+        minimap while it is shown and the Route tab is in front (spec 5.2). It reschedules itself in a `finally`, so a
+        step that raises does not end the loop.
 
         The watchdog (spec 5.5): a worker found dead is read as ended only after one more drain of the queue finds no
         `ended`, so an `ended` put between the first drain and `is_alive()` is still read as itself. A dead worker is
@@ -433,6 +442,8 @@ class RouteTab:
                     gc.collect()
             if self.worker is None and self._closing is None and self.state in _IDLE_STATES:
                 self._refreshReadiness()
+            if self._minimapShown() and not self._gui.isSetupTabShown():
+                self.live_minimap.draw()
         finally:
             self._gui.gui.after(POLL_MS, self.drainEvents)
 
@@ -446,8 +457,9 @@ class RouteTab:
     def _clearWorker(self) -> None:
         """The worker has ended or never started: forget it and, if Start turned automatic garbage collection off,
         unfreeze what Start froze, collect it here on the Tk thread (a view kept from Start and destroyed during the
-        run is garbage the drain's collections skipped) and turn automatic collection back on, once per run (RT-8a I1,
-        ruling orch 108)."""
+        run is garbage the drain's collections skipped; since H70 Start drops that view before its own collection, so
+        what is left is anything frozen at Start that becomes cyclic garbage during the run) and turn automatic
+        collection back on, once per run (RT-8a I1, ruling orch 108)."""
         self.worker = None
         if self._collector_off:
             self._collector_off = False
@@ -502,14 +514,16 @@ class RouteTab:
 
     def _onRunning(self) -> None:
         """Called once per drained `running`, after the state and the status line are set: the run's live view (spec
-        5.2 Hosting, 5.8). The view shown so far (a replay kept from Start, or an earlier view) goes first, its
-        controller stopped; then a new view is built in `view_frame` on the run folder, with a `LiveController` whose
-        first poll runs now and which then polls every 100 ms. Built here and not at the countdown: the steps start
-        now, and a view built earlier would say it has had no step for 10 s during a countdown of up to 60 s."""
+        5.2 Hosting, 5.8). Any view shown so far goes first, its controller stopped, and the idle live minimap Start
+        showed is hidden (waits for Hong: RDO110-D1; answer A is built); then a new view is built in `view_frame` on
+        the run folder, with a `LiveController` whose first poll runs now and which then polls every 100 ms. Built
+        here and not at the countdown: the steps start now, and a view built earlier would say it has had no step for
+        10 s during a countdown of up to 60 s."""
         out = self._out
         if out is None or self._closing is not None:
             return
         self._dropView()
+        self._hideMinimap()
         view = self._make_view(self.view_frame, out, None, live=True)
         self.view = view
         live = self._make_live(self._gui.gui, view, out, repo_root=_REPO, current_git_head=self._head,
@@ -531,11 +545,11 @@ class RouteTab:
         is set and before the status line; True when a replay of this run opened (choice 7). `ended` comes after the
         walk's cleanup, so the run's files are complete. A live view first reads the lines no tick has read yet; if
         that reached the run's `end` line it has switched itself to replay (`follow.py`), its controller stops and the
-        answer is True. Otherwise any view goes, the replay kept since Start included ((waits for Hong: RTF98-6a-D1)
-        the plan's default; the other answer keeps that replay and gives its bar back), and with a step or leg log in
-        the run folder the folder is loaded and its replay built: True; with neither, or a folder that cannot be read,
-        False and `view_frame` stays empty. While the window waits to close nothing opens: the close takes the view
-        down (RT-8a fix round)."""
+        answer is True. Otherwise any view goes, and with a step or leg log in the run folder the folder is loaded and
+        its replay built in place of the idle minimap: True; with neither, or a folder that cannot be read, False, and
+        `view_frame` shows nothing after a live view, or still the idle minimap when the run ended before `running`
+        (waits for Hong: RDO110-D1). While the window waits to close nothing opens: the close takes the view down
+        (RT-8a fix round)."""
         if self._closing is not None:
             return False
         live = self.live
@@ -552,11 +566,25 @@ class RouteTab:
         loaded = self._load_run(out, repo_root=_REPO, current_git_head=self._head)
         if not is_successful(loaded):
             return False
+        self._hideMinimap()
         self.view = self._make_view(self.view_frame, out, loaded.unwrap(), live=False)
         return True
 
+    def _showMinimap(self) -> None:
+        """Show the idle live minimap (spec 5.2, H70): any hosted view goes, then the minimap's canvas is packed."""
+        self._dropView()
+        if not self._minimapShown():
+            self.live_minimap.canvas.pack(side=tk.TOP, anchor=tk.NW)
+
+    def _hideMinimap(self) -> None:
+        """Hide the idle live minimap before a view takes the view area; it is not drawn while hidden."""
+        self.live_minimap.canvas.pack_forget()
+
+    def _minimapShown(self) -> bool:
+        return self.live_minimap.canvas.winfo_manager() == "pack"
+
     def _dropView(self) -> None:
-        """Stop the live view's polling and destroy the hosted view, if there is one; `view_frame` is then empty."""
+        """Stop the live view's polling and destroy the hosted view, if there is one; no view is left in `view_frame`."""
         live, view = self.live, self.view
         self.live = None
         self.view = None
@@ -624,7 +652,9 @@ class RouteTab:
 
         Just before the worker starts, garbage is collected here and automatic collection is turned off until the
         worker is cleared (RT-8a I1). A worker that cannot be built or started ends the run on the tab at once, with
-        the watchdog's text and the controls back, and the error goes on to Tk's callback handler (RT-8a m2)."""
+        the watchdog's text and the controls back, and the error goes on to Tk's callback handler (RT-8a m2). Once
+        every check has passed, the view shown before Start (a replay) goes and the idle live minimap shows until
+        `running` (spec 5.2, H70)."""
         if self.worker is not None or self._closing is not None:
             return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
@@ -658,8 +688,7 @@ class RouteTab:
         self._countdown_first = None
         self._polls_alive = 0
         self._lockControls(True)
-        if self.view is not None:  # (waits for Hong: RTF98-4b-D1) the view shown before Start stays until `running`,
-            self.view.set_bar_enabled(False)  # greyed out like the rest of the tab (H64)
+        self._showMinimap()  # before the collection below, so the dropped view is collected on this thread
         self.state = "connecting"
         self.status_var.set(CONNECTING_TEXT)
         try:

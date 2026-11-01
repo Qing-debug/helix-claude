@@ -76,7 +76,6 @@ class RouteViewWindow:
     def __init__(self, parent: tk.Misc, folder: Path, model: RunModel | None, *, live: bool) -> None:
         self._parent = parent
         self._destroyed = False
-        self._bar_enabled = True  # False while `set_bar_enabled(False)` has greyed out the replay bar
         self.folder = Path(folder)
         self.model = model
         self.live = live
@@ -278,21 +277,6 @@ class RouteViewWindow:
             self._picture = None
         self._update_title()
 
-    def set_bar_enabled(self, enabled: bool) -> None:
-        """Grey out (False) or give back (True) the replay bar's controls (route tab plan C3, RT-8b; waits for Hong:
-        RTF98-4b-D1): the Route tab greys out the bar of a replay it keeps from Start until the live view replaces it
-        (spec 5.2, H64). False also stops playback, and while greyed out `go_to_leg` does nothing, because a disabled
-        Entry still fires its `<Return>` binding. The bar stays packed: `set_live` decides whether it shows."""
-        if not enabled:
-            self._stop_play()
-        self._bar_enabled = enabled
-        state = "normal" if enabled else "disabled"
-        controls: list[tk.Widget] = [self.btn_first, self.btn_prev, self.btn_next, self.btn_last, self.unit_menu,
-                                     self.slider, *self.play_buttons.values(), self.lap_entry, self.leg_entry,
-                                     *self.scale_buttons.values()]
-        for control in controls:
-            control.configure(state=state)  # pyright: ignore[reportCallIssue]
-
     def set_mode(self, text: str) -> None:
         self._mode_override = text
         self._update_title()
@@ -340,9 +324,7 @@ class RouteViewWindow:
         self._go(k)
 
     def go_to_leg(self, _event: object = None) -> None:
-        """Enter in the `lap` or `leg` entry: jump to that leg's first event. Nothing while the bar is greyed out."""
-        if not self._bar_enabled:
-            return
+        """Enter in the `lap` or `leg` entry: jump to that leg's first event."""
         try:
             lap, leg = int(self.lap_var.get()), int(self.leg_var.get())
         except ValueError:

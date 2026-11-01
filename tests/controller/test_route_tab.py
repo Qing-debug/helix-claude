@@ -18,9 +18,11 @@ from returns.result import Failure
 
 import src.gui.gui as gui_module
 import src.gui.route_tab as route_tab_module
+import test_gui_character_buttons
 import test_gui_startup
 import tk_bans
 from src.classes.classes import Kanna
+from src.gui.live_minimap import LiveMinimap
 from src.gui.route_tab import RouteTab, classKey, countdownText, defaultSession, endedText, validateSettings
 from src.route import session
 from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunEvent, RunSession, RunSettings
@@ -363,7 +365,8 @@ def test_constructor_creates_every_c5_attribute_and_touches_nothing_outside_tk(m
     assert (tab.view, tab.live, tab.session, tab.worker, tab.size_thread) == (None, None, None, None, None)
     assert isinstance(tab.app_has_keyboard, threading.Event) and not tab.app_has_keyboard.is_set()
     assert str(tab.stop_button.cget("state")) == "disabled"
-    assert tab.view_frame.winfo_children() == []
+    assert isinstance(tab.live_minimap, LiveMinimap)
+    assert tab.view_frame.winfo_children() == tab.view_frame.pack_slaves() == [tab.live_minimap.canvas]  # 5.2
     classes = []
     stack = list(gui.route_tab_frame.winfo_children())
     while stack:
@@ -1315,8 +1318,10 @@ def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
     (`tk.Misc.focus is tk.Misc.focus_set`, yet each name is its own class attribute)."""
     rig = make_rig()
     tab = rig.tab
+    _route_tab_in_front(rig)  # so the drains draw the idle minimap
     called = _record_banned_calls(monkeypatch)
 
+    tab.drainEvents()
     made, thread = _start(rig)
     for event in [_event("status", CONNECTING), _event("countdown", seconds_left=2),
                   _event("countdown", seconds_left=1), _event("running", "Running."),
@@ -1330,7 +1335,7 @@ def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
     tab.drainEvents()
     _run_close_poll(rig)
 
-    assert called == []
+    assert called == [] and len(tab.live_minimap.canvas.find_withtag("bg")) == 1
     tab.runs_list.focus()  # the patches are seen through an instance and an alias
     rig.gui.gui.attributes("-topmost", True)
     assert called == ["Misc.focus", "Wm.attributes"]
@@ -1447,17 +1452,31 @@ def _replayed_run(rig, *, snapshot=False):
     assert rig.tab.view is not None and rig.tab.view.live is False
 
 
+def _packed(tab):
+    """What `view_frame` shows: its packed widgets (the idle minimap's canvas stays a child while hidden)."""
+    return tab.view_frame.pack_slaves()
+
+
 def _one_view(tab):
-    """`view_frame` holds exactly the widgets of one view, `tab.view`'s."""
+    """`view_frame` holds exactly the widgets of one view, `tab.view`'s, and the idle minimap's canvas, hidden."""
     v = tab.view
-    return v is not None and set(tab.view_frame.winfo_children()) == {v.title_label, v.warn_label, v.main,
-                                                                       v.why_frame, v.bar, v.status_label}
+    return v is not None and tab.live_minimap.canvas not in _packed(tab) and set(tab.view_frame.winfo_children()) == {
+        v.title_label, v.warn_label, v.main, v.why_frame, v.bar, v.status_label, tab.live_minimap.canvas}
 
 
-def _bar_states(view):
-    controls = [view.btn_first, view.btn_prev, view.btn_next, view.btn_last, view.unit_menu, view.slider,
-                *view.play_buttons.values(), view.lap_entry, view.leg_entry, *view.scale_buttons.values()]
-    return [_state(c) for c in controls]
+class FakeMinimap:
+    """The fake `make_minimap`'s product: a real, empty Canvas in the parent; `draw()` only counts."""
+
+    def __init__(self, parent, gui):
+        self.canvas = tk.Canvas(parent)
+        self.draws = 0
+
+    def draw(self):
+        self.draws += 1
+
+
+def _route_tab_in_front(rig):
+    rig.gui.notebook.select(rig.gui.route_tab_frame)
 
 
 def test_view_rebuilt_per_run_and_replay(make_rig, tmp_path):
@@ -1500,7 +1519,7 @@ def test_end_without_a_live_view(make_rig, tmp_path, case):
     rig = _hosting_rig(make_rig, tmp_path, load_fails=case == "live_no_end_load_fails")
     tab = rig.tab
     if case == "kept_replay":
-        _replayed_run(rig)  # (waits for Hong: RTF98-6a-D1) the plan's default: this replay goes too
+        _replayed_run(rig)  # Start drops this replay (H70)
     views, loads, log = len(rig.views), len(rig.loads), len(rig.log)
     made, thread = _start(rig)
     out = rig.outs[-1]
@@ -1510,7 +1529,8 @@ def test_end_without_a_live_view(make_rig, tmp_path, case):
         (out / "stop.json").write_text("{}", encoding="utf-8")
         _finish(rig, made, thread, "cancelled/button")
         assert len(rig.views) == views and len(rig.loads) == loads
-        assert tab.view is None and tab.view_frame.winfo_children() == []
+        # (waits for Hong: RDO110-D1) no run view was built, so the idle minimap Start showed stays
+        assert tab.view is None and _packed(tab) == [tab.live_minimap.canvas]
         assert tab.status_var.get() == "Ended: cancelled before the walk (you pressed Stop)."
         assert rig.log[log:] == (["view0.destroy"] if case == "kept_replay" else [])
         return
@@ -1524,7 +1544,7 @@ def test_end_without_a_live_view(make_rig, tmp_path, case):
     assert rig.loads == [out] and tab.live is None
     assert rig.log == ([] if case == "legs_only" else ["live0.stop", "view0.destroy"])
     if case == "live_no_end_load_fails":
-        assert tab.view is None and tab.view_frame.winfo_children() == []
+        assert tab.view is None and _packed(tab) == []
         assert tab.status_var.get() == endedText(0, "stopped/button", out, False)
     else:
         assert tab.view is rig.views[-1] and tab.view.live is False and tab.view.model is not None and _one_view(tab)
@@ -1571,42 +1591,93 @@ def test_live_view_built_at_running_not_at_the_countdown(make_rig, tmp_path):
     assert len(rig.views) == 1 and tab.view is rig.views[0] and tab.view.live and _one_view(tab)
 
 
-def test_previous_replay_kept_with_its_bar_greyed_until_running(make_rig, tmp_path, monkeypatch):
-    """(waits for Hong: RTF98-4b-D1) the plan's default A'; answer B replaces this test."""
-    rig = _hosting_rig(make_rig, tmp_path)
+def test_idle_tab_shows_the_minimap(make_rig, monkeypatch):
+    """Spec 5.2 (H70): with no run view and no replay the view area shows the idle live minimap (the default
+    `LiveMinimap`), drawn on every drain while the Route tab is in front."""
+    rig = make_rig()
     tab = rig.tab
+    minimap = tab.live_minimap
+    assert tab.view is None and _packed(tab) == [minimap.canvas]
+    draws, real = [], minimap.draw
+    monkeypatch.setattr(minimap, "draw", lambda: (draws.append(1), real())[1])
+    _route_tab_in_front(rig)
+    tab.drainEvents()
+    tab.drainEvents()
+    assert len(draws) == 2 and len(minimap.canvas.find_withtag("bg")) == 1  # the shared frame, drawn
+
+
+def test_minimap_not_drawn_while_the_setup_tab_is_shown(make_rig):
+    rig = make_rig(make_minimap=FakeMinimap)
+    tab, gui = rig.tab, rig.gui
+    assert gui.isSetupTabShown() and tab.live_minimap.draws == 0  # make_rig drained once, with Setup in front
+    _route_tab_in_front(rig)
+    tab.drainEvents()
+    gui.notebook.select(gui.setup_tab)
+    tab.drainEvents()
+    tab.drainEvents()
+    assert tab.live_minimap.draws == 1
+
+
+def test_start_drops_a_replay_and_shows_the_minimap_until_running(make_rig, tmp_path):
+    """Spec 5.2 (H70): Start, once its checks pass, drops the replay shown before it; the idle live minimap shows,
+    and is drawn, through Connecting and the countdown; at `running` the run's live view replaces it (waits for Hong:
+    RDO110-D1; answer A is built). A refused Start drops nothing."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
     _replayed_run(rig)
-    kept, calls = tab.view, []
-    real = kept.set_bar_enabled
-    monkeypatch.setattr(kept, "set_bar_enabled", lambda enabled: (calls.append(enabled), real(enabled))[1])
+    kept = tab.view
+    assert _one_view(tab) and rig.log == ["live0.stop"]
+    draws = minimap.draws
+    tab.drainEvents()
+    assert minimap.draws == draws  # hidden under the replay: not drawn
     agent = rig.gui.controller.agent
     agent.CSVParser.CSV_file = None
-    tab.startRun()  # refused by a check (no map loaded): no session, so nothing could give the bar back
-    assert len(rig.sessions) == 1 and calls == [] and set(_bar_states(kept)) == {"normal"}
+    tab.startRun()  # refused by a check (no map loaded)
+    assert len(rig.sessions) == 1 and tab.view is kept and _one_view(tab)
     agent.CSVParser.CSV_file = rig.csv
 
     made, _ = _start(rig)
-    assert calls == [False] and tab.view is kept and _one_view(tab) and set(_bar_states(kept)) == {"disabled"}
+    assert rig.log == ["live0.stop", "view0.destroy"] and tab.view is None and _packed(tab) == [minimap.canvas]
     for event in (_event("status", CONNECTING), _event("countdown", seconds_left=1)):
+        draws = minimap.draws
         _post(rig, made, event)
-        assert tab.view is kept and _one_view(tab) and set(_bar_states(kept)) == {"disabled"}
-    index = kept.index
-    assert kept.model is not None and index != kept.model.find_leg(0, 6)  # leg 6 starts at another step
-    kept.lap_var.set("0")
-    kept.leg_var.set("6")
-    kept.go_to_leg()  # Enter in a greyed-out entry (RR3 m8)
-    assert kept.index == index
-
+        assert tab.view is None and _packed(tab) == [minimap.canvas] and minimap.draws == draws + 1
     _write_run(rig.outs[-1], G[:3])
+    draws = minimap.draws
     _post(rig, made, _event("running", "Running."))
-    assert rig.log[-1] == "view0.destroy" and tab.view is rig.views[-1] and tab.view.live and _one_view(tab)
-    assert calls == [False]
+    assert tab.view is rig.views[-1] and tab.view.live and _one_view(tab) and minimap.draws == draws
+
+
+def test_minimap_hidden_from_running_to_the_end(make_rig, tmp_path):
+    """Spec 5.7: hidden from `running` to the end of the run, the minimap adds no redraw while the bot walks."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    made, thread = _start(rig)
+    _write_run(rig.outs[0], G[:5])
+    _post(rig, made, _event("running", "Running."))
+    draws = minimap.draws
+    assert _one_view(tab)
+    _append(rig.outs[0], G[5:10])
+    _post(rig, made, _event("warning", "Recording stopped: x. The walk goes on."))
+    tab.stop_button.invoke()
+    tab.drainEvents()
+    assert minimap.draws == draws and _one_view(tab)
+    _append(rig.outs[0], G[10:])
+    _finish(rig, made, thread, "stopped/button")
+    assert minimap.draws == draws and _one_view(tab) and tab.view.live is False
 
 
 def test_no_window_style_or_focus_call_with_the_hosted_view(make_rig, tmp_path, monkeypatch):
-    rig = _hosting_rig(make_rig, tmp_path, spy=False)  # the default view, controller and loader
+    rig = _hosting_rig(make_rig, tmp_path, spy=False)  # the default view, controller, loader and minimap
     tab = rig.tab
+    _route_tab_in_front(rig)
+    rig.gui.controller.agent.CSVParser.CSV_file = test_gui_character_buttons.FIXTURE_MAP  # nodes on the minimap
     called = _record_banned_calls(monkeypatch)
+    tab.drainEvents()
     made, thread = _start(rig)
     out = rig.outs[0]
     _write_run(out, G[:5], snapshot=True)
@@ -1618,7 +1689,8 @@ def test_no_window_style_or_focus_call_with_the_hosted_view(make_rig, tmp_path, 
     _finish(rig, made, thread, "stopped/button")  # no `end` line: the replay is loaded from the folder
     assert tab.view is not None and tab.view.live is False and tab.status_var.get().endswith("Replay is open.")
     _replayed_run(rig)  # and one whose live view turns into the replay
-    assert called == []
+    canvas = tab.live_minimap.canvas
+    assert called == [] and len(canvas.find_withtag("bg")) == 1 and canvas.find_withtag("node")
 
 
 def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
@@ -1658,8 +1730,8 @@ def test_no_live_view_is_built_while_a_close_waits(make_rig, tmp_path):
 
 @pytest.mark.parametrize("cyclic", [False, True])
 def test_the_kept_replays_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cyclic):
-    """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the kept replay, frozen at Start with the rest,
-    is destroyed at `running`; its image (a Tcl image whose `__del__` calls Tcl) is freed on the Tk thread by the
+    """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the replay shown before Start is destroyed by
+    Start (H70), just before the collection that precedes the freeze; its image (a Tcl image whose `__del__` calls Tcl) is freed on the Tk thread by the
     time the run's end has been drained, also when only the cycle collector can free it."""
     rig = _hosting_rig(make_rig, tmp_path, spy=False)
     tab = rig.tab
