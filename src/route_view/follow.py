@@ -1,16 +1,18 @@
-"""Following a run folder that a walk is still writing (route view plan task RV-8; spec 5.4, 5.7, 5.9 step 3).
+"""Following a run folder that a walk is still writing (route view plan task RV-8; route view spec 5.4; route tab spec 5.8).
 
 `Follower` reads the complete new lines of `steps.jsonl` and `frames/index.jsonl` since its last poll (a line without
 its newline waits for the next poll). `LiveController` polls it every `POLL_MS` from Tk's event loop, grows the model,
 redraws only when something changed (decoding only the newest frame), says so when no step has come for `SILENT_S`,
-and at `end` switches the window to replay (`set_live(False)`; it makes no call on the root). `stop()` ends the ticks:
-after it `tick()` and `update()` return at once, because a tick already queued with `after` can still fire.
+and at `end` switches the window to replay (`set_live(False)` and a redraw; it makes no call on the root). With a
+`live_frame` callable (route tab spec 5.8, plan choice 12) the picture behind the view is the newest frame it returns,
+not a recorded file. `stop()` ends the ticks: after it `tick()` and `update()` return at once, because a tick already
+queued with `after` can still fire.
 
 Where the plan is silent (each decided here, local and reversible):
 - The controller owns the `Follower`; a caller that wants a synchronous first poll calls `update()` (one poll, no
   scheduling) before `tick()` (PF81 m11: the first poll is the controller's own, nothing is read twice).
 - "A new line" for the silence clock is a new step event (a bad line or a frame is not a step).
-- Leaving the silence clears the status line (the `--replay` hint) before the redraw, which sets any read error again.
+- Leaving the silence clears the status line (`REPLAY_HINT`) before the redraw, which sets any read error again.
 - An error is printed once per distinct message (a repeat of the last one is not printed again).
 - An event the model rejects is tried again on the next tick, then skipped, and the status line says how many were
   skipped (RV-9 review m2, orchestrator ruling 88); the lines behind it go in.
@@ -23,6 +25,9 @@ import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 from src.route.step_log import STEPS_FILE, RunHeader, StepEvent, StepTail
 from src.route_view.model import FRAME_INDEX, FRAMES_DIR, RunModel, read_frame_index
@@ -80,13 +85,17 @@ class Follower:
 
 class LiveController:
     def __init__(self, root: tk.Misc, window: RouteViewWindow, folder: Path, *, repo_root: Path,
-                 current_git_head: str | None, clock: Callable[[], float] = time.monotonic) -> None:
+                 current_git_head: str | None, clock: Callable[[], float] = time.monotonic,
+                 live_frame: Callable[[], np.ndarray | None] | None = None) -> None:
         self._root = root
         self.window = window
         self._folder = Path(folder)
         self._repo_root = repo_root
         self._current_git_head = current_git_head
         self._clock = clock
+        self._live_frame = live_frame
+        self._frame: np.ndarray | None = None  # the array the kept picture was made from (a new object is a change)
+        self._picture: Image.Image | None = None  # the kept live picture, passed on every `show` (plan choice 12)
         self.follower = Follower(self._folder)
         self.ended = False
         self.bad_lines = 0
@@ -133,17 +142,20 @@ class LiveController:
 
     def _update(self) -> None:
         polled = self.follower.poll()
+        new_picture = self._read_live_frame()
         self._end_read = self._end_read or any(event.ev == "end" for event in polled.events)
         self._pending.extend(polled.events)
         if polled.frames:
             self._background = polled.frames[-1][1]
         window = self.window
-        changed = self._retry
+        changed = self._retry or new_picture
         if polled.header is not None and window.model is None:
             model = RunModel.open(self._folder, polled.header, "steps", repo_root=self._repo_root,
                                   current_git_head=self._current_git_head)
             model.add_frames(self._frames)
             self._frames = []
+            if self._picture is not None:
+                window.show(0, picture=self._picture)  # so set_model's own redraw keeps it and reads no file
             window.set_model(model)
             changed = True
         model = window.model
@@ -186,13 +198,26 @@ class LiveController:
         if changed:
             window.sync_why()
             last = len(model.events) - 1 if model is not None and model.events else 0
-            window.show(last, background=self._background)  # one decode at most, the newest frame (spec 5.4)
+            # One decode at most, the newest frame (spec 5.4); a live picture, when there is one, wins over the file.
+            window.show(last, background=self._background, picture=self._picture)
             self._retry = not window.background_ok
         if polled.bad_lines != self.bad_lines:
             self.bad_lines = polled.bad_lines
             window.set_status(f"{self.bad_lines} bad lines skipped")
         if ended:
             self._end()
+
+    def _read_live_frame(self) -> bool:
+        """Spec 5.8, plan choice 12: ask `live_frame` for the newest frame. A new array object makes a new picture (and
+        counts as a change); the same object, or `None`, keeps the picture made so far. True when there is a new one."""
+        if self._live_frame is None:
+            return False
+        frame = self._live_frame()
+        if frame is None or frame is self._frame:
+            return False
+        picture = Image.fromarray(frame)
+        self._frame, self._picture = frame, picture
+        return True
 
     def _end(self) -> None:
         """`end` read (spec 5.4): stop following and switch the window to replay. No call on the root and no callback:
@@ -201,10 +226,12 @@ class LiveController:
         if self.ended:
             return
         self.ended = True
-        self.window.set_live(False)  # the title's mode becomes `ended: <reason>`
+        self._picture = None
+        self.window.set_live(False)  # the title's mode becomes `ended: <reason>`; the window drops its kept picture
+        self.window._redraw_here()  # and the replay's own frame replaces the live picture at once (RT5-2a-D2)
 
     def _report(self, text: str) -> None:
         self.window.set_status(text)
         if text != self._printed:
-            print(text, flush=True)  # stdout goes to view.log
+            print(text, flush=True)  # the console of whoever started the app (or the walk)
             self._printed = text

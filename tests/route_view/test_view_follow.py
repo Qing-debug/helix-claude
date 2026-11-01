@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from PIL import Image
 from test_view_window import _noise_png
@@ -63,6 +64,32 @@ def _live(roots, monkeypatch, folder, *, clock=None):
     live = LiveController(root, window, folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD,
                           clock=clock or FakeClock())
     return SimpleNamespace(root=root, after=after, log=log, window=window, live=live)
+
+
+def _live_with_frame(roots, monkeypatch, folder, live_frame):
+    log = []
+    root, after = _recorded_root(roots, monkeypatch, log)
+    window = RouteViewWindow(root, folder, None, live=True)
+    live = LiveController(root, window, folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD,
+                          clock=FakeClock(), live_frame=live_frame)
+    return SimpleNamespace(root=root, after=after, log=log, window=window, live=live)
+
+
+def _frame(value: int) -> "np.ndarray":
+    return np.full((82, 162, 3), value, dtype=np.uint8)
+
+
+def _spy_shows(monkeypatch, window) -> list:
+    """The `picture` of every `window.show` call, in order."""
+    shows = []
+    real = window.show
+
+    def show(k, **kwargs):
+        shows.append(kwargs.get("picture"))
+        return real(k, **kwargs)
+
+    monkeypatch.setattr(window, "show", show)
+    return shows
 
 
 def _live_folder(folder: Path, lines) -> Path:
@@ -510,3 +537,65 @@ def test_m3_end_runs_at_most_once_even_if_a_call_inside_it_raises(tmp_path, root
     assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
     t.live.update()  # an ended controller does nothing more
     assert calls == [False] and t.log == []
+
+
+# the live picture (route tab plan C3, choice 12; spec 5.8) ---------------------------------------------------------
+
+
+def test_live_frame_is_drawn_and_new_frames_redraw(tmp_path, roots, monkeypatch):
+    folder = _live_folder(tmp_path, LINES[:5])
+    _add_frame(folder, 0, 1.05)  # a recorded frame is there, and is not used while live_frame gives a picture
+    a, b = _frame(30), _frame(200)
+    given = [a, a, b]
+    t = _live_with_frame(roots, monkeypatch, folder, lambda: given.pop(0) if len(given) > 1 else given[0])
+    loads = _spy_loads(monkeypatch, t.window)
+    draws = []  # (shown_background, the picture's pixels) at every draw
+    real_draw = t.window._draw
+
+    def draw(view):
+        image = t.window.shown_image
+        draws.append((t.window.shown_background, None if image is None else np.asarray(image)[0, 0, 0]))
+        return real_draw(view)
+
+    monkeypatch.setattr(t.window, "_draw", draw)
+    t.live.tick()  # A: the first draw
+    assert draws and all(draw == ("live", 30) for draw in draws)
+    before = len(draws)
+    t.live.tick()  # A again, the same object, nothing else new: no redraw
+    assert len(draws) == before
+    t.live.tick()  # B, a new object: a redraw, with B
+    assert len(draws) > before and all(draw == ("live", 200) for draw in draws[before:])
+    assert t.window.shown_background == "live"
+    assert np.array_equal(np.asarray(t.window.shown_image), b)
+    assert loads == []  # no file was read, at any draw
+
+
+def test_live_picture_kept_when_only_steps_change(tmp_path, roots, monkeypatch):
+    folder = _live_folder(tmp_path, LINES[:5])
+    a = _frame(30)
+    t = _live_with_frame(roots, monkeypatch, folder, lambda: a)
+    t.live.tick()
+    picture = t.window.shown_image
+    assert picture is not None and t.window.shown_background == "live"
+    loads = _spy_loads(monkeypatch, t.window)
+    shows = _spy_shows(monkeypatch, t.window)
+    _append(folder / STEPS_FILE, b"".join(LINES[5:8]))  # steps change, live_frame returns the same A
+    t.live.tick()
+    assert len(shows) == 1 and shows[0] is picture  # redrawn, and with the picture made from A
+    assert loads == [] and t.window.shown_image is picture and t.window.shown_background == "live"
+    _add_frame(folder, 0, 1.05)  # a recorded frame arrives: still not used
+    t.live.tick()
+    assert loads == [] and t.window.shown_image is picture and t.window.shown_background == "live"
+
+
+def test_the_end_puts_the_recorded_picture_back_at_once(tmp_path, roots, monkeypatch):
+    """RT5-2a-D2: `set_live(False)` only drops the kept picture, so `_end` redraws and the live picture goes now."""
+    folder = _live_folder(tmp_path, LINES[:25])
+    _add_frame(folder, 0, 1.05)
+    t = _live_with_frame(roots, monkeypatch, folder, lambda: _frame(30))
+    t.live.tick()
+    assert t.window.shown_background == "live"
+    _append(folder / STEPS_FILE, LINES[25])
+    t.live.tick()
+    assert t.live.ended and t.window.live is False
+    assert t.window.shown_background == "frames/frame_000000.png"
