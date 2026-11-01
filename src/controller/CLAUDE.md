@@ -30,4 +30,4 @@ camelCase package (root CLAUDE.md, "Naming"). Results, not exceptions (root, "Er
 
 ## Tests
 
-`python -m pytest tests/controller -q` (about 1.5 s).
+`python -m pytest tests/controller -q` (its time is in the root CLAUDE.md).
