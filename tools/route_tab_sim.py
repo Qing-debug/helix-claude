@@ -69,6 +69,8 @@ RULES = {"MIN_SENDS": MIN_SENDS, "MEDIAN_GAP_MS": MEDIAN_GAP_MS, "P95_MAX_MS": P
 NOT_COVERED = (
     "the F12 hook's own latency (the sim app's stop control installs no keyboard hook)",
     "the real capture thread's load (the frame pump only stores a copy of one picture)",
+    "finding the character on a real frame (the sim's position source never looks at a real frame, so the cost of "
+    "that and its contention with the Tk thread are not in the figures)",
 )
 MODES = ("cli", "app")
 

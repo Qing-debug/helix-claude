@@ -233,7 +233,9 @@ def test_report_writes_the_table_and_timing_json(tmp_path, capsys):
     assert data["modes"]["cli"]["sends"] == 240 and data["modes"]["app"]["sends"] == 250
     assert data["rules"] == {"MIN_SENDS": 200, "MEDIAN_GAP_MS": 20, "P95_MAX_MS": 100, "NO_WAIT_GAP": 0.05}
     assert data["over_threshold"] is True and data["fired"] == ["median_gap"]
-    assert len(data["not_covered"]) == 2
+    assert len(data["not_covered"]) == 3
+    assert data["not_covered"][2].startswith("finding the character on a real frame (")
+    assert "Not covered: " in out and data["not_covered"][2] in out  # the printout carries all three lines
 
 
 def _refusal_case(name: str, folder: Path) -> None:
