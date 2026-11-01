@@ -4,8 +4,9 @@ This module is `src.gui`'s one door to the run driver: it imports `src.route.ses
 (import-linter contract "gui reaches input only through the run driver"). The pure helpers below hold the words and the
 rules the tab shows (settings checks, the class key, the end-of-run texts, the countdown line); none of them touches Tk.
 `RouteTab` is the tab itself: the top area, the readiness line, Start, the run's worker thread, the 100 ms drain of its
-event queue with the dead-worker watchdog, Stop, and the close handler that waits for a live run's cleanup (RT-8a). The
-hosted view (RT-8b), the app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
+event queue with the dead-worker watchdog, Stop, the close handler that waits for a live run's cleanup (RT-8a), and the
+hosted route view: the run's live view and its replay at the end (RT-8b). The app-focus flag (RT-9) and the saved-run
+list (RT-10) are added to it by those tasks.
 """
 import gc
 import math
@@ -23,12 +24,16 @@ from returns.pipeline import is_successful
 from returns.result import Result
 
 from src.route import session
+from src.route.leg_log import LEGS_FILE
 from src.route.session import FrameHolder, RunEvent, RunSession, RunSettings
+from src.route.step_log import STEPS_FILE
 from src.route_view.follow import LiveController
 from src.route_view.model import RunModel, load_folder
 from src.route_view.window import RouteViewWindow
 
 if TYPE_CHECKING:  # gui.py imports RouteTab, so a runtime import of MapleGUI here would be a cycle
+    import numpy as np
+
     from src.gui.gui import MapleGUI
 
 LAPS_ERROR = "Laps must be a whole number of 1 or more"
@@ -196,6 +201,7 @@ CLOSE_GAVE_UP_TEXT = "The run's cleanup did not finish in 10 s; closing anyway."
 # objects that exist at Start are frozen (`gc.freeze()`) until the worker is cleared, so the periodic collection walks
 # only what the run made since, not the whole app (about 1.5 ms instead of about 23 ms; ruling orch 108).
 GC_EVERY_POLLS = 10  # about once a second at POLL_MS
+_REPO = Path(__file__).resolve().parents[2]  # the repo root the run model checks the map and the code against
 RouteState = Literal["not_ready", "ready", "connecting", "countdown", "running", "stopping", "ended"]
 _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "stopping")  # Start pressed, cleanup not done
 _IDLE_STATES: tuple[RouteState, ...] = ("not_ready", "ready", "ended")  # the readiness line is kept up to date here
@@ -439,11 +445,14 @@ class RouteTab:
 
     def _clearWorker(self) -> None:
         """The worker has ended or never started: forget it and, if Start turned automatic garbage collection off,
-        unfreeze what Start froze and turn it back on, once per run (RT-8a I1, ruling orch 108)."""
+        unfreeze what Start froze, collect it here on the Tk thread (a view kept from Start and destroyed during the
+        run is garbage the drain's collections skipped) and turn automatic collection back on, once per run (RT-8a I1,
+        ruling orch 108)."""
         self.worker = None
         if self._collector_off:
             self._collector_off = False
             gc.unfreeze()
+            gc.collect()
             gc.enable()
 
     def _say(self, text: str) -> None:
@@ -492,14 +501,69 @@ class RouteTab:
             self._onRunning()
 
     def _onRunning(self) -> None:
-        """Called once per drained `running`, after the state and the status line are set. RT-8b hosts the live view
-        here; in RT-8a it does nothing."""
+        """Called once per drained `running`, after the state and the status line are set: the run's live view (spec
+        5.2 Hosting, 5.8). The view shown so far (a replay kept from Start, or an earlier view) goes first, its
+        controller stopped; then a new view is built in `view_frame` on the run folder, with a `LiveController` whose
+        first poll runs now and which then polls every 100 ms. Built here and not at the countdown: the steps start
+        now, and a view built earlier would say it has had no step for 10 s during a countdown of up to 60 s."""
+        out = self._out
+        if out is None:
+            return
+        self._dropView()
+        view = self._make_view(self.view_frame, out, None, live=True)
+        self.view = view
+        live = self._make_live(self._gui.gui, view, out, repo_root=_REPO, current_git_head=self._head,
+                               live_frame=self._liveFrame)
+        self.live = live
+        live.tick()
+
+    def _liveFrame(self) -> "np.ndarray | None":
+        """The live view's picture (spec 5.8, plan choice 12): the shared minimap frame, read under its lock and
+        returned as the reference; the view scales it after the lock is released."""
+        shared = self._gui.sharedInfo
+        if shared is None:
+            return None
+        with shared.minimap_frame_lock:
+            return shared.minimap_frame
 
     def _onEnded(self, code: int | None, text: str) -> bool:
         """Called once per end (an `ended` event's code and text, or `(None, "")` from the watchdog), after the state
-        is set and before the status line; True when a replay opened (choice 7). RT-8b opens the replay here; in RT-8a
-        none opens."""
-        return False
+        is set and before the status line; True when a replay of this run opened (choice 7). `ended` comes after the
+        walk's cleanup, so the run's files are complete. A live view first reads the lines no tick has read yet; if
+        that reached the run's `end` line it has switched itself to replay (`follow.py`), its controller stops and the
+        answer is True. Otherwise any view goes, the replay kept since Start included ((waits for Hong: RTF98-6a-D1)
+        the plan's default; the other answer keeps that replay and gives its bar back), and with a step or leg log in
+        the run folder the folder is loaded and its replay built: True; with neither, or a folder that cannot be read,
+        False and `view_frame` stays empty. While the window waits to close nothing opens: the close takes the view
+        down (RT-8a fix round)."""
+        if self._closing is not None:
+            return False
+        live = self.live
+        if live is not None:
+            live.update()
+            live.stop()
+            self.live = None
+            if live.ended:
+                return True
+        self._dropView()
+        out = self._out
+        if out is None or not ((out / STEPS_FILE).exists() or (out / LEGS_FILE).exists()):
+            return False
+        loaded = self._load_run(out, repo_root=_REPO, current_git_head=self._head)
+        if not is_successful(loaded):
+            return False
+        self.view = self._make_view(self.view_frame, out, loaded.unwrap(), live=False)
+        return True
+
+    def _dropView(self) -> None:
+        """Stop the live view's polling and destroy the hosted view, if there is one; `view_frame` is then empty."""
+        live, view = self.live, self.view
+        self.live = None
+        self.view = None
+        if live is not None:
+            live.stop()
+        if view is not None:
+            view.destroy()
 
     def isRunLive(self) -> bool:
         """Start pressed and the cleanup not finished: the Setup tab's picture is not redrawn while this holds and the
@@ -545,10 +609,7 @@ class RouteTab:
         TclError): the live view's polling stops, the view goes, then `destroy()`, which runs even if the view
         raised."""
         try:
-            if self.live is not None:
-                self.live.stop()
-            if self.view is not None:
-                self.view.destroy()
+            self._dropView()
         finally:
             destroy()
 
@@ -597,6 +658,8 @@ class RouteTab:
         self._countdown_first = None
         self._polls_alive = 0
         self._lockControls(True)
+        if self.view is not None:  # (waits for Hong: RTF98-4b-D1) the view shown before Start stays until `running`,
+            self.view.set_bar_enabled(False)  # greyed out like the rest of the tab (H64)
         self.state = "connecting"
         self.status_var.set(CONNECTING_TEXT)
         try:

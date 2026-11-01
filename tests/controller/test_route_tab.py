@@ -4,12 +4,17 @@ text), then the tab itself on `make_gui`'s withdrawn root, built on fakes: no bo
 Same real-Tk-root setup as test_gui_startup.py (skipped where Tk cannot open a display; `after` only records)."""
 import gc
 import inspect
+import sys
 import threading
 import tkinter as tk
+import weakref
+from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
+from returns.result import Failure
 
 import src.gui.gui as gui_module
 import src.gui.route_tab as route_tab_module
@@ -19,7 +24,14 @@ from src.classes.classes import Kanna
 from src.gui.route_tab import RouteTab, classKey, countdownText, defaultSession, endedText, validateSettings
 from src.route import session
 from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunEvent, RunSession, RunSettings
+from src.route.step_log import SNAPSHOT, STEPS_FILE
+from src.route_view.follow import LiveController
+from src.route_view.model import load_folder
+from src.route_view.window import RouteViewWindow
 from test_gui_startup import _console, _frame, _open_window, _shared
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "route_view"))  # the route view's flat run-folder helpers
+import view_runs  # noqa: E402
 
 make_gui = test_gui_startup.make_gui  # the fixture, shared (no conftest.py under tests/)
 
@@ -929,15 +941,15 @@ def test_collector_is_off_during_a_run_and_on_once_after_it(make_rig, gc_calls, 
 
     _end_run(rig, made, thread, how)
 
-    assert gc.isenabled() and gc_calls[3:] == [("unfreeze", MAIN), ("enable", MAIN)]
+    assert gc.isenabled() and gc_calls[3:] == [("unfreeze", MAIN), ("collect", MAIN), ("enable", MAIN)]
     assert gc.get_freeze_count() == 0
     rig.tab.drainEvents()
     rig.tab.drainEvents()
-    assert gc_calls[3:] == [("unfreeze", MAIN), ("enable", MAIN)]  # exactly once
+    assert gc_calls[3:] == [("unfreeze", MAIN), ("collect", MAIN), ("enable", MAIN)]  # exactly once
     if not how.startswith("close"):
         _, again = _start(rig)  # a later run turns it off again
         assert again.collector_on_at_start is False
-        assert gc_calls[5:] == [("collect", MAIN), ("disable", MAIN), ("freeze", MAIN)]
+        assert gc_calls[6:] == [("collect", MAIN), ("disable", MAIN), ("freeze", MAIN)]
 
 
 def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_calls):
@@ -957,7 +969,7 @@ def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_c
     thread.finish()
     for _ in range(20):
         rig.tab.drainEvents()
-    assert gc_calls == [("collect", MAIN)] * 2 + [("unfreeze", MAIN), ("enable", MAIN)]  # no worker: no more
+    assert gc_calls == [("collect", MAIN)] * 2 + [("unfreeze", MAIN), ("collect", MAIN), ("enable", MAIN)]  # no worker: no more
 
 
 @pytest.fixture
@@ -1024,7 +1036,7 @@ def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
     assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
     assert gc.isenabled()
     assert [name for name, _ in gc_calls] == ([] if failing == "make_thread"
-                                              else ["collect", "disable", "freeze", "unfreeze", "enable"])
+                                              else ["collect", "disable", "freeze", "unfreeze", "collect", "enable"])
     assert gc.get_freeze_count() == 0
 
     tab.drainEvents()  # the readiness refresh gives Start back and keeps the Ended text (choice 8)
@@ -1050,7 +1062,7 @@ def test_a_dead_worker_is_cleared_when_on_ended_raises(make_rig, gc_calls):
         tab.drainEvents()
 
     assert tab.worker is None and tab.state == "ended"
-    assert gc.isenabled() and gc.get_freeze_count() == 0 and gc_calls[-2:] == [("unfreeze", MAIN), ("enable", MAIN)]
+    assert gc.isenabled() and gc.get_freeze_count() == 0 and gc_calls[-3:] == [("unfreeze", MAIN), ("collect", MAIN), ("enable", MAIN)]
     assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
     assert rig.scheduled[-1][1] == tab.drainEvents  # the loop goes on
     tab.drainEvents()  # nothing left to end: `_onEnded` is not called again, and Start comes back
@@ -1278,11 +1290,8 @@ _WM_CALLS = ("wm_attributes", "attributes", "wm_resizable", "resizable", "wm_ove
              "wm_transient", "transient", "wm_iconbitmap", "iconbitmap", "wm_iconphoto", "iconphoto")
 
 
-def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
-    """Spec 5.12 rules 2-3 at run time: patched on the classes, so a call on any widget and through any alias is seen
-    (`tk.Misc.focus is tk.Misc.focus_set`, yet each name is its own class attribute)."""
-    rig = make_rig()
-    tab = rig.tab
+def _record_banned_calls(monkeypatch):
+    """Patch spec 5.12's banned calls on the classes and the dialog modules; the list they append their names to."""
     called = []
 
     def recorder(name):
@@ -1298,6 +1307,15 @@ def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
         targets += [(module, name) for name in functions]
     for owner, name in targets:
         monkeypatch.setattr(owner, name, recorder(f"{owner.__name__}.{name}"))
+    return called
+
+
+def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
+    """Spec 5.12 rules 2-3 at run time: patched on the classes, so a call on any widget and through any alias is seen
+    (`tk.Misc.focus is tk.Misc.focus_set`, yet each name is its own class attribute)."""
+    rig = make_rig()
+    tab = rig.tab
+    called = _record_banned_calls(monkeypatch)
 
     made, thread = _start(rig)
     for event in [_event("status", CONNECTING), _event("countdown", seconds_left=2),
@@ -1350,3 +1368,294 @@ def test_tk_bans_keep_the_view_tests_entries_and_allow_the_focus_reads():
     assert len(found) == 14, found
     # spec 9's reaction reads Tk's own focus: a bare `.focus` attribute, focus_get() and the focus events stay allowed
     assert tk_bans.focus_problems("handler = w.focus\nw.focus_get()\nw.bind('<FocusIn>', f)") == []
+
+
+# -- RT-8b: the hosted live view and its replay at the end (spec 5.2 Hosting, 5.8) ----------------------------------------
+
+G = view_runs.G  # a run of two legs, 26 steps, ending with the `end` line
+
+
+def _hosting_rig(make_rig, tmp_path, *, spy=True, load_fails=False, **keywords):
+    """A rig whose every Start gets a new run folder (`rig.outs`, newest last), as the app's `new_out` does. With `spy`
+    the view, the live controller and the replay loader are the defaults wrapped in spies: `rig.views` and `rig.lives`
+    hold what was built, `rig.live_kwargs` the keywords of each `make_live`, `rig.loads` the folders `load_run` was
+    asked for and `rig.log` every teardown ("view<i>.destroy", "live<i>.stop"); `load_fails` makes `load_run` fail."""
+    outs, views, lives, live_kwargs, loads, log = [], [], [], [], [], []
+
+    def new_out():
+        outs.append(tmp_path / "runs" / f"run{len(outs)}")
+        return outs[-1]
+
+    def make_view(*args, **kwargs):
+        view = RouteViewWindow(*args, **kwargs)
+        i, real = len(views), view.destroy
+        views.append(view)
+        view.destroy = lambda: (log.append(f"view{i}.destroy"), real())[1]
+        return view
+
+    def make_live(*args, **kwargs):
+        live = LiveController(*args, **kwargs)
+        i, real = len(lives), live.stop
+        lives.append(live)
+        live_kwargs.append(kwargs)
+        live.stop = lambda: (log.append(f"live{i}.stop"), real())[1]
+        return live
+
+    def load_run(folder, **kwargs):
+        loads.append(folder)
+        return Failure("unreadable") if load_fails else load_folder(folder, **kwargs)
+
+    if spy:
+        keywords = dict(make_view=make_view, make_live=make_live, load_run=load_run) | keywords
+    rig = make_rig(new_out=new_out, **keywords)
+    rig.outs, rig.views, rig.lives, rig.live_kwargs, rig.loads, rig.log = outs, views, lives, live_kwargs, loads, log
+    return rig
+
+
+def _write_run(folder, events, *, snapshot=False):
+    """The run folder as the walk leaves it so far: the map, the header and `events`; `snapshot`: a `minimap.png`."""
+    folder.mkdir(parents=True, exist_ok=True)
+    view_runs.make_folder(folder, events)
+    if snapshot:
+        Image.new("RGB", (180, 90), (40, 80, 120)).save(folder / SNAPSHOT)
+
+
+def _append(folder, events):
+    with open(folder / STEPS_FILE, "ab") as f:
+        f.write(b"".join(view_runs.event_lines(events)))
+
+
+def _post(rig, made, *events):
+    for event in events:
+        made.on_event(event)
+        rig.tab.drainEvents()
+
+
+def _finish(rig, made, thread, text="max_laps/", code=0):
+    """The walk's cleanup is done: `ended`, the worker returns, one drain reads both."""
+    made.on_event(_event("ended", text, code=code))
+    thread.finish()
+    rig.tab.drainEvents()
+
+
+def _replayed_run(rig, *, snapshot=False):
+    """A whole run whose replay is open at its end (the live view read the `end` line)."""
+    made, thread = _start(rig)
+    _write_run(rig.outs[-1], G, snapshot=snapshot)
+    _post(rig, made, _event("running", "Running."))
+    _finish(rig, made, thread)
+    assert rig.tab.view is not None and rig.tab.view.live is False
+
+
+def _one_view(tab):
+    """`view_frame` holds exactly the widgets of one view, `tab.view`'s."""
+    v = tab.view
+    return v is not None and set(tab.view_frame.winfo_children()) == {v.title_label, v.warn_label, v.main,
+                                                                       v.why_frame, v.bar, v.status_label}
+
+
+def _bar_states(view):
+    controls = [view.btn_first, view.btn_prev, view.btn_next, view.btn_last, view.unit_menu, view.slider,
+                *view.play_buttons.values(), view.lap_entry, view.leg_entry, *view.scale_buttons.values()]
+    return [_state(c) for c in controls]
+
+
+def test_view_rebuilt_per_run_and_replay(make_rig, tmp_path):
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    for run in range(2):
+        made, thread = _start(rig)
+        _write_run(rig.outs[run], G[:5])
+        _post(rig, made, _event("running", "Running."))
+        assert tab.view is rig.views[run] and tab.live is rig.lives[run] and tab.view.live and _one_view(tab)
+        _append(rig.outs[run], G[5:])
+        _finish(rig, made, thread)
+        assert tab.view is rig.views[run] and tab.view.live is False and tab.view.folder == rig.outs[run]
+        assert tab.live is None and _one_view(tab) and tab.status_var.get().endswith("Replay is open.")
+    assert rig.log == ["live0.stop", "view0.destroy", "live1.stop"] and len(rig.views) == 2 and rig.loads == []
+
+
+def test_final_steps_reach_the_replay_when_ended_drains_before_a_tick(make_rig, tmp_path):
+    """Plan review RA3 I5: `ended` drained before the next 100 ms tick still shows the run's last steps."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    made, thread = _start(rig)
+    out = rig.outs[0]
+    _write_run(out, G[:3])
+    _post(rig, made, _event("running", "Running."))
+    live = tab.live
+    assert [f for _, f in rig.scheduled if f == live.tick] == [live.tick]  # queued, and never run here
+    _append(out, G[3:])
+    _finish(rig, made, thread)
+    full = load_folder(out, repo_root=view_runs.REPO_ROOT, current_git_head=None).unwrap()
+    view = tab.view
+    assert view is rig.views[0] and view.live is False and _one_view(tab) and rig.loads == []
+    assert view.model is not None and len(view.model.events) == len(full.events) == len(G)
+    assert tab.status_var.get().endswith("Replay is open.")
+
+
+@pytest.mark.parametrize("case", ["stop_connecting", "kept_replay", "live_no_end", "live_no_end_load_fails",
+                                  "legs_only"])
+def test_end_without_a_live_view(make_rig, tmp_path, case):
+    rig = _hosting_rig(make_rig, tmp_path, load_fails=case == "live_no_end_load_fails")
+    tab = rig.tab
+    if case == "kept_replay":
+        _replayed_run(rig)  # (waits for Hong: RTF98-6a-D1) the plan's default: this replay goes too
+    views, loads, log = len(rig.views), len(rig.loads), len(rig.log)
+    made, thread = _start(rig)
+    out = rig.outs[-1]
+    out.mkdir(parents=True)
+    if case in ("stop_connecting", "kept_replay"):
+        tab.stopRun()
+        (out / "stop.json").write_text("{}", encoding="utf-8")
+        _finish(rig, made, thread, "cancelled/button")
+        assert len(rig.views) == views and len(rig.loads) == loads
+        assert tab.view is None and tab.view_frame.winfo_children() == []
+        assert tab.status_var.get() == "Ended: cancelled before the walk (you pressed Stop)."
+        assert rig.log[log:] == (["view0.destroy"] if case == "kept_replay" else [])
+        return
+    if case == "legs_only":
+        view_runs.make_legs_folder(out)
+    else:
+        _write_run(out, G[:-1])  # no `end` line
+        _post(rig, made, _event("running", "Running."))
+        assert tab.live is not None and tab.view.live
+    _finish(rig, made, thread, "stopped/button")
+    assert rig.loads == [out] and tab.live is None
+    assert rig.log == ([] if case == "legs_only" else ["live0.stop", "view0.destroy"])
+    if case == "live_no_end_load_fails":
+        assert tab.view is None and tab.view_frame.winfo_children() == []
+        assert tab.status_var.get() == endedText(0, "stopped/button", out, False)
+    else:
+        assert tab.view is rig.views[-1] and tab.view.live is False and tab.view.model is not None and _one_view(tab)
+        assert tab.status_var.get() == endedText(0, "stopped/button", out, True)
+
+
+def test_live_view_reads_the_shared_frame(make_rig, tmp_path):
+    rig = _hosting_rig(make_rig, tmp_path)
+    made, _ = _start(rig)
+    _post(rig, made, _event("running", "Running."))
+    live_frame = rig.live_kwargs[0]["live_frame"]
+    frame, seen = object(), []
+
+    class Lock:
+        held = False
+
+        def __enter__(self):
+            Lock.held = True
+
+        def __exit__(self, *exc):
+            Lock.held = False
+
+    class Holder:
+        minimap_frame_lock = Lock()
+
+        @property
+        def minimap_frame(self):
+            seen.append(Lock.held)
+            return frame
+
+    rig.gui.sharedInfo = Holder()
+    assert live_frame() is frame and seen == [True] and not Lock.held  # read under the lock, returned as is
+    assert rig.live_kwargs[0]["current_git_head"] == rig.tab._head
+
+
+def test_live_view_built_at_running_not_at_the_countdown(make_rig, tmp_path):
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    made, _ = _start(rig)
+    _post(rig, made, _event("status", CONNECTING), _event("countdown", seconds_left=2),
+          _event("countdown", seconds_left=1))
+    assert rig.views == [] and tab.view is None
+    _post(rig, made, _event("running", "Running."))
+    assert len(rig.views) == 1 and tab.view is rig.views[0] and tab.view.live and _one_view(tab)
+
+
+def test_previous_replay_kept_with_its_bar_greyed_until_running(make_rig, tmp_path, monkeypatch):
+    """(waits for Hong: RTF98-4b-D1) the plan's default A'; answer B replaces this test."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    _replayed_run(rig)
+    kept, calls = tab.view, []
+    real = kept.set_bar_enabled
+    monkeypatch.setattr(kept, "set_bar_enabled", lambda enabled: (calls.append(enabled), real(enabled))[1])
+    agent = rig.gui.controller.agent
+    agent.CSVParser.CSV_file = None
+    tab.startRun()  # refused by a check (no map loaded): no session, so nothing could give the bar back
+    assert len(rig.sessions) == 1 and calls == [] and set(_bar_states(kept)) == {"normal"}
+    agent.CSVParser.CSV_file = rig.csv
+
+    made, _ = _start(rig)
+    assert calls == [False] and tab.view is kept and _one_view(tab) and set(_bar_states(kept)) == {"disabled"}
+    for event in (_event("status", CONNECTING), _event("countdown", seconds_left=1)):
+        _post(rig, made, event)
+        assert tab.view is kept and _one_view(tab) and set(_bar_states(kept)) == {"disabled"}
+    index = kept.index
+    assert kept.model is not None and index != kept.model.find_leg(0, 6)  # leg 6 starts at another step
+    kept.lap_var.set("0")
+    kept.leg_var.set("6")
+    kept.go_to_leg()  # Enter in a greyed-out entry (RR3 m8)
+    assert kept.index == index
+
+    _write_run(rig.outs[-1], G[:3])
+    _post(rig, made, _event("running", "Running."))
+    assert rig.log[-1] == "view0.destroy" and tab.view is rig.views[-1] and tab.view.live and _one_view(tab)
+    assert calls == [False]
+
+
+def test_no_window_style_or_focus_call_with_the_hosted_view(make_rig, tmp_path, monkeypatch):
+    rig = _hosting_rig(make_rig, tmp_path, spy=False)  # the default view, controller and loader
+    tab = rig.tab
+    called = _record_banned_calls(monkeypatch)
+    made, thread = _start(rig)
+    out = rig.outs[0]
+    _write_run(out, G[:5], snapshot=True)
+    _post(rig, made, _event("running", "Running."))
+    live = tab.live
+    for chunk in (G[5:10], G[10:20]):
+        _append(out, chunk)
+        live.tick()  # a 100 ms tick
+    _finish(rig, made, thread, "stopped/button")  # no `end` line: the replay is loaded from the folder
+    assert tab.view is not None and tab.view.live is False and tab.status_var.get().endswith("Replay is open.")
+    _replayed_run(rig)  # and one whose live view turns into the replay
+    assert called == []
+
+
+def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
+    """RT-8a fix round [fyi]: `_onEnded` still runs while a close waits; it opens nothing (the close takes the view
+    down)."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    made, thread = _start(rig)
+    _write_run(rig.outs[0], G[:5])
+    _post(rig, made, _event("running", "Running."))
+    destroyed = []
+    tab.onAppClose(lambda: destroyed.append(1))
+    _append(rig.outs[0], G[5:])
+    _finish(rig, made, thread, "stopped/window_close")
+    assert rig.loads == [] and len(rig.views) == 1 and tab.view is rig.views[0] and tab.view.live
+    assert rig.log == [] and tab.status_var.get() == STOPPING
+    _run_close_poll(rig)
+    assert destroyed == [1] and rig.log == ["live0.stop", "view0.destroy"]
+
+
+@pytest.mark.parametrize("cyclic", [False, True])
+def test_the_kept_replays_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cyclic):
+    """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the kept replay, frozen at Start with the rest,
+    is destroyed at `running`; its image (a Tcl image whose `__del__` calls Tcl) is freed on the Tk thread by the
+    time the run's end has been drained, also when only the cycle collector can free it."""
+    rig = _hosting_rig(make_rig, tmp_path, spy=False)
+    tab = rig.tab
+    _replayed_run(rig, snapshot=True)
+    photo = tab.view.shown_photo
+    assert photo is not None and tab.view.shown_background == SNAPSHOT
+    name, freed = str(photo), []
+    weakref.finalize(photo, lambda: freed.append(threading.current_thread().name))
+    if cyclic:
+        tab.view.cycle = tab.view  # garbage only the cycle collector can free, as any view in a reference cycle
+    del photo
+    made, thread = _start(rig)
+    _write_run(rig.outs[-1], G[:3])
+    _post(rig, made, _event("running", "Running."))
+    _finish(rig, made, thread)
+    assert freed == [MAIN] and name not in tab.view_frame.tk.splitlist(tab.view_frame.tk.call("image", "names"))
