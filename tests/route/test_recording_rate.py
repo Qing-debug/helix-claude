@@ -19,7 +19,8 @@ def test_rate_from_a_made_folder(tmp_path, capsys):
     for i in range(10):
         (folder / f"frame_{i:06d}.png").write_bytes(b"x" * 1000)
     index = folder / "index.jsonl"
-    index.write_text(_index_line(0, 0) + _index_line(9, 1_000_000_000), encoding="utf-8")
+    # Three lines, so last minus first is told apart from second minus first (RT-13-R M2).
+    index.write_text(_index_line(0, 0) + _index_line(5, 400_000_000) + _index_line(9, 1_000_000_000), encoding="utf-8")
     total = 10 * 1000 + index.stat().st_size  # index included, span 1 s
 
     assert recording_rate.main([str(folder)]) == 0
@@ -45,6 +46,16 @@ def test_zero_span_exits_2(tmp_path, capsys):
     folder = tmp_path / "zero"
     folder.mkdir()
     (folder / "index.jsonl").write_text(_index_line(0, 5) + _index_line(1, 5), encoding="utf-8")
+
+    assert recording_rate.main([str(folder)]) == 2
+
+    assert "span" in capsys.readouterr().err
+
+
+def test_negative_span_exits_2(tmp_path, capsys):
+    folder = tmp_path / "negative"
+    folder.mkdir()
+    (folder / "index.jsonl").write_text(_index_line(0, 5) + _index_line(1, 4), encoding="utf-8")
 
     assert recording_rate.main([str(folder)]) == 2
 
