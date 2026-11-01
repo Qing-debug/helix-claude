@@ -505,11 +505,18 @@ class RouteTab:
         problem = validateSettings(*fields)[1] or self._firstMissing(self._minimapFound)
         text = problem or READY_TEXT
         self.start_button.configure(state="disabled" if problem else "normal")
-        written = ((fields, csv, character, self._gui.minimap_canvas is not None), text)
+        written = (self._readinessInputs(), text)
         if written != self._written:
             self._written = written
             self.status_var.set(text)
             self.state = "not_ready" if problem else "ready"
+
+    def _readinessInputs(self) -> tuple:
+        """What the readiness line is computed from (the three fields, the map, the class, whether the minimap area
+        exists): `_refreshReadiness` and `startRun` both record it in `_written`, so the two cannot drift."""
+        csv, character = self._mapAndClass()
+        fields = (self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
+        return fields, csv, character, self._gui.minimap_canvas is not None
 
     def startPolling(self) -> None:
         """Read git's HEAD once, fill the saved-run list (RT-10) and start the 100 ms drain. Only `MapleGUI.start`
@@ -830,6 +837,7 @@ class RouteTab:
                         out=out),
             shared, self._events.put, self._mayWalk, self._postLine)
         self.session = run
+        self._written = (self._readinessInputs(), READY_TEXT)  # the inputs this Start used
         self._out = out
         self._ended_seen = False
         self._countdown_first = None
