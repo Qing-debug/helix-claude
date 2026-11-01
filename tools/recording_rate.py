@@ -17,6 +17,17 @@ MB = 2**20
 GB = 2**30
 
 
+def _t_ns(line: str, which: str) -> int:
+    """`t_ns` of one index line; raises ValueError (naming the file) when the line has no int `t_ns`."""
+    try:
+        t_ns = json.loads(line)["t_ns"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"bad line in {INDEX_NAME}: {which} line is not a record with a t_ns ({error!r})") from error
+    if not isinstance(t_ns, int) or isinstance(t_ns, bool):  # as route_view/model.py:255
+        raise ValueError(f"bad line in {INDEX_NAME}: {which} line has a t_ns that is not an integer ({t_ns!r})")
+    return t_ns
+
+
 def rate(folder: Path) -> tuple[float, float]:
     """(MB per hour, GB per hour) for `folder`; raises ValueError when the index cannot give a span."""
     index = folder / INDEX_NAME
@@ -25,7 +36,7 @@ def rate(folder: Path) -> tuple[float, float]:
     lines = [line for line in index.read_text(encoding="utf-8").splitlines() if line.strip()]
     if len(lines) < 2:
         raise ValueError(f"{INDEX_NAME} has fewer than two lines; cannot take a span")
-    span_ns = json.loads(lines[-1])["t_ns"] - json.loads(lines[0])["t_ns"]
+    span_ns = _t_ns(lines[-1], "last") - _t_ns(lines[0], "first")
     if span_ns <= 0:
         raise ValueError(f"{INDEX_NAME} spans {span_ns} ns; need a span above 0")
     total = sum(p.stat().st_size for p in folder.iterdir() if p.is_file())
@@ -39,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         mb, gb = rate(args.frames_dir)
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError) as error:
         print(f"recording_rate: {error}", file=sys.stderr)
         return 2
     print(f"MB per hour: {mb:.1f}")

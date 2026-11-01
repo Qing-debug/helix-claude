@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))  # the tool is a script, not a package
 
@@ -70,3 +72,40 @@ def test_one_index_line_exits_2(tmp_path, capsys):
     assert recording_rate.main([str(folder)]) == 2
 
     assert "two" in capsys.readouterr().err
+
+
+BAD_LAST_LINES = [
+    '{"i": 9}',  # no t_ns
+    "[1, 2]",  # not an object
+    "not json",
+    '{"t_ns": "x"}',  # not a number
+    '{"t_ns": true}',  # a bool is an int in Python (route_view/model.py:255 refuses it too)
+    '{"t_ns": NaN}',
+    '{"t_ns": Infinity}',
+    '{"t_ns": 1.5}',
+]
+
+
+@pytest.mark.parametrize("last", BAD_LAST_LINES)
+def test_a_malformed_index_line_exits_2_with_one_line(tmp_path, capsys, last):
+    folder = tmp_path / "bad"
+    folder.mkdir()
+    (folder / "index.jsonl").write_text(_index_line(0, 0) + last + "\n", encoding="utf-8")
+
+    assert recording_rate.main([str(folder)]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert len(captured.err.splitlines()) == 1
+    assert "bad line in index.jsonl" in captured.err
+
+
+def test_a_malformed_first_line_exits_2(tmp_path, capsys):
+    folder = tmp_path / "badfirst"
+    folder.mkdir()
+    (folder / "index.jsonl").write_text('{"i": 0}\n' +_index_line(1, 5), encoding="utf-8")
+
+    assert recording_rate.main([str(folder)]) == 2
+
+    assert "bad line in index.jsonl" in capsys.readouterr().err
