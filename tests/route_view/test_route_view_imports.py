@@ -18,8 +18,8 @@ BOUNDARIES = [
     "src.input.actions", "src.input.timing", "src.input.harness", "src.route.walker", "src.route.walk",
     "src.route.session", "src.route.moves", "src.route.runtime", "src.route.sim",
 ]
-LEAF_SOURCES = ["src.route", "src.controller", "src.gui", "src.main", "src.vision", "src.input", "src.classes",
-                "src.rune_solver"]
+LEAF_SOURCES = ["src.route", "src.controller", "src.vision", "src.input", "src.classes", "src.rune_solver"]
+# src.gui and src.main are not leaf sources since the Route tab hosts the view (spec 5.9)
 
 
 def _contracts():
@@ -36,6 +36,13 @@ def test_12_pyproject_has_both_route_view_contracts_with_exactly_these_modules()
     assert leaf["type"] == "forbidden" and leaf["forbidden_modules"] == ["src.route_view"]
     assert leaf["source_modules"] == LEAF_SOURCES
     assert "allow_indirect_imports" not in boundaries and "allow_indirect_imports" not in leaf  # default: False
+
+
+def test_12_gui_reaches_input_only_through_the_run_driver():
+    contract = _contracts()["gui reaches input only through the run driver"]
+    assert contract["type"] == "forbidden"
+    assert contract["source_modules"] == ["src.gui"] and contract["forbidden_modules"] == ["src.input"]
+    assert contract["allow_indirect_imports"] is True  # src.gui -> src.route.session -> src.input is the one way in
 
 
 def test_12_every_src_input_module_but_protocol_is_forbidden():

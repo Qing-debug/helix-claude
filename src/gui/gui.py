@@ -12,6 +12,7 @@ from src.controller.node import  CharacterNode
 from src.controller.controller import BuildOutcome
 from src.classes.classes import CharacterClass
 from src.gui.map_editor import MapEditor
+from src.gui.route_tab import RouteTab
 from src.route.character import CharacterLocator
 
 # Shown where the minimap will appear, and in the console by the buttons that need it, until the first frame arrives.
@@ -39,7 +40,7 @@ class MapleGUI:
     route_tab_frame: tk.Frame
     scroll_canvas: tk.Canvas  # scrolls the Setup tab's column; set by _setupScrollableContainer, used by _onMouseWheel
 
-    def __init__(self, controller = None, sharedInfo = None, *, route_tab_factory = None):
+    def __init__(self, controller = None, sharedInfo = None, *, route_tab_factory = RouteTab):
         self.minimap_canvas_width = None
         self.minimap_canvas_height = None
         self.minimap_canvas = None
@@ -48,8 +49,9 @@ class MapleGUI:
         self.gui = tk.Tk()
         self.gui_console = None #created in _setupGUI so it can be parented to the scrollable inner frame
         self.scrollable_frame = None #inner frame inside the scrolling canvas; parent for all content widgets
-        self._route_tab_factory = route_tab_factory  # called as factory(route_tab_frame, self) at the end of _setupGUI
-        self.route_tab = None  # the factory's product; None while the factory is None
+        self._route_tab_factory = route_tab_factory  # called as factory(route_tab_frame, self) at the end of _setupGUI;
+        # None builds no Route tab (the tests of the window alone)
+        self.route_tab = None  # the factory's product: None until _setupGUI has run, and with no factory
         self.node_count = 0
         self.controller = controller
         self.sharedInfo = sharedInfo
@@ -63,6 +65,8 @@ class MapleGUI:
 
     def start(self):
         self._setupGUI()
+        if self.route_tab is not None:
+            self.route_tab.startPolling()  # the tab's 100 ms drain; nothing else starts it (contract C5)
         self._updateCanvas()
         self.gui.mainloop()
 
@@ -159,7 +163,7 @@ class MapleGUI:
     def setRunLocked(self, locked):
         """Grey out the Setup tab for a run, or bring it back (spec 5.1): the eleven buttons and the class picker. The
         console Text stays editable on purpose: a disabled Text drops _printToGUIConsole's inserts. The tab's header
-        is left alone (RTF98-1-D1 answer A: it stays selectable)."""
+        is left alone (waits for Hong: RTF98-1-D1; the plan's default, answer A, is what is built: it stays selectable)."""
         state = "disabled" if locked else "normal"
         for button in (self.draw_blue_node_button, self.draw_orange_node_button, self.clear_gui_console_button,
                        self.clear_gui_minimap_button, self.load_map_button, self.open_editor_button,
@@ -274,7 +278,8 @@ class MapleGUI:
         self.minimap_status_label.pack(side=tk.TOP, pady=10)
 
         # The Route tab goes last so its constructor can read every Setup-tab widget (and the focus bindings that
-        # call it, RT-9, bind after this line). With no factory the tab stays an empty frame and route_tab is None.
+        # call it, RT-9, bind after this line). With the factory None (a test of the window alone) the tab stays an empty
+        # frame and route_tab is None.
         if self._route_tab_factory is not None:
             self.route_tab = self._route_tab_factory(self.route_tab_frame, self)
 

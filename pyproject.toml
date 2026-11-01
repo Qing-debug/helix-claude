@@ -88,6 +88,14 @@ forbidden_modules = [
 name = "route_view is a leaf"
 type = "forbidden"
 source_modules = [
-    "src.route", "src.controller", "src.gui", "src.main", "src.vision", "src.input", "src.classes", "src.rune_solver",
+    "src.route", "src.controller", "src.vision", "src.input", "src.classes", "src.rune_solver",
 ]
 forbidden_modules = ["src.route_view"]
+# src.gui and src.main are not sources: the Route tab (src/gui/route_tab.py) hosts the route view (spec 5.9).
+
+[[tool.importlinter.contracts]]
+name = "gui reaches input only through the run driver"
+type = "forbidden"
+source_modules = ["src.gui"]
+forbidden_modules = ["src.input"]
+allow_indirect_imports = true
