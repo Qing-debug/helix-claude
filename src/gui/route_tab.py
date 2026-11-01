@@ -7,6 +7,7 @@ rules the tab shows (settings checks, the class key, the end-of-run texts, the c
 event queue with the dead-worker watchdog, Stop, and the close handler that waits for a live run's cleanup (RT-8a). The
 hosted view (RT-8b), the app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
 """
+import gc
 import math
 import queue
 import re
@@ -188,6 +189,11 @@ STOPPING_CONNECT_TEXT = "Stopping: waiting for the board connection attempt to e
 POLL_MS = 100  # the drain's period, and the close handler's (spec 5.5, 5.7)
 CLOSE_WAIT_S = 10  # the close handler destroys the window after this even if the run's cleanup has not finished (5.5)
 CLOSE_GAVE_UP_TEXT = "The run's cleanup did not finish in 10 s; closing anyway."  # its one console line
+# Python's cycle collector runs on whichever thread allocates past its threshold. On the worker it could free a Tk
+# object (a Variable's or an image's `__del__` calls Tcl), which waits for the Tk thread with no timeout and can deadlock
+# it on a lock both take (the event queue's). So while a worker lives automatic collection is off and every collection
+# runs on the Tk thread: one just before the worker starts, then one every GC_EVERY_POLLS drains (RT-8a I1).
+GC_EVERY_POLLS = 10  # about once a second at POLL_MS
 RouteState = Literal["not_ready", "ready", "connecting", "countdown", "running", "stopping", "ended"]
 _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "stopping")  # Start pressed, cleanup not done
 _IDLE_STATES: tuple[RouteState, ...] = ("not_ready", "ready", "ended")  # the readiness line is kept up to date here
@@ -261,6 +267,8 @@ class RouteTab:
         self._countdown_first: int | None = None  # this run's first countdown count (plan choice 4)
         self._written: tuple | None = None  # (inputs, text) of the readiness line's last write (plan choice 8)
         self._closing: tuple[Callable[[], None], float] | None = None  # (destroy, clock at the press) while it waits
+        self._collector_off = False  # Start turned automatic garbage collection off and nothing has turned it back on
+        self._polls_alive = 0  # drains that found this run's worker alive (the periodic collection's count)
         self.state = "not_ready"
         self.view = None
         self.live = None
@@ -391,27 +399,53 @@ class RouteTab:
 
     def drainEvents(self) -> None:
         """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued events, then the watchdog, then the
-        readiness refresh (only with no worker and an idle state). It reschedules itself in a `finally`, so a step
-        that raises does not end the loop.
+        readiness refresh (only with no worker, no close waiting and an idle state). It reschedules itself in a
+        `finally`, so a step that raises does not end the loop.
 
         The watchdog (spec 5.5): a worker found dead is read as ended only after one more drain of the queue finds no
-        `ended`, so an `ended` put between the first drain and `is_alive()` is still read as itself. A dead worker
-        gives the controls back, whether its run ended with an `ended` event or not."""
+        `ended`, so an `ended` put between the first drain and `is_alive()` is still read as itself. A dead worker is
+        cleared (automatic garbage collection comes back on) and gives the controls back, whether its run ended with
+        an `ended` event or not, except while the window waits to close: then nothing comes back (RT-8a m1). While the
+        worker lives, every `GC_EVERY_POLLS`-th step collects garbage here, on the Tk thread (RT-8a I1)."""
         try:
             self._drainQueue()
             worker = self.worker
             if worker is not None and not worker.is_alive():
                 self._drainQueue()
                 if not self._ended_seen:
-                    self.state = "ended"
-                    replay_open = self._onEnded(None, "")
-                    self.status_var.set(_unexpectedEndText(self._out, replay_open))
-                self.worker = None
-                self._lockControls(False)
-            if self.worker is None and self.state in _IDLE_STATES:
+                    self._endWithoutEnded()
+                self._clearWorker()
+                if self._closing is None:
+                    self._lockControls(False)
+            elif worker is not None:
+                self._polls_alive += 1
+                if self._polls_alive % GC_EVERY_POLLS == 0:
+                    gc.collect()
+            if self.worker is None and self._closing is None and self.state in _IDLE_STATES:
                 self._refreshReadiness()
         finally:
             self._gui.gui.after(POLL_MS, self.drainEvents)
+
+    def _endWithoutEnded(self) -> None:
+        """The run's end on the tab when no `ended` came (the watchdog, or a worker that could not start): Ended,
+        `_onEnded(None, "")`, then spec 5.5's "stopped unexpectedly" text."""
+        self.state = "ended"
+        replay_open = self._onEnded(None, "")
+        self._say(_unexpectedEndText(self._out, replay_open))
+
+    def _clearWorker(self) -> None:
+        """The worker has ended or never started: forget it and turn automatic garbage collection back on if Start
+        turned it off, once per run (RT-8a I1)."""
+        self.worker = None
+        if self._collector_off:
+            self._collector_off = False
+            gc.enable()
+
+    def _say(self, text: str) -> None:
+        """Write the status line for a drained event or the watchdog, except while the window waits to close: the
+        close's Stopping text stays until the window goes (RT-8a m1)."""
+        if self._closing is None:
+            self.status_var.set(text)
 
     def _drainQueue(self) -> None:
         """Show every event queued so far, in order."""
@@ -426,29 +460,30 @@ class RouteTab:
         """One event to spec 5.2's state and status line. A `warning` is appended after one space in any state
         (choice 5). `ended` sets the state, asks `_onEnded` whether a replay opened, then writes `endedText` (choice
         7). While Stopping its text stays until the end: an earlier `status` or `countdown` read late changes nothing,
-        and a `running` still reaches `_onRunning` (the walk did start)."""
+        and a `running` still reaches `_onRunning` (the walk did start). While the window waits to close no event
+        writes the status line (`_say`)."""
         if event.kind == "warning":
-            self.status_var.set(f"{self.status_var.get()} {event.text}")
+            self._say(f"{self.status_var.get()} {event.text}")
         elif event.kind == "ended":
             self._ended_seen = True
             self.state = "ended"
             replay_open = self._onEnded(event.code, event.text)
-            self.status_var.set(endedText(event.code, event.text, self._out, replay_open))
+            self._say(endedText(event.code, event.text, self._out, replay_open))
         elif self.state == "stopping":
             if event.kind == "running":
                 self._onRunning()
         elif event.kind == "status":
             self.state = "connecting"
-            self.status_var.set(event.text)
+            self._say(event.text)
         elif event.kind == "countdown":
             left = event.seconds_left if event.seconds_left is not None else 0
             first = self._countdown_first if self._countdown_first is not None else left
             self._countdown_first = first
             self.state = "countdown"
-            self.status_var.set(countdownText(first, left))
+            self._say(countdownText(first, left))
         elif event.kind == "running":
             self.state = "running"
-            self.status_var.set(RUNNING_TEXT)
+            self._say(RUNNING_TEXT)
             self._onRunning()
 
     def _onRunning(self) -> None:
@@ -487,7 +522,7 @@ class RouteTab:
     def _pollClose(self) -> None:
         """One close poll: the worker gone (dead, or already cleared by a drain) → the window goes; still alive after
         `CLOSE_WAIT_S` → one console line, and the window goes anyway (the worker is a daemon and dies with the
-        process); else the next poll in 100 ms."""
+        process, so automatic garbage collection stays off); else the next poll in 100 ms."""
         assert self._closing is not None  # only onAppClose schedules it
         destroy, pressed = self._closing
         worker = self.worker
@@ -496,6 +531,8 @@ class RouteTab:
                 self._gui.gui.after(POLL_MS, self._pollClose)
                 return
             print(CLOSE_GAVE_UP_TEXT)
+        else:
+            self._clearWorker()
         self._closeWindow(destroy)
 
     def _closeWindow(self, destroy: Callable[[], None]) -> None:
@@ -517,7 +554,11 @@ class RouteTab:
         fails and writing its text to the status line (never a dialog). With all of them passed it builds the run's
         session from the settings, locks the controls, shows Connecting and starts the worker. A press while a worker
         exists (Start greyed out but pressed anyway, or pressed again while Stopping) does nothing: one worker at most.
-        Nor does one while the window waits to close (a drain may give Start back before the close poll runs)."""
+        Nor does one while the window waits to close (a drain may give Start back before the close poll runs).
+
+        Just before the worker starts, garbage is collected here and automatic collection is turned off until the
+        worker is cleared (RT-8a I1). A worker that cannot be built or started ends the run on the tab at once, with
+        the watchdog's text and the controls back, and the error goes on to Tk's callback handler (RT-8a m2)."""
         if self.worker is not None or self._closing is not None:
             return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
@@ -549,11 +590,22 @@ class RouteTab:
         self._out = out
         self._ended_seen = False
         self._countdown_first = None
+        self._polls_alive = 0
         self._lockControls(True)
         self.state = "connecting"
         self.status_var.set(CONNECTING_TEXT)
-        self.worker = self._make_thread(target=self._work, args=(run,), name="route-run", daemon=True)
-        self.worker.start()
+        try:
+            worker = self._make_thread(target=self._work, args=(run,), name="route-run", daemon=True)
+            gc.collect()
+            gc.disable()
+            self._collector_off = True
+            worker.start()
+        except BaseException:
+            self._clearWorker()
+            self._endWithoutEnded()
+            self._lockControls(False)
+            raise
+        self.worker = worker
 
     def _work(self, run: RunSession) -> None:
         """The worker thread's body (spec 5.7): the walk and nothing that touches Tk; its events reach the tab through

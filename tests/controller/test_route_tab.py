@@ -211,16 +211,19 @@ class FakeSession:
 
 
 class FakeThread:
-    """The fake `make_thread`'s product: `start()` runs nothing; `finish()` runs the worker's body on the test's thread
-    and leaves the thread dead; `alive_check`, when set, answers `is_alive()` instead."""
+    """The fake `make_thread`'s product: `start()` runs nothing but notes whether automatic garbage collection was on;
+    `finish()` runs the worker's body on the test's thread and leaves the thread dead; `alive_check`, when set,
+    answers `is_alive()` instead."""
 
     def __init__(self, *, target, args=(), name=None, daemon=None):
         self.target, self.args, self.name, self.daemon = target, args, name, daemon
         self.started, self.alive, self.alive_check = 0, False, None
+        self.collector_on_at_start = None
 
     def start(self):
         self.started += 1
         self.alive = True
+        self.collector_on_at_start = gc.isenabled()
 
     def is_alive(self):
         return self.alive_check() if self.alive_check is not None else self.alive
@@ -275,6 +278,30 @@ def make_rig(make_gui, monkeypatch, tmp_path):
         return rig
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def _collector_back_on():
+    """Start turns automatic garbage collection off until the drain clears the worker (RT-8a I1); a test that leaves
+    its fake worker alive must not leave it off for the tests after it."""
+    yield
+    gc.enable()
+
+
+MAIN = threading.main_thread().name  # the test's thread stands for the Tk thread
+
+
+@pytest.fixture
+def gc_calls(monkeypatch):
+    """Every `gc.collect`, `gc.disable` and `gc.enable` call during the test as (name, thread name); the real function
+    still runs."""
+    calls = []
+    for name in ("collect", "disable", "enable"):
+        def spy(*args, _real=getattr(gc, name), _name=name, **kwargs):
+            calls.append((_name, threading.current_thread().name))
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(gc, name, spy)
+    return calls
 
 
 def _toplevels(gui):
@@ -850,19 +877,11 @@ def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, c
         return made
 
     rig = make_rig(make_session=raising_session, make_thread=threading.Thread)  # a real thread this time
-    # Tk objects that earlier tests left in reference cycles are freed here, on the Tk thread, and the collector stays
-    # off while the worker runs: a collection inside the worker would call Tcl from it ("main thread is not in main
-    # loop"), keep it alive past the join and crash the process later.
-    gc.collect()
-    gc.disable()
-    try:
-        rig.tab.startRun()
-        worker = rig.tab.worker
-        assert isinstance(worker, threading.Thread) and worker.name == "route-run" and worker.daemon
-        worker.join(10)
-        assert not worker.is_alive()
-    finally:
-        gc.enable()
+    rig.tab.startRun()  # Start's own collection guard keeps the collector off the worker (I1)
+    worker = rig.tab.worker
+    assert isinstance(worker, threading.Thread) and worker.name == "route-run" and worker.daemon
+    worker.join(10)
+    assert not worker.is_alive()
 
     err = capsys.readouterr().err
     assert "Traceback" in err and "RuntimeError: boom in run" in err
@@ -873,6 +892,138 @@ def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, c
     assert rig.tab.state == "ended" and rig.tab.worker is None
     assert rig.tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
     assert (_state(rig.tab.start_button), _state(rig.tab.stop_button)) == ("normal", "disabled")
+
+
+# Garbage collection during a run (RT-8a I1, ruling RT-8a-review-D1 A): a collection on the worker that frees a Tk
+# object would call Tcl from it, so automatic collection is off while a worker lives and every collection runs on the
+# Tk thread: one just before the worker starts, one in the drain about every second.
+
+def _end_run(rig, made, thread, how):
+    """End a started run one of the ways a run ends."""
+    tab = rig.tab
+    if how == "ended":
+        made.on_event(_event("ended", "max_laps/", code=0))
+    elif how == "stop":
+        tab.stopRun()
+        made.on_event(_event("ended", "stopped/button", code=0))
+    elif how == "session_error":
+        made.raises = RuntimeError("boom in run")  # escapes run(): `_work` prints it, the watchdog ends the run
+    else:
+        tab.onAppClose(lambda: None)
+    thread.finish()
+    if how != "close":
+        tab.drainEvents()  # "close_drain_first": the drain clears the worker before the close poll runs
+    if how.startswith("close"):
+        _run_close_poll(rig)
+
+
+@pytest.mark.parametrize("how", ["ended", "stop", "session_error", "close", "close_drain_first"])
+def test_collector_is_off_during_a_run_and_on_once_after_it(make_rig, gc_calls, capsys, how):
+    rig = make_rig()
+    made, thread = _start(rig)
+
+    assert gc_calls == [("collect", MAIN), ("disable", MAIN)]  # on the Tk thread, before the worker starts
+    assert thread.collector_on_at_start is False and not gc.isenabled()
+
+    _end_run(rig, made, thread, how)
+
+    assert gc.isenabled() and gc_calls[2:] == [("enable", MAIN)]
+    rig.tab.drainEvents()
+    rig.tab.drainEvents()
+    assert gc_calls[2:] == [("enable", MAIN)]  # exactly once
+    if not how.startswith("close"):
+        _, again = _start(rig)  # a later run turns it off again
+        assert again.collector_on_at_start is False and gc_calls[3:] == [("collect", MAIN), ("disable", MAIN)]
+
+
+def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_calls):
+    rig = make_rig()
+    _, thread = _start(rig)
+    gc_calls.clear()
+
+    for _ in range(9):
+        rig.tab.drainEvents()
+    assert gc_calls == []
+    rig.tab.drainEvents()  # the 10th 100 ms poll
+    assert gc_calls == [("collect", MAIN)]
+    for _ in range(10):
+        rig.tab.drainEvents()
+    assert gc_calls == [("collect", MAIN)] * 2
+
+    thread.finish()
+    for _ in range(20):
+        rig.tab.drainEvents()
+    assert gc_calls == [("collect", MAIN)] * 2 + [("enable", MAIN)]  # no worker: no more collections
+
+
+@pytest.fixture
+def collections():
+    """The name of the thread each garbage collection ran on, automatic or called, during the test."""
+    seen = []
+
+    def record(phase, info):
+        if phase == "start":
+            seen.append(threading.current_thread().name)
+
+    gc.callbacks.append(record)
+    yield seen
+    gc.callbacks.remove(record)
+
+
+def test_no_garbage_collection_runs_on_a_real_worker(make_rig, collections):
+    def churning_session(*args):
+        made = FakeSession(*args)
+
+        def run():
+            for _ in range(200_000):  # reference cycles: with the collector on, ~100 collections on this thread
+                cycle = []
+                cycle.append(cycle)
+            made.on_event(_event("ended", "max_laps/", code=0))
+
+        made.run = run
+        return made
+
+    rig = make_rig(make_session=churning_session, make_thread=threading.Thread)
+    rig.tab.startRun()
+    rig.tab.worker.join(10)
+    assert not rig.tab.worker.is_alive()
+    rig.tab.drainEvents()
+
+    assert "route-run" not in collections and MAIN in collections  # Start's collection ran, on the Tk thread
+    assert rig.tab.worker is None and gc.isenabled()
+
+
+class UnstartableThread(FakeThread):
+    def start(self):
+        raise RuntimeError("can't start new thread")
+
+
+def _no_thread(**options):
+    raise RuntimeError("can't start new thread")
+
+
+@pytest.mark.parametrize("failing", ["make_thread", "start"])
+def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
+    """RT-8a m2: the tab leaves Connecting with the watchdog's text and every control back; the error still reaches
+    Tk's callback handler (the console)."""
+    make_thread = _no_thread if failing == "make_thread" else UnstartableThread
+    rig = make_rig(cls=SpyTab, make_thread=make_thread)
+    tab = rig.tab
+
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        tab.startRun()
+
+    assert tab.worker is None and tab.state == "ended"
+    assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert tab.calls == [("ended", None, "", "ended", CONNECTING)]  # `_onEnded` once, as for the watchdog
+    assert _state(rig.gui.load_map_button) == "normal"
+    assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
+    assert gc.isenabled()
+    assert [name for name, _ in gc_calls] == ([] if failing == "make_thread" else ["collect", "disable", "enable"])
+
+    tab.drainEvents()  # the readiness refresh gives Start back and keeps the Ended text (choice 8)
+    assert _state(tab.start_button) == "normal"
+    assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
 
 
 @pytest.mark.parametrize("replay", [False, True])
@@ -1047,12 +1198,17 @@ def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, cap
 
     _run_close_poll(rig)  # the worker is still in its cleanup
     assert calls == [] and len(_close_polls(rig)) == 1
+    made.on_event(_event("warning", "Recording stopped: x. The walk goes on."))
+    tab.drainEvents()
+    assert tab.status_var.get() == STOPPING  # the close's text stays until the window goes (RT-8a m1)
 
     made.on_event(_event("ended", "cancelled/window_close", code=0))
     thread.finish()
-    if drain_first:  # the drain finds the worker dead before the close poll does, and gives the controls back
+    if drain_first:  # the drain finds the worker dead before the close poll does; nothing comes back (RT-8a m1)
         tab.drainEvents()
-        assert tab.worker is None and _state(tab.start_button) == "normal"
+        assert tab.worker is None and tab.status_var.get() == STOPPING
+        assert _state(rig.gui.load_map_button) == "disabled" and _state(tab.start_button) == "disabled"
+        assert [_state(w) for w in _run_controls(tab)] == ["disabled"] * 6
     tab.startRun()  # no new run while the window waits to close
     assert len(rig.sessions) == 1 and len(rig.threads) == 1
 
@@ -1062,7 +1218,7 @@ def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, cap
     assert capsys.readouterr().out == ""  # no console line: the cleanup finished in time
 
 
-def test_close_destroys_after_10_s(make_rig, capsys):
+def test_close_destroys_after_10_s(make_rig, capsys, gc_calls):
     now = [100.0]
     rig = make_rig(clock=lambda: now[0])
     tab = rig.tab
@@ -1082,6 +1238,7 @@ def test_close_destroys_after_10_s(make_rig, capsys):
     assert destroyed == [1] and _close_polls(rig) == []
     assert capsys.readouterr().out == CLOSE_GAVE_UP + "\n"  # one console line
     assert made.stops == ["window_close"] and thread.is_alive()  # never joined: a daemon, it dies with the process
+    assert not gc.isenabled() and ("enable", MAIN) not in gc_calls  # left off: the process is exiting (RT-8a I1)
 
 
 _MISC_CALLS = ("focus_set", "focus", "focus_force", "tkraise", "lift", "grab_set")
