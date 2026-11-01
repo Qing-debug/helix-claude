@@ -4,7 +4,8 @@
 
 Prints two lines: `MB per hour` (MB = 2**20 bytes) and `GB per hour` (GB = 2**30 bytes). The rate is the folder's total
 bytes, index included, over the span of its `index.jsonl` (last `t_ns` minus first). Exit 0 with the numbers; exit 2
-(message on stderr) when the index is missing, has fewer than two lines, or spans 0 or less.
+(one `error: ...` line on stderr) when the index is missing or cannot be read, has fewer than two lines, has a first or
+last line that is not a record with an integer `t_ns`, or spans 0 or less.
 """
 import argparse
 import json
@@ -51,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         mb, gb = rate(args.frames_dir)
     except (OSError, ValueError) as error:
-        print(f"recording_rate: {error}", file=sys.stderr)
+        print(f"error: {error}", file=sys.stderr)
         return 2
     print(f"MB per hour: {mb:.1f}")
     print(f"GB per hour: {gb:.2f}")

@@ -109,3 +109,12 @@ def test_a_malformed_first_line_exits_2(tmp_path, capsys):
     assert recording_rate.main([str(folder)]) == 2
 
     assert "bad line in index.jsonl" in capsys.readouterr().err
+
+
+def test_errors_use_the_repo_cli_prefix(tmp_path, capsys):
+    folder = tmp_path / "empty"
+    folder.mkdir()
+
+    assert recording_rate.main([str(folder)]) == 2
+
+    assert capsys.readouterr().err.startswith("error: ")  # as record_minimap, walk, sim.run, measure_moves
