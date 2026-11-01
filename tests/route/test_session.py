@@ -4,6 +4,7 @@ Every run here uses the simulator's `SimPositionSource` and `SimLink`, a fake fi
 `SimClock` and a recording `sleep`; the autouse `_no_real_blelink` fails any test that would build a real `BleLink`.
 The small fakes are imported flat from test_walk_cli.py (RTB-PF m8)."""
 
+import inspect
 import shutil
 import subprocess
 import sys
@@ -152,9 +153,12 @@ def env(monkeypatch, tmp_path):
         settings = RunSettings(map_csv=e.map_csv, character="kanna", laps=e.laps, minutes=None,
                                countdown_s=e.countdown_s, seed=1, out=e.out)
         on_event = e.on_event if e.on_event is not None else e.events.append
+        lines = getattr(e, "lines", None)  # a test that sets `env.lines` gets the run's lines there (RT-8c piece 4)
+        logged = {} if lines is None else {"log": lambda text, error: lines.append((text, error))}
         e.session = RunSession(settings, e.shared, on_event=on_event, make_positions=make_positions,
                                wait_first_frame=wait_first_frame, make_link=lambda: e.link, make_clock=e.make_clock,
-                               make_stop=make_stop, start_capture=start_capture, may_walk=e.may_walk, sleep=sleep)
+                               make_stop=make_stop, start_capture=start_capture, may_walk=e.may_walk, sleep=sleep,
+                               **logged)
         return e.session
 
     def run() -> int:
@@ -618,3 +622,37 @@ def test_low_space_in_a_run(env, monkeypatch):
 
 def test_free_bytes_uses_the_nearest_existing_parent(tmp_path):
     assert abs(session.free_bytes(tmp_path / "a" / "b") - shutil.disk_usage(tmp_path).free) < 100 * 2**20
+
+
+# ---- RT-8c piece 4: the run's lines (H71; RDO110-D3 A) -------------------------------------------------------------
+
+
+def test_session_log_default_prints_as_before(capsys):
+    """The CLI passes no `log`: the default prints each line as before, an error line on stderr and the rest on stdout
+    (walk's tests are the oracle for the words)."""
+    assert inspect.signature(RunSession).parameters["log"].default is session._print_line
+    session._print_line("walk failed: x", True)
+    session._print_line("stopped: max_laps", False)
+    assert capsys.readouterr() == ("stopped: max_laps\n", "walk failed: x\n")
+
+
+def test_session_lines_go_to_log(env, tmp_path, capsys):
+    """With `log` given (the Route tab's), each line the run prints goes to it with its error flag and nothing to the
+    terminal: the cancel's `stopped:` line, a failed first frame's `error:` line and the recorder's failure line."""
+    env.lines = []
+    run_session = env.build()
+    run_session.stop("button")
+    assert run_session.run() == 0
+    assert env.lines == [("stopped: cancelled (button)", False)]
+    env.lines = []
+    env.first = Failure("no frame")
+    assert env.run() == 3
+    assert env.lines == [("error: no first frame: no frame", True)]
+    out_dir = tmp_path / "frames_log"
+    out_dir.mkdir()
+    (out_dir / INDEX_NAME).write_text("", encoding="utf-8")  # record refuses to overwrite: a Failure
+    lines: list[tuple[str, bool]] = []
+    session._record_guarded(NewFrames(), out_dir, threading.Event(), lambda event: None,
+                            lambda text, error: lines.append((text, error)))
+    assert len(lines) == 1 and lines[0][0].startswith("record failed: ") and lines[0][1] is True
+    assert capsys.readouterr() == ("", "")

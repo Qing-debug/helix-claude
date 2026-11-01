@@ -28,7 +28,7 @@ from src.route_view.model import FRAME_INDEX, FRAMES_DIR
 from src.route_view.window import RouteViewWindow
 
 SILENT = "no new steps for 10 s: the walk is still running or has crashed"
-HINT = "if the walk has ended or crashed, see the console; the replay opens when it ends"  # plan choice 11
+HINT = "if the walk has ended or crashed, see the console box on the Setup tab"  # plan choice 11, H71
 HEADER = header_line(default_header()).unwrap()
 LINES = event_lines(G)  # 26 lines; the last is `end`
 
@@ -672,3 +672,27 @@ def test_a_live_frame_that_cannot_be_made_into_a_picture_is_reported_the_same_wa
     assert _status(t.window).startswith("follow error: live frame: TypeError: ")
     assert t.window.shown_background != "live" and not t.live.ended
     capsys.readouterr()
+
+
+
+def test_follow_report_seam(tmp_path, roots, monkeypatch, capsys):
+    """RDO110-D3 A: with `report` given (the Route tab's console-box writer) an error goes to it once and to the status
+    line, and nothing is printed; the default prints as before (test_8)."""
+    folder = _live_folder(tmp_path, LINES[:3])
+    root, _after = _recorded_root(roots, monkeypatch, [])
+    window = RouteViewWindow(root, folder, None, live=True)
+    lines = []
+    live = LiveController(root, window, folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD, clock=FakeClock(),
+                          report=lines.append)
+    live.tick()
+    capsys.readouterr()
+
+    def boom(events):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(window.model, "extend", boom)
+    for line in LINES[3:5]:
+        _append(folder / STEPS_FILE, line)
+        live.tick()
+    assert lines == ["follow error: RuntimeError: x"] and _status(window) == "follow error: RuntimeError: x"
+    assert capsys.readouterr() == ("", "")

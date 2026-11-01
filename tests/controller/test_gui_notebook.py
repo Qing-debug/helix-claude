@@ -167,7 +167,7 @@ def test_run_lock_disables_exactly_these(make_gui):
     assert str(gui.gui_console.cget("state")) == "normal"  # a disabled Text drops _printToGUIConsole's inserts
     gui._printToGUIConsole("still printing")
     assert "still printing" in _console(gui)
-    assert gui.notebook.tab(gui.setup_tab, "state") == "normal"  # (waits for Hong: RTF98-1-D1) the plan's default, answer A: the header stays selectable
+    assert gui.notebook.tab(gui.setup_tab, "state") == "normal"  # H74 (Hong's answer A to RTF98-1-D1): the header stays selectable
 
     gui.setRunLocked(False)
 

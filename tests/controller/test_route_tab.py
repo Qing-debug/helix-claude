@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from PIL import Image
 from returns.result import Failure
@@ -151,12 +152,20 @@ def test_ended_texts_never_name_the_folder(code, text, folder):
 
 
 def test_ended_text_unexpected_stop(folder, tmp_path):
+    """Spec 5.5 (H71): the details are in the app's console box, and the text names it so."""
     error = "the run stopped unexpectedly: RuntimeError: x"
-    assert (endedText(None, error, folder)
-            == f"Ended: the run stopped unexpectedly: RuntimeError: x. See the console and {folder.name}.")
+    alone = "Ended: the run stopped unexpectedly: RuntimeError: x. See the console box on the Setup tab."
+    assert endedText(None, error, folder) == ("Ended: the run stopped unexpectedly: RuntimeError: x. See the console box "
+                                              f"on the Setup tab and {folder.name}.")
     gone = tmp_path / "never_made"  # an exception before the leg log leaves no folder
-    assert endedText(None, error, gone) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
-    assert endedText(None, error, None) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
+    assert endedText(None, error, gone) == alone
+    assert endedText(None, error, None) == alone
+
+
+@pytest.mark.parametrize("code", [6, 7])
+def test_ended_text_walker_failed_without_a_folder(code):
+    """Spec 5.5 (H71): codes 6 and 7 with no run folder point at the console box."""
+    assert endedText(code, "error/", None) == "Ended: the walker failed; see the console box on the Setup tab."
 
 
 def test_countdown_text():
@@ -183,6 +192,9 @@ RUN_FOLDER_EXISTS = "A run folder for this second already exists. Press Start ag
 DRIVE_TEXT = (f"Less than {START_FREE_BYTES / 2**30:g} GB free on {{drive}}. "
               "Delete old runs in data/route, then press Start.")
 HEAD = "0123abc"
+# spec 5.5's watchdog texts (H71): the console box, and the run folder when it exists
+UNEXPECTED = "Ended: the run stopped unexpectedly; see the console box on the Setup tab."
+UNEXPECTED_AND = "Ended: the run stopped unexpectedly; see the console box on the Setup tab and {}."
 
 
 class UnkeyedClass(Kanna):
@@ -194,11 +206,11 @@ def _boom(*args):
 
 
 class FakeSession:
-    """What the fake `make_session` builds: the factory's four arguments; `run()` posts `script` through `on_event`,
-    then raises `raises` when set; `stop(source)` only records."""
+    """What the fake `make_session` builds: the factory's five arguments (`log` is the tab's line logger, RT-8c piece
+    4); `run()` posts `script` through `on_event`, then raises `raises` when set; `stop(source)` only records."""
 
-    def __init__(self, settings, shared, on_event, may_walk):
-        self.settings, self.shared, self.on_event, self.may_walk = settings, shared, on_event, may_walk
+    def __init__(self, settings, shared, on_event, may_walk, log):
+        self.settings, self.shared, self.on_event, self.may_walk, self.log = settings, shared, on_event, may_walk, log
         self.script, self.raises, self.stops = [], None, []
 
     def run(self):
@@ -246,8 +258,8 @@ def make_rig(make_gui, monkeypatch, tmp_path):
         run_root = tmp_path / "route"
         sessions, threads = [], []
 
-        def fake_session(settings, shared, on_event, may_walk):
-            made = FakeSession(settings, shared, on_event, may_walk)
+        def fake_session(settings, shared, on_event, may_walk, log):
+            made = FakeSession(settings, shared, on_event, may_walk, log)
             sessions.append(made)
             return made
 
@@ -841,9 +853,9 @@ def test_worker_that_ends_without_ended(make_rig, folder_made):
     tab.drainEvents()
 
     if folder_made:
-        assert tab.status_var.get() == f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
+        assert tab.status_var.get() == UNEXPECTED_AND.format(rig.out.name)
     else:
-        assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+        assert tab.status_var.get() == UNEXPECTED
     assert tab.state == "ended" and tab.worker is None
     assert (_state(tab.start_button), _state(tab.stop_button)) == ("normal", "disabled")
     assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6
@@ -869,6 +881,8 @@ def test_worker_that_ends_without_ended_race_order(make_rig):
 
 
 def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, capsys):
+    """An exception that escapes `run()` is caught on the worker (never `threading.excepthook`) and its traceback goes
+    to the app's console box through the tab's line queue, not to the terminal (H71)."""
     hooked = []
     monkeypatch.setattr(threading, "excepthook", hooked.append)
 
@@ -884,15 +898,55 @@ def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, c
     worker.join(10)
     assert not worker.is_alive()
 
-    err = capsys.readouterr().err
-    assert "Traceback" in err and "RuntimeError: boom in run" in err
+    assert capsys.readouterr().err == ""  # nothing on the terminal (H71)
     assert hooked == []
+    assert "boom in run" not in _console(rig.gui)  # the worker never touches Tk: the traceback waits for the drain
 
     rig.tab.drainEvents()
 
+    console = _console(rig.gui)
+    assert "Traceback (most recent call last)" in console and "in raising_session" not in console
+    assert console.endswith("RuntimeError: boom in run\n\n") and not console.endswith("\n\n\n")  # one line end
     assert rig.tab.state == "ended" and rig.tab.worker is None
-    assert rig.tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert rig.tab.status_var.get() == UNEXPECTED
     assert (_state(rig.tab.start_button), _state(rig.tab.stop_button)) == ("normal", "disabled")
+
+
+class ConsoleSpyTab(RouteTab):
+    """Records each console-box line (`_toConsole`) and each run event shown, in the order they happen."""
+
+    def __init__(self, *args, **kwargs):
+        self.order = []
+        super().__init__(*args, **kwargs)
+
+    def _toConsole(self, text, error):
+        self.order.append(("console", text, error))
+        super()._toConsole(text, error)
+
+    def _showEvent(self, event):
+        self.order.append(("event", event.kind))
+        super()._showEvent(event)
+
+
+def test_run_lines_reach_the_console_box(make_rig):
+    """H71, RDO110-D3 A: the session's lines (its `log`, called on the worker or another run thread) wait on the tab's
+    line queue, and the drain writes them into the console box in order, before the run events it drains."""
+    rig = make_rig(cls=ConsoleSpyTab)
+    tab = rig.tab
+    made, _thread = _start(rig)
+    made.on_event(_event("ended", "error/", code=6))
+    poster = threading.Thread(target=lambda: (made.log("walk failed: boom", True), made.log("stopped: error", False)))
+    poster.start()
+    poster.join()
+    before = _console(rig.gui)
+    assert "walk failed" not in before  # nothing touches Tk off its thread
+
+    tab.order.clear()
+    tab.drainEvents()
+
+    assert tab.order == [("console", "walk failed: boom", True), ("console", "stopped: error", False),
+                         ("event", "ended")]
+    assert _console(rig.gui) == before.removesuffix("\n") + "walk failed: boom\nstopped: error\n\n"
 
 
 # Garbage collection during a run (RT-8a I1, ruling RT-8a-review-D1 A): a collection on the worker that frees a Tk
@@ -1018,7 +1072,7 @@ def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
         tab.startRun()
 
     assert tab.worker is None and tab.state == "ended"
-    assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert tab.status_var.get() == UNEXPECTED
     assert tab.calls == [("ended", None, "", "ended", CONNECTING)]  # `_onEnded` once, as for the watchdog
     assert _state(rig.gui.load_map_button) == "normal"
     assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6 and _state(tab.stop_button) == "disabled"
@@ -1029,7 +1083,7 @@ def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
 
     tab.drainEvents()  # the readiness refresh gives Start back and keeps the Ended text (choice 8)
     assert _state(tab.start_button) == "normal"
-    assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert tab.status_var.get() == UNEXPECTED
 
 
 class EndRaisesTab(SpyTab):
@@ -1090,7 +1144,7 @@ def test_hooks_watchdog_end_calls_on_ended_once(make_rig):
     tab.drainEvents()
 
     assert tab.calls == [("ended", None, "", "ended", STOPPING_CONNECT)]  # before the watchdog's text
-    assert tab.status_var.get() == f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
+    assert tab.status_var.get() == UNEXPECTED_AND.format(rig.out.name)
 
 
 def test_drain_reschedules_when_its_body_raises(make_rig, monkeypatch):
@@ -1135,6 +1189,7 @@ def test_default_session_builds_the_run_from_the_tabs_settings(make_rig):
                                          seed=None, out=rig.out)
     assert made._shared is rig.gui.sharedInfo
     assert made._on_event == tab._events.put and made._may_walk == tab._mayWalk
+    assert made._log == tab._postLine  # RDO110-D3 A: the run's lines go to the tab's line queue
     assert made._sigint is False  # no SIGINT handler in the app (spec 5.6)
     defaults = inspect.signature(RunSession).parameters  # and nothing else: the session's own defaults
     for name in ("make_positions", "wait_first_frame", "make_link", "make_clock", "make_stop", "start_capture", "sleep"):
@@ -1440,7 +1495,7 @@ def _one_view(tab):
 class FakeMinimap:
     """The fake `make_minimap`'s product: a real, empty Canvas in the parent; `draw()` only counts."""
 
-    def __init__(self, parent, gui):
+    def __init__(self, parent, gui, report=None):
         self.canvas = tk.Canvas(parent)
         self.draws = 0
 
@@ -1760,3 +1815,35 @@ def test_the_kept_views_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cycl
     _post(rig, made, _event("running", "Running."))
     _finish(rig, made, thread)
     assert freed == [MAIN] and name not in tab.view_frame.tk.splitlist(tab.view_frame.tk.call("image", "names"))
+
+
+# ---- RT-8c piece 4: the live view's and the idle minimap's lines in the console box (H71; RDO110-D3 A) ------------
+
+
+def test_live_view_lines_reach_the_console_box(make_rig, tmp_path):
+    """The live view's `report` (its "follow error: ..." lines) is the tab's console-box writer with the error flag; it
+    runs on the Tk thread, so it writes at once."""
+    rig = _hosting_rig(make_rig, tmp_path, cls=ConsoleSpyTab)
+    tab = rig.tab
+    made, thread = _start(rig)
+    _write_run(rig.outs[-1], G)
+    _post(rig, made, _event("running", "Running."))
+    tab.order.clear()
+    rig.live_kwargs[0]["report"]("follow error: RuntimeError: x")
+    assert tab.order == [("console", "follow error: RuntimeError: x", True)]
+    assert "follow error: RuntimeError: x\n" in _console(rig.gui)
+    _finish(rig, made, thread)
+
+
+def test_a_minimap_error_is_one_console_line(make_rig):
+    """RDO110-2 [review]: `LiveMinimap.draw()` never raises; its error goes to the console box once through the tab's
+    writer (the same error on the next drain is not written again)."""
+    rig = make_rig(cls=ConsoleSpyTab)
+    tab = rig.tab
+    _route_tab_in_front(rig)
+    rig.shared.minimap_frame = np.zeros((2, 2, 2, 2), dtype=np.uint8)  # Image.fromarray cannot read it
+    tab.order.clear()
+    tab.drainEvents()
+    tab.drainEvents()
+    lines = [entry for entry in tab.order if entry[0] == "console"]
+    assert len(lines) == 1 and lines[0][1].startswith("live minimap error: ") and lines[0][2] is True

@@ -7,7 +7,9 @@ rules the tab shows (settings checks, the class key, the end-of-run texts, the c
 event queue with the dead-worker watchdog, Stop, the close handler that waits for a live run's cleanup (RT-8a), the
 hosted route view: the run's live view (RT-8b), kept in place and frozen at the end with a "Back to live minimap" button
 (no replay opens, H68, H69, RT-8c), and the idle live minimap shown when no view is (`src/gui/live_minimap.py`, RT-8c,
-H70). The app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
+H70). Every line a run in the app prints (the worker's traceback, the session's lines, the live view's and the idle
+minimap's errors) goes to the Setup tab's console box, not the terminal, through `_toConsole` (H71; RDO110-D3 A). The
+app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
 """
 import gc
 import math
@@ -70,6 +72,7 @@ _CODE_TEXTS = {  # the walk's exit codes (walk.py:6-9); 6 and 7 name the run fol
     10: "Ended: the character was lost (exit 10).",
 }
 _WALKER_FAILED_CODES = (6, 7)
+_CONSOLE_BOX = "the console box on the Setup tab"  # where the details are (H71: not the terminal)
 
 
 def _wholeNumber(text: str) -> int | None:
@@ -124,11 +127,11 @@ def endedText(code: int | None, text: str, folder: Path | None) -> str:
     folder exists); every other text stands alone, with no folder name (ruling orch 110)."""
     if code is None:
         if folder is not None and folder.exists():
-            return f"Ended: {text}. See the console and {folder.name}."
-        return f"Ended: {text}. See the console."
+            return f"Ended: {text}. See {_CONSOLE_BOX} and {folder.name}."
+        return f"Ended: {text}. See {_CONSOLE_BOX}."
     if code in _WALKER_FAILED_CODES:
         if folder is None:
-            return "Ended: the walker failed; see the console."
+            return f"Ended: the walker failed; see {_CONSOLE_BOX}."
         return f"Ended: the walker failed; see {folder.name}."
     if code in _CODE_TEXTS:
         return _CODE_TEXTS[code]
@@ -148,8 +151,8 @@ def _unexpectedEndText(folder: Path | None) -> str:
     """Spec 5.5's watchdog text, for a worker that ended with no `ended` event: "and <run folder>" only when the
     folder exists."""
     if folder is not None and folder.exists():
-        return f"Ended: the run stopped unexpectedly; see the console and {folder.name}."
-    return "Ended: the run stopped unexpectedly; see the console."
+        return f"Ended: the run stopped unexpectedly; see {_CONSOLE_BOX} and {folder.name}."
+    return f"Ended: the run stopped unexpectedly; see {_CONSOLE_BOX}."
 
 
 def countdownText(first: int, left: int) -> str:
@@ -198,13 +201,15 @@ _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "s
 _IDLE_STATES: tuple[RouteState, ...] = ("not_ready", "ready", "ended")  # the readiness line is kept up to date here
 _STOPPABLE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running")
 
-SessionFactory = Callable[[RunSettings, FrameHolder, Callable[[RunEvent], None], Callable[[], bool]], RunSession]
+RunLog = Callable[[str, bool], None]  # one line a run prints and its error flag (H71; RDO110-D3 A)
+SessionFactory = Callable[[RunSettings, FrameHolder, Callable[[RunEvent], None], Callable[[], bool], RunLog], RunSession]
 
 
 def defaultSession(settings: RunSettings, shared: FrameHolder, on_event: Callable[[RunEvent], None],
-                   may_walk: Callable[[], bool]) -> RunSession:
-    """The run's session as the app builds it (spec 5.6): its own defaults for everything else, no SIGINT handler."""
-    return RunSession(settings, shared, on_event=on_event, may_walk=may_walk, sigint=False)
+                   may_walk: Callable[[], bool], log: RunLog) -> RunSession:
+    """The run's session as the app builds it (spec 5.6): its own defaults for everything else, no SIGINT handler, and
+    its lines to `log` (the tab's line queue, so they reach the console box; H71, RDO110-D3 A)."""
+    return RunSession(settings, shared, on_event=on_event, may_walk=may_walk, sigint=False, log=log)
 
 
 def _free_space_text(run_root: Path) -> str:
@@ -265,6 +270,9 @@ class RouteTab:
         self._frame_checks = frame_checks
         self._head: str | None = None  # git's HEAD, read once by startPolling and handed to every live view and replay
         self._events: queue.Queue[RunEvent] = queue.Queue()  # the session's on_event (the worker's put), drained here
+        # Lines for the console box from other threads (the worker's traceback, the session's `log`), drained here
+        # before the events (spec 5.5 "Where the details go", H71)
+        self._lines: queue.SimpleQueue[tuple[str, bool]] = queue.SimpleQueue()
         self._out: Path | None = None  # the run folder of the run in progress or last ended
         self._ended_seen = False  # this run's `ended` event has been drained (the watchdog's test)
         self._countdown_first: int | None = None  # this run's first countdown count (plan choice 4)
@@ -346,7 +354,7 @@ class RouteTab:
 
         self.view_frame = tk.Frame(parent)
         self.view_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.live_minimap = self._make_minimap(self.view_frame, self._gui)
+        self.live_minimap = self._make_minimap(self.view_frame, self._gui, report=self._errorToConsole)
         self._back_frame = tk.Frame(parent)  # packed only while shown, so the view area loses no height otherwise
         self.back_button = tk.Button(self._back_frame, text=BACK_TEXT, command=self.backToLive)
         self.back_button.pack(side=tk.LEFT)
@@ -408,7 +416,8 @@ class RouteTab:
         self._gui.gui.after(POLL_MS, self.drainEvents)
 
     def drainEvents(self) -> None:
-        """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued events, then the watchdog, then the
+        """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued console lines (`_drainLines`), its queued
+        events, then the watchdog, then the
         readiness refresh (only with no worker, no close waiting and an idle state), then one redraw of the idle live
         minimap while it is shown and the Route tab is in front (spec 5.2). It reschedules itself in a `finally`, so a
         step that raises does not end the loop.
@@ -419,10 +428,12 @@ class RouteTab:
         an `ended` event or not, except while the window waits to close: then nothing comes back (RT-8a m1). While the
         worker lives, every `GC_EVERY_POLLS`-th step collects garbage here, on the Tk thread (RT-8a I1)."""
         try:
+            self._drainLines()
             self._drainQueue()
             worker = self.worker
             if worker is not None and not worker.is_alive():
                 try:
+                    self._drainLines()
                     self._drainQueue()
                     if not self._ended_seen:
                         self._endWithoutEnded()
@@ -467,6 +478,31 @@ class RouteTab:
         if self._closing is None:
             self.status_var.set(text)
 
+    def _toConsole(self, text: str, error: bool) -> None:
+        """The tab's one writer of the app's console box (spec 5.5 "Where the details go", H71), on the Tk thread:
+        `text` without its trailing newlines, as one entry of the Setup tab's console. `error` marks an error line,
+        where a colour goes later (Hong's note to H71); there are no colours yet, so it changes nothing now."""
+        del error  # no colours yet (H71)
+        self._gui._printToGUIConsole(text.rstrip("\n"))
+
+    def _errorToConsole(self, text: str) -> None:
+        """An error line from the Tk thread (the live view's `report`, the idle minimap's) into the console box."""
+        self._toConsole(text, True)
+
+    def _postLine(self, text: str, error: bool) -> None:
+        """The session's `log`, from any thread: the line waits on the tab's queue for the drain (the worker never
+        touches Tk)."""
+        self._lines.put((text, error))
+
+    def _drainLines(self) -> None:
+        """Write every queued console line into the box, in order."""
+        while True:
+            try:
+                text, error = self._lines.get_nowait()
+            except queue.Empty:
+                return
+            self._toConsole(text, error)
+
     def _drainQueue(self) -> None:
         """Show every event queued so far, in order."""
         while True:
@@ -510,7 +546,8 @@ class RouteTab:
         """Called once per drained `running`, after the state and the status line are set: the run's live view (spec
         5.2 Hosting, 5.8). Any view shown so far goes first, its controller stopped, and the idle live minimap Start
         showed is hidden (waits for Hong: RDO110-D1; answer A is built); then a new view is built in `view_frame` on
-        the run folder, with a `LiveController` whose first poll runs now and which then polls every 100 ms. Built
+        the run folder, with a `LiveController` whose first poll runs now and which then polls every 100 ms (its error
+        lines go to the console box). Built
         here and not at the countdown: the steps start now, and a view built earlier would say it has had no step for
         10 s during a countdown of up to 60 s."""
         out = self._out
@@ -521,7 +558,7 @@ class RouteTab:
         view = self._make_view(self.view_frame, out, None, live=True)
         self.view = view
         live = self._make_live(self._gui.gui, view, out, repo_root=_REPO, current_git_head=self._head,
-                               live_frame=self._liveFrame)
+                               live_frame=self._liveFrame, report=self._errorToConsole)
         self.live = live
         live.tick()
 
@@ -681,7 +718,7 @@ class RouteTab:
         run = self._make_session(
             RunSettings(map_csv=csv, character=key, laps=laps, minutes=minutes, countdown_s=countdown, seed=None,
                         out=out),
-            shared, self._events.put, self._mayWalk)
+            shared, self._events.put, self._mayWalk, self._postLine)
         self.session = run
         self._out = out
         self._ended_seen = False
@@ -707,12 +744,13 @@ class RouteTab:
 
     def _work(self, run: RunSession) -> None:
         """The worker thread's body (spec 5.7): the walk and nothing that touches Tk; its events reach the tab through
-        the queue. `run()` turns an exception into its own `ended` event (5.6); one that still escapes is printed here,
-        so it never reaches `threading.excepthook`, and the drain's watchdog ends the run on the tab."""
+        the queue. `run()` turns an exception into its own `ended` event (5.6); one that still escapes is caught here, so
+        it never reaches `threading.excepthook`: its traceback goes on the line queue for the console box, not to the
+        terminal (H71), and the drain's watchdog ends the run on the tab."""
         try:
             run.run()
         except BaseException:
-            traceback.print_exc()
+            self._postLine(traceback.format_exc(), True)
 
     def stopRun(self) -> None:
         """The Stop button (spec 5.5): `session.stop("button")`, which returns at once, then Stopping with nothing

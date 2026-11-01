@@ -133,6 +133,24 @@ def test_minimap_miss_writes_no_console_line(make_minimap, capsys, frame):
     assert _console(gui) == console and capsys.readouterr() == ("", "")
 
 
+def test_minimap_draw_error_is_reported_once(make_minimap, capsys):
+    """RDO110-2 [review], H71: with `report` (the Route tab passes its console-box writer) a draw error is passed to it
+    once; the same error again is not, a different one is. Nothing is printed."""
+    gui, shared, minimap = make_minimap(_with_icons(ICON_AT))
+    lines = []
+    reporting = LiveMinimap(minimap.canvas.master, gui, report=lines.append)
+    good = shared.minimap_frame
+    shared.minimap_frame = np.zeros((2, 2, 2, 2), dtype=np.uint8)  # Image.fromarray cannot read it
+    reporting.draw()
+    reporting.draw()
+    assert len(lines) == 1 and lines[0].startswith("live minimap error: ")
+    shared.minimap_frame = good
+    reporting.canvas.destroy()
+    reporting.draw()
+    assert len(lines) == 2 and lines[1].startswith("live minimap error: TclError: ")
+    assert capsys.readouterr() == ("", "")
+
+
 def test_minimap_draw_never_raises(make_minimap, capsys):
     gui, shared, minimap = make_minimap(_with_icons(ICON_AT))
     minimap.draw()

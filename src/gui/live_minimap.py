@@ -5,9 +5,13 @@ Shown in the tab's view area whenever no run view and no replay is: the shared m
 loaded map's nodes in the view's look and the character where route's `CharacterLocator` finds it. It is not a
 `RouteViewWindow`, which is built for one run folder: it is one Canvas, built once with the tab, packed and hidden by
 the tab (`RouteTab._showMinimap`, `_hideMinimap`). The tab calls `draw()` from its 100 ms drain, on the Tk thread, only
-while the canvas is packed and the Route tab is in front. Nothing here prints, so a miss writes no console line.
+while the canvas is packed and the Route tab is in front. Nothing here prints, so a miss writes no console line; a
+draw error is passed to `report` (the tab's console-box writer, H71; RDO110-2 [review]) once: a repeat of the last error
+is not passed again, since the drain draws ten times a second.
 """
+import contextlib
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import font as tkfont
 from typing import TYPE_CHECKING, NamedTuple
@@ -54,12 +58,15 @@ def _readMarks(csv: Path | None) -> tuple[_Mark, ...]:
 
 
 class LiveMinimap:
-    """C7: `canvas` is built in `parent` and not packed; `draw()` is one redraw and never raises."""
+    """C7: `canvas` is built in `parent` and not packed; `draw()` is one redraw and never raises. `report` (RT-8c
+    piece 4) takes a draw error's line; None (the default) drops it."""
 
     canvas: tk.Canvas
 
-    def __init__(self, parent: tk.Misc, gui: "MapleGUI") -> None:
+    def __init__(self, parent: tk.Misc, gui: "MapleGUI", *, report: Callable[[str], None] | None = None) -> None:
         self._parent = parent
+        self._report = report
+        self._reported: str | None = None  # the last error line passed to `report`
         self._gui = gui
         self.canvas = tk.Canvas(parent, width=NOT_FOUND_PX[0], height=NOT_FOUND_PX[1], bg=DARK, highlightthickness=0,
                                 bd=0)
@@ -73,11 +80,16 @@ class LiveMinimap:
 
     def draw(self) -> None:
         """One redraw: the frame, the nodes, the character; the dark canvas with `NOT_FOUND_TEXT` before the first
-        frame. An error leaves the canvas as last drawn (the 100 ms drain must go on; nothing is printed)."""
+        frame. An error leaves the canvas as last drawn (the 100 ms drain must go on; nothing is printed) and its line
+        goes to `report`, unless it repeats the last one; an error in `report` itself is dropped too."""
         try:
             self._draw()
-        except Exception:
-            pass
+        except Exception as err:
+            text = f"live minimap error: {type(err).__name__}: {err}"
+            if self._report is not None and text != self._reported:
+                self._reported = text
+                with contextlib.suppress(Exception):
+                    self._report(text)
 
     def _draw(self) -> None:
         shared = self._gui.sharedInfo

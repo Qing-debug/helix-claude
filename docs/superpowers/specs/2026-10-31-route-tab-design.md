@@ -289,7 +289,8 @@ and the controls come back as for any end.
 Where the details go (H71): error details go to the app's console box (the Setup tab's `gui_console`, written by
 `MapleGUI._printToGUIConsole`, `gui.py:455-461`), not the terminal. That is the traceback of an exception that leaves
 `run()` (the worker's wrapper, 5.6) and (waits for Hong: RDO110-D3) every line a run in the app prints: the run
-driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>") and the live view's ("follow error: ...").
+driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>"), the live view's ("follow error: ...")
+and the idle live minimap's draw error ("live minimap error: ...", not again while it repeats).
 `RunSession` and `LiveController` each gain a keyword seam for their lines (`log`, `report`) whose default prints as
 today, so the CLI walk is unchanged. The worker never touches Tk: it puts each line on a queue of the tab's own, which
 the 100 ms drain writes into the box before the run events. One method of the tab writes every line, with a flag for

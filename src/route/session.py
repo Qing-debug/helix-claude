@@ -30,6 +30,11 @@ Where the plan is silent:
 - A step-1 failure prints one line (`step log unavailable: ...; walking without the route view`) and walks on with
   no step log; the files that did write stay (RV3-D2 A, A1).
 - In the step log's `end` line, `code` is null when an exception leaves `run()`.
+
+Every line the session prints goes through its `log` keyword (route tab H71, RDO110-D3 A): the default,
+`_print_line`, prints it as walk always has (an error line on stderr, the rest on stdout), so the CLI is unchanged; the
+Route tab passes its own, which queues the line for the app's console box. Lines printed below the session (runtime's
+`run_cleanup` and stop control, the walker, the step log) are not this seam's and still print.
 """
 
 import contextlib
@@ -147,12 +152,18 @@ def drive_name(path: Path) -> str:
     return path.resolve().anchor.rstrip("\\/")
 
 
+def _print_line(text: str, error: bool) -> None:
+    """`RunSession`'s default `log`: one line, on stderr when `error`, else on stdout (walk's output as before)."""
+    print(text, file=sys.stderr if error else sys.stdout)
+
+
 class _LostLegSink:
     """Passes every record to `inner`. A leg that timed out with no move ends the run (B19-D1): after the record is
     written it triggers the stop control with `off_graph` or `no_position` and calls `walker.stop_now()` itself."""
 
-    def __init__(self, inner: LegSink) -> None:
+    def __init__(self, inner: LegSink, log: Callable[[str, bool], None] = _print_line) -> None:
         self._inner = inner
+        self._log = log
         self._trigger: Callable[[str], None] | None = None
         self._stop_now: Callable[[], None] | None = None
 
@@ -165,8 +176,8 @@ class _LostLegSink:
         written = self._inner.write_leg(rec)
         if rec.outcome == LegOutcome.TIMED_OUT and not rec.moves:
             source = "off_graph" if rec.off_graph else "no_position"
-            print(f"character lost: a leg timed out after {LEG_TIMEOUT_S:g} s with no move ({source}); "
-                  "ending the run", file=sys.stderr)
+            self._log(f"character lost: a leg timed out after {LEG_TIMEOUT_S:g} s with no move ({source}); "
+                      "ending the run", True)
             if self._trigger is not None:
                 self._trigger(source)
             if self._stop_now is not None:
@@ -247,12 +258,12 @@ def _write_run_files(out: Path, map_path: Path, frame: np.ndarray | None, step_l
 
 
 def _record_guarded(shared: FrameHolder, out_dir: Path, stop: threading.Event,
-                    on_event: Callable[[RunEvent], None]) -> None:
+                    on_event: Callable[[RunEvent], None], log: Callable[[str, bool], None] = _print_line) -> None:
     """The recorder thread's target (spec 5.6, H62): `record` the shared frames into `out_dir` until `stop` is set.
     An exception or a `Failure` from `record` ends the recording with one `warning` event, and so does free space
     below `RECORD_FLOOR_BYTES` on the run folder's drive, checked every `DISK_CHECK_FRAMES` polls: that check sets
     `stop`, so `record` saves that poll's frame and returns. The walk goes on. `record` is not edited; the constants
-    and `free_bytes` are read from this module when called (the tests patch them)."""
+    and `free_bytes` are read from this module when called (the tests patch them). Its one line goes to `log`."""
     read = shared_frames(shared)
     polls = 0
     low_on: str | None = None  # the drive, once its free space fell below the floor
@@ -269,14 +280,14 @@ def _record_guarded(shared: FrameHolder, out_dir: Path, stop: threading.Event,
         recorded = record(frames, out_dir, None, RECORD_FPS, stop=stop)
     except Exception as exc:  # e.g. OSError from index.write on a full disk (record_minimap.py:99-100)
         reason = f"{type(exc).__name__}: {exc}"
-        print(f"record failed: {reason}", file=sys.stderr)
+        log(f"record failed: {reason}", True)
     else:
         if not is_successful(recorded):
             reason = str(recorded.failure())
-            print(f"record failed: {reason}", file=sys.stderr)
+            log(f"record failed: {reason}", True)
         elif low_on is not None:
             reason = f"less than {RECORD_FLOOR_BYTES / 2**30:g} GB free on {low_on}"
-            print(f"record stopped: {reason}", file=sys.stderr)
+            log(f"record stopped: {reason}", True)
         else:
             return
     on_event(RunEvent("warning", f"Recording stopped: {reason}. The walk goes on."))
@@ -293,7 +304,8 @@ class RunSession:
                  make_stop: Callable[[Callable[[], None]], runtime.StopControl] = runtime.StopControl,
                  start_capture: Callable[[FrameHolder], object] | None = None,
                  may_walk: Callable[[], bool] | None = None,
-                 sleep: Callable[[float], None] = time.sleep, sigint: bool = False) -> None:
+                 sleep: Callable[[float], None] = time.sleep, sigint: bool = False,
+                 log: Callable[[str, bool], None] = _print_line) -> None:
         self._settings = settings
         self._shared = shared
         self._on_event = on_event
@@ -306,6 +318,7 @@ class RunSession:
         self._may_walk = may_walk
         self._sleep = sleep
         self._sigint = sigint
+        self._log = log  # every line the run prints, with its error flag (route tab H71, RDO110-D3 A)
         # Spec 5.6: one lock for the cancel flag (its stamp and source), the "started" bit and the hand-over of the
         # walker to `_on_stop`. Reentrant: `run()` triggers the stop control under it, and a stop control whose
         # `trigger` calls `on_stop` on the caller's thread (the tests' fake) then re-enters it from `_on_stop`.
@@ -404,14 +417,14 @@ class RunSession:
             character = CLASSES[s.character]()
             route = _load_route(s.map_csv, character)
             if not is_successful(route):
-                print(f"error: {route.failure()}", file=sys.stderr)
+                self._log(f"error: {route.failure()}", True)
                 return 5
             rg, rotation = route.unwrap()
             seed = s.seed if s.seed is not None else secrets.randbits(64)
             rng_timing, rng_planner = (np.random.default_rng(x) for x in np.random.SeedSequence(seed).spawn(2))
             positions = self._make_positions(shared)
             if isinstance(positions, Failure):
-                print(f"error: {positions.failure()}", file=sys.stderr)
+                self._log(f"error: {positions.failure()}", True)
                 return 5
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
@@ -421,7 +434,7 @@ class RunSession:
                 self._start_capture(shared)
             first = self._wait_first_frame(shared, FIRST_FRAME_S)
             if not is_successful(first):
-                print(f"error: no first frame: {first.failure()}", file=sys.stderr)
+                self._log(f"error: no first frame: {first.failure()}", True)
                 return 3
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
@@ -429,7 +442,7 @@ class RunSession:
             first_frame = shared_frames(shared)()  # the frame just waited for, held for minimap.png (spec 5.2)
             found = positions.read()
             if not is_successful(found):
-                print(f"error: character not found on the minimap: {found.failure()}", file=sys.stderr)
+                self._log(f"error: character not found on the minimap: {found.failure()}", True)
                 return 3
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
@@ -439,7 +452,7 @@ class RunSession:
             link = self._make_link()
             connect = link.connect()  # not interrupted: a stop() meanwhile takes effect when it returns
             if not is_successful(connect):
-                print(f"error: connect failed: {connect.failure()}", file=sys.stderr)
+                self._log(f"error: connect failed: {connect.failure()}", True)
                 return 4
             connected = True
             layer = InputLayer(link, TimingModel(rng_timing))
@@ -448,13 +461,13 @@ class RunSession:
                 return 0
             opened = JsonlLegLog.open(out)
             if not is_successful(opened):
-                print(f"error: {opened.failure()}", file=sys.stderr)
+                self._log(f"error: {opened.failure()}", True)
                 return 2
             log = opened.unwrap()
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
                 return 0
-            sink = _LostLegSink(log)
+            sink = _LostLegSink(log, self._log)
             config = WalkerConfig(use_stimulus=True, leg_timeout_s=LEG_TIMEOUT_S, max_laps=s.laps)
             clock = self._make_clock()
             step_log = StepLog()  # no I/O; every walk passes it (V7 step 3)
@@ -467,7 +480,7 @@ class RunSession:
             stop_started = True
             started = stop.start(sigint=self._sigint)
             if not is_successful(started):
-                print(f"stop control failed: {started.failure()}", file=sys.stderr)
+                self._log(f"stop control failed: {started.failure()}", True)
                 return 9
             with self._stop_lock:  # the "started" bit; a stop() after the last flag check reaches the countdown
                 self._control = stop
@@ -484,7 +497,7 @@ class RunSession:
             if is_successful(wrote):
                 run_log = (step_log, clock)
             else:  # RV3-D2 A with A1: no step log; the exit code does not change
-                print(f"step log unavailable: {wrote.failure()}; walking without the route view", file=sys.stderr)
+                self._log(f"step log unavailable: {wrote.failure()}; walking without the route view", True)
                 step_log.close()  # at once: from here every observer call is dropped (V3, A2)
             _write_json(out / _SESSION, {
                 "seed": seed,
@@ -499,7 +512,7 @@ class RunSession:
                 "minutes": s.minutes,
                 "record": True,
             })
-            print(f"Focus the game window. Starting in {s.countdown_s:g} s. F12 stops.")
+            self._log(f"Focus the game window. Starting in {s.countdown_s:g} s. F12 stops.", False)
             remaining = s.countdown_s
             for left in range(math.ceil(s.countdown_s), 0, -1):
                 self._on_event(RunEvent("countdown", f"Starting in {left} s", seconds_left=left))
@@ -518,7 +531,7 @@ class RunSession:
 
             rec_stop = threading.Event()
             rec_thread = threading.Thread(target=_record_guarded,
-                                          args=(shared, out / _FRAMES, rec_stop, self._on_event),
+                                          args=(shared, out / _FRAMES, rec_stop, self._on_event, self._log),
                                           name="record", daemon=True)
             rec_thread.start()
             if s.minutes is not None:
@@ -535,14 +548,14 @@ class RunSession:
                 ran = walker.run()
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-                print(f"walk crashed: {error}", file=sys.stderr)
+                self._log(f"walk crashed: {error}", True)
                 code = 7
             else:
                 if is_successful(ran):
                     summary = ran.unwrap()
                 else:
                     error = str(ran.failure())
-                    print(f"walk failed: {error}", file=sys.stderr)
+                    self._log(f"walk failed: {error}", True)
                     code = 6
 
             if error is not None:
@@ -579,7 +592,7 @@ class RunSession:
                     self._stopped = (payload["reason"], source)  # first: `ended` keeps them if the write fails
                     out.mkdir(parents=True, exist_ok=True)  # a cancel can come before the leg log made the folder
                     _write_json(out / _STOP, {**payload, "trigger_ns": trigger_ns, "trigger_source": source})
-                    print(f"stopped: {payload['reason']}" + (f" ({source})" if source is not None else ""))
+                    self._log(f"stopped: {payload['reason']}" + (f" ({source})" if source is not None else ""), False)
                 steps.append(("stop.json", write_stop))
             if run_log is not None:  # on the walker's thread, after run() returned (RV-2: calls racing close are dropped)
                 def end_step_log(sl: StepLog = run_log[0], clk: Clock = run_log[1], payload: dict | None = stop_payload,
@@ -587,7 +600,7 @@ class RunSession:
                     sl.end(clk.now_ns(), payload["reason"] if payload is not None else None, exit_code)
                     closed = sl.close()
                     if not is_successful(closed):
-                        print(f"step log: {closed.failure()}", file=sys.stderr)
+                        self._log(f"step log: {closed.failure()}", True)
                 steps.append(("step_log", end_step_log))
             if log is not None:
                 steps.append(("leg_log", log.close))

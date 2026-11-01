@@ -14,7 +14,9 @@ Where the plan is silent (each decided here, local and reversible):
   scheduling) before `tick()` (PF81 m11: the first poll is the controller's own, nothing is read twice).
 - "A new line" for the silence clock is a new step event (a bad line or a frame is not a step).
 - Leaving the silence clears the status line (`REPLAY_HINT`) before the redraw, which sets any read error again.
-- An error is printed once per distinct message (a repeat of the last one is not printed again).
+- An error is reported once per distinct message (a repeat of the last one is not reported again): printed on stdout
+  by default, or passed to the `report` keyword (the Route tab passes its console-box writer: route tab H71, RDO110-D3
+  A).
 - An event the model rejects is tried again on the next tick, then skipped, and the status line says how many were
   skipped (RV-9 review m2, orchestrator ruling 88); the lines behind it go in.
 - Events read before any header (only possible when line 1 is bad) cannot be drawn and are dropped; frames read
@@ -38,7 +40,12 @@ POLL_MS = 100
 SILENT_S = 10.0  # spec 5.4
 LIVE = "LIVE"
 SILENT_MODE = "LIVE · no new steps for 10 s: the walk is still running or has crashed"  # spec 5.4, word for word
-REPLAY_HINT = "if the walk has ended or crashed, see the console; the replay opens when it ends"  # plan choice 11
+REPLAY_HINT = "if the walk has ended or crashed, see the console box on the Setup tab"  # plan choice 11, H71
+
+
+def _print_report(text: str) -> None:
+    """`LiveController`'s default `report`: the line on stdout, as before."""
+    print(text, flush=True)
 
 
 @dataclass(frozen=True)
@@ -87,8 +94,10 @@ class Follower:
 class LiveController:
     def __init__(self, root: tk.Misc, window: RouteViewWindow, folder: Path, *, repo_root: Path,
                  current_git_head: str | None, clock: Callable[[], float] = time.monotonic,
-                 live_frame: Callable[[], np.ndarray | None] | None = None) -> None:
+                 live_frame: Callable[[], np.ndarray | None] | None = None,
+                 report: Callable[[str], None] = _print_report) -> None:
         self._root = root
+        self._report_line = report  # where an error line goes besides the status line (RDO110-D3 A)
         self.window = window
         self._folder = Path(folder)
         self._repo_root = repo_root
@@ -127,7 +136,7 @@ class LiveController:
             self._root.after(POLL_MS, self.tick)
 
     def update(self) -> None:
-        """One poll and redraw; never raises (hard rule 5): an error goes to the status line and stdout. Lines the
+        """One poll and redraw; never raises (hard rule 5): an error goes to the status line and `report`. Lines the
         failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window is
         left as last drawn, RV-8 review m2): the walk is over, and the same error may come every tick."""
         if self.ended or self._stopped:
@@ -243,5 +252,5 @@ class LiveController:
     def _report(self, text: str) -> None:
         self.window.set_status(text)
         if text != self._printed:
-            print(text, flush=True)  # the console of whoever started the app (or the walk)
+            self._report_line(text)  # stdout by default; the Route tab's console box (H71)
             self._printed = text

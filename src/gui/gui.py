@@ -163,7 +163,7 @@ class MapleGUI:
     def setRunLocked(self, locked):
         """Grey out the Setup tab for a run, or bring it back (spec 5.1): the eleven buttons and the class picker. The
         console Text stays editable on purpose: a disabled Text drops _printToGUIConsole's inserts. The tab's header
-        is left alone (waits for Hong: RTF98-1-D1; the plan's default, answer A, is what is built: it stays selectable)."""
+        is left alone: it stays selectable (H74, Hong's answer A to RTF98-1-D1)."""
         state = "disabled" if locked else "normal"
         for button in (self.draw_blue_node_button, self.draw_orange_node_button, self.clear_gui_console_button,
                        self.clear_gui_minimap_button, self.load_map_button, self.open_editor_button,
