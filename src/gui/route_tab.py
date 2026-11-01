@@ -3,9 +3,9 @@
 This module is `src.gui`'s one door to the run driver: it imports `src.route.session`, which reaches the input layer
 (import-linter contract "gui reaches input only through the run driver"). The pure helpers below hold the words and the
 rules the tab shows (settings checks, the class key, the end-of-run texts, the countdown line); none of them touches Tk.
-`RouteTab` is the tab itself: the top area, the readiness line and Start up to the point where the run's session is
-built. The worker, the event queue, Stop and the close wait (RT-8a), the hosted view (RT-8b), the app-focus flag (RT-9)
-and the saved-run list (RT-10) are added to it by those tasks.
+`RouteTab` is the tab itself: the top area, the readiness line, Start, the run's worker thread, the 100 ms drain of its
+event queue with the dead-worker watchdog, and Stop (RT-8a). The close wait (RT-8a), the hosted view (RT-8b), the
+app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
 """
 import math
 import queue
@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import tkinter as tk
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -146,6 +147,15 @@ def endedText(code: int | None, text: str, folder: Path | None, replay_open: boo
     return f"Ended ({text})."  # a pair no producer sends; nothing raises
 
 
+def _unexpectedEndText(folder: Path | None, replay_open: bool) -> str:
+    """Spec 5.5's watchdog text, for a worker that ended with no `ended` event: "and <run folder>" only when the
+    folder exists, and then choice 7's " Replay is open." when a replay opened."""
+    if folder is not None and folder.exists():
+        sentence = f"Ended: the run stopped unexpectedly; see the console and {folder.name}."
+        return sentence + (" Replay is open." if replay_open else "")
+    return "Ended: the run stopped unexpectedly; see the console."
+
+
 def countdownText(first: int, left: int) -> str:
     """The countdown status line when `left` steps remain of `first` (spec 5.2, choice 4): only the last five counts
     so far are shown, so a countdown of up to 60 still fits the line."""
@@ -169,11 +179,17 @@ NO_CHARACTER_TEXT = ("The character was not found on the minimap. Check that the
 RUN_FOLDER_EXISTS_TEXT = "A run folder for this second already exists. Press Start again."
 NONE_TEXT = "(none)"  # the Map and Class line before a map is loaded or a character is chosen
 RECORDING_TEXT = f"Recording: on (about {session.RECORD_GB_PER_HOUR:.1f} GB per hour)"  # spec 5.2; information only
+# spec 5.2's run states. Connecting's text is also the session's own `status` event (C1).
+CONNECTING_TEXT = "Connecting to the board..."
+RUNNING_TEXT = "Running. F12 or Stop ends the run. Clicking this app also stops it."
+STOPPING_TEXT = "Stopping: releasing keys..."
+STOPPING_CONNECT_TEXT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
 
 POLL_MS = 100  # the drain's period (spec 5.5, 5.7)
 RouteState = Literal["not_ready", "ready", "connecting", "countdown", "running", "stopping", "ended"]
 _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "stopping")  # Start pressed, cleanup not done
 _IDLE_STATES: tuple[RouteState, ...] = ("not_ready", "ready", "ended")  # the readiness line is kept up to date here
+_STOPPABLE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running")
 
 SessionFactory = Callable[[RunSettings, FrameHolder, Callable[[RunEvent], None], Callable[[], bool]], RunSession]
 
@@ -237,7 +253,10 @@ class RouteTab:
         self._git_head = git_head
         self._frame_checks = frame_checks
         self._head: str | None = None  # git's HEAD, read once by startPolling and handed to every live view and replay
-        self._events: queue.Queue[RunEvent] = queue.Queue()  # the session's on_event; RT-8a drains it
+        self._events: queue.Queue[RunEvent] = queue.Queue()  # the session's on_event (the worker's put), drained here
+        self._out: Path | None = None  # the run folder of the run in progress or last ended
+        self._ended_seen = False  # this run's `ended` event has been drained (the watchdog's test)
+        self._countdown_first: int | None = None  # this run's first countdown count (plan choice 4)
         self._written: tuple | None = None  # (inputs, text) of the readiness line's last write (plan choice 8)
         self.state = "not_ready"
         self.view = None
@@ -280,7 +299,7 @@ class RouteTab:
         buttons.pack(side=tk.TOP, fill=tk.X, pady=4)
         self.start_button = tk.Button(buttons, text="Start", command=self.startRun)
         self.start_button.pack(side=tk.LEFT)
-        self.stop_button = tk.Button(buttons, text="Stop", state="disabled")  # RT-8a gives it its command
+        self.stop_button = tk.Button(buttons, text="Stop", state="disabled", command=self.stopRun)
         self.stop_button.pack(side=tk.LEFT, padx=8)
         self.recording_label = tk.Label(buttons, text=RECORDING_TEXT)
         self.recording_label.pack(side=tk.RIGHT)
@@ -368,11 +387,76 @@ class RouteTab:
         self._gui.gui.after(POLL_MS, self.drainEvents)
 
     def drainEvents(self) -> None:
-        """One 100 ms step; it reschedules itself. RT-7: the readiness refresh while idle. RT-8a adds the queue
-        drain and the dead-worker watchdog before it."""
-        if self.state in _IDLE_STATES:
-            self._refreshReadiness()
-        self._gui.gui.after(POLL_MS, self.drainEvents)
+        """One 100 ms step on the Tk thread (spec 5.5, 5.7): the run's queued events, then the watchdog, then the
+        readiness refresh (only with no worker and an idle state). It reschedules itself in a `finally`, so a step
+        that raises does not end the loop.
+
+        The watchdog (spec 5.5): a worker found dead is read as ended only after one more drain of the queue finds no
+        `ended`, so an `ended` put between the first drain and `is_alive()` is still read as itself. A dead worker
+        gives the controls back, whether its run ended with an `ended` event or not."""
+        try:
+            self._drainQueue()
+            worker = self.worker
+            if worker is not None and not worker.is_alive():
+                self._drainQueue()
+                if not self._ended_seen:
+                    self.state = "ended"
+                    replay_open = self._onEnded(None, "")
+                    self.status_var.set(_unexpectedEndText(self._out, replay_open))
+                self.worker = None
+                self._lockControls(False)
+            if self.worker is None and self.state in _IDLE_STATES:
+                self._refreshReadiness()
+        finally:
+            self._gui.gui.after(POLL_MS, self.drainEvents)
+
+    def _drainQueue(self) -> None:
+        """Show every event queued so far, in order."""
+        while True:
+            try:
+                event = self._events.get_nowait()
+            except queue.Empty:
+                return
+            self._showEvent(event)
+
+    def _showEvent(self, event: RunEvent) -> None:
+        """One event to spec 5.2's state and status line. A `warning` is appended after one space in any state
+        (choice 5). `ended` sets the state, asks `_onEnded` whether a replay opened, then writes `endedText` (choice
+        7). While Stopping its text stays until the end: an earlier `status` or `countdown` read late changes nothing,
+        and a `running` still reaches `_onRunning` (the walk did start)."""
+        if event.kind == "warning":
+            self.status_var.set(f"{self.status_var.get()} {event.text}")
+        elif event.kind == "ended":
+            self._ended_seen = True
+            self.state = "ended"
+            replay_open = self._onEnded(event.code, event.text)
+            self.status_var.set(endedText(event.code, event.text, self._out, replay_open))
+        elif self.state == "stopping":
+            if event.kind == "running":
+                self._onRunning()
+        elif event.kind == "status":
+            self.state = "connecting"
+            self.status_var.set(event.text)
+        elif event.kind == "countdown":
+            left = event.seconds_left if event.seconds_left is not None else 0
+            first = self._countdown_first if self._countdown_first is not None else left
+            self._countdown_first = first
+            self.state = "countdown"
+            self.status_var.set(countdownText(first, left))
+        elif event.kind == "running":
+            self.state = "running"
+            self.status_var.set(RUNNING_TEXT)
+            self._onRunning()
+
+    def _onRunning(self) -> None:
+        """Called once per drained `running`, after the state and the status line are set. RT-8b hosts the live view
+        here; in RT-8a it does nothing."""
+
+    def _onEnded(self, code: int | None, text: str) -> bool:
+        """Called once per end (an `ended` event's code and text, or `(None, "")` from the watchdog), after the state
+        is set and before the status line; True when a replay opened (choice 7). RT-8b opens the replay here; in RT-8a
+        none opens."""
+        return False
 
     def isRunLive(self) -> bool:
         """Start pressed and the cleanup not finished: the Setup tab's picture is not redrawn while this holds and the
@@ -389,8 +473,10 @@ class RouteTab:
     def startRun(self) -> None:
         """The Start button: the field checks, then the six checks of spec 5.4 in order, stopping at the first that
         fails and writing its text to the status line (never a dialog). With all of them passed it builds the run's
-        session from the settings. RT-8a continues from there: lock the controls, show "Connecting to the board..."
-        and start the worker."""
+        session from the settings, locks the controls, shows Connecting and starts the worker. A press while a worker
+        exists (Start greyed out but pressed anyway, or pressed again while Stopping) does nothing: one worker at most."""
+        if self.worker is not None:
+            return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
         if settings is None:
             self.status_var.set(error or "")
@@ -412,10 +498,52 @@ class RouteTab:
         key = classKey(character)
         shared = self._gui.sharedInfo
         assert csv is not None and key is not None and shared is not None  # checks 1-2 passed; the app has a holder
-        self.session = self._make_session(
+        run = self._make_session(
             RunSettings(map_csv=csv, character=key, laps=laps, minutes=minutes, countdown_s=countdown, seed=None,
                         out=out),
             shared, self._events.put, self._mayWalk)
+        self.session = run
+        self._out = out
+        self._ended_seen = False
+        self._countdown_first = None
+        self._lockControls(True)
+        self.state = "connecting"
+        self.status_var.set(CONNECTING_TEXT)
+        self.worker = self._make_thread(target=self._work, args=(run,), name="route-run", daemon=True)
+        self.worker.start()
+
+    def _work(self, run: RunSession) -> None:
+        """The worker thread's body (spec 5.7): the walk and nothing that touches Tk; its events reach the tab through
+        the queue. `run()` turns an exception into its own `ended` event (5.6); one that still escapes is printed here,
+        so it never reaches `threading.excepthook`, and the drain's watchdog ends the run on the tab."""
+        try:
+            run.run()
+        except BaseException:
+            traceback.print_exc()
+
+    def stopRun(self) -> None:
+        """The Stop button (spec 5.5): `session.stop("button")`, which returns at once, then Stopping with nothing
+        enabled (5.2). Its text says when the board connection attempt has to end first (5.6)."""
+        run = self.session
+        if run is None or self.worker is None or self.state not in _STOPPABLE_STATES:
+            return
+        run.stop("button")
+        text = STOPPING_CONNECT_TEXT if self.state == "connecting" else STOPPING_TEXT
+        self.state = "stopping"
+        self.status_var.set(text)
+        self.stop_button.configure(state="disabled")
+
+    def _lockControls(self, locked: bool) -> None:
+        """Spec 5.2's Enabled column and 5.1's Setup lock: during a run only Stop; at the end the settings and the
+        saved runs come back, Stop goes grey and Start is left to the readiness refresh that follows in the drain."""
+        self._gui.setRunLocked(locked)
+        state: Literal["normal", "disabled"] = "disabled" if locked else "normal"
+        for widget in (self.laps_entry, self.minutes_entry, self.countdown_spinbox, self.open_button,
+                       self.refresh_button, self.runs_list):
+            widget.configure(state=state)
+        if locked:
+            self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="normal" if locked else "disabled")
 
     def _mayWalk(self) -> bool:
         """The session's `may_walk` (spec 9): the walk goes on unless the app has the keyboard; RT-9 sets the flag."""

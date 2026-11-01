@@ -460,24 +460,24 @@
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 29,
-                    "endColumn": 47,
+                    "startColumn": 33,
+                    "endColumn": 51,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 36,
-                    "endColumn": 49,
+                    "startColumn": 40,
+                    "endColumn": 53,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportAttributeAccessIssue",
                 "range": {
-                    "startColumn": 19,
-                    "endColumn": 24,
+                    "startColumn": 23,
+                    "endColumn": 28,
                     "lineCount": 1
                 }
             }

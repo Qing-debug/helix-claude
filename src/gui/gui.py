@@ -493,35 +493,36 @@ class MapleGUI:
 
     #draws minimap on GUI
     def _updateCanvas(self):
-        # While a run is live and the Setup tab is hidden nobody sees this picture: skip it, so the walker shares the
-        # interpreter with one redraw (the Route tab's) instead of two (spec 5.7). The 10 ms loop itself goes on.
-        picture_unseen = (self.route_tab is not None and self.route_tab.isRunLive()
-                          and not self.isSetupTabShown())
-        # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
-        # The vision thread stores a new array for every frame (src/vision/vision.py:81), so the array read here is not mutated.
-        with self.sharedInfo.minimap_frame_lock:
-            frame = self.sharedInfo.minimap_frame
-        if frame is not None and not picture_unseen:
-            canvas = self.minimap_canvas
-            if canvas is None:
-                canvas = self._createMinimapCanvas(frame)
+        try:
+            # While a run is live and the Setup tab is hidden nobody sees this picture: skip it, so the walker shares the
+            # interpreter with one redraw (the Route tab's) instead of two (spec 5.7). The 10 ms loop itself goes on.
+            picture_unseen = (self.route_tab is not None and self.route_tab.isRunLive()
+                              and not self.isSetupTabShown())
+            # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
+            # The vision thread stores a new array for every frame (src/vision/vision.py:81), so the array read here is not mutated.
+            with self.sharedInfo.minimap_frame_lock:
+                frame = self.sharedInfo.minimap_frame
+            if frame is not None and not picture_unseen:
+                canvas = self.minimap_canvas
+                if canvas is None:
+                    canvas = self._createMinimapCanvas(frame)
 
-            # Image conversion pipeline: numpy array → PIL Image → Tkinter PhotoImage
-            pil_minimap = Image.fromarray(frame)
-            minimap_img = ImageTk.PhotoImage(pil_minimap)
+                # Image conversion pipeline: numpy array → PIL Image → Tkinter PhotoImage
+                pil_minimap = Image.fromarray(frame)
+                minimap_img = ImageTk.PhotoImage(pil_minimap)
 
-            # Prevent garbage collection by maintaining reference
-            canvas.image = minimap_img
-            # Canvas image management: create once, update thereafter
-            if self.minimap_canvas_bg_img_id is None:
-                # Initial creation: place image at canvas center
-                self.minimap_canvas_bg_img_id = canvas.create_image(0,
-                                                                    0,
-                                                                    image=minimap_img,
-                                                                    anchor= tk.NW)
-            else:
-                # Subsequent updates: modify existing image item (preserves layer order)
-                canvas.itemconfig(self.minimap_canvas_bg_img_id, image=minimap_img)
-
-        # Schedule next frame update
-        self.gui.after(10, self._updateCanvas)
+                # Prevent garbage collection by maintaining reference
+                canvas.image = minimap_img
+                # Canvas image management: create once, update thereafter
+                if self.minimap_canvas_bg_img_id is None:
+                    # Initial creation: place image at canvas center
+                    self.minimap_canvas_bg_img_id = canvas.create_image(0,
+                                                                        0,
+                                                                        image=minimap_img,
+                                                                        anchor= tk.NW)
+                else:
+                    # Subsequent updates: modify existing image item (preserves layer order)
+                    canvas.itemconfig(self.minimap_canvas_bg_img_id, image=minimap_img)
+        finally:
+            # Schedule the next frame, also after a body that raised: one bad frame does not end the loop
+            self.gui.after(10, self._updateCanvas)

@@ -2,6 +2,7 @@
 text), then the tab itself on `make_gui`'s withdrawn root, built on fakes: no board, no game, no git, no disk probe.
 
 Same real-Tk-root setup as test_gui_startup.py (skipped where Tk cannot open a display; `after` only records)."""
+import inspect
 import threading
 import tkinter as tk
 from types import SimpleNamespace
@@ -11,9 +12,9 @@ import pytest
 import src.gui.gui as gui_module
 import test_gui_startup
 from src.classes.classes import Kanna
-from src.gui.route_tab import RouteTab, classKey, countdownText, endedText, validateSettings
+from src.gui.route_tab import RouteTab, classKey, countdownText, defaultSession, endedText, validateSettings
 from src.route import session
-from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunSettings
+from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunEvent, RunSession, RunSettings
 from test_gui_startup import _console, _frame, _open_window, _shared
 
 make_gui = test_gui_startup.make_gui  # the fixture, shared (no conftest.py under tests/)
@@ -186,31 +187,75 @@ def _boom(*args):
     raise AssertionError("called before Start")
 
 
+class FakeSession:
+    """What the fake `make_session` builds: the factory's four arguments; `run()` posts `script` through `on_event`,
+    then raises `raises` when set; `stop(source)` only records."""
+
+    def __init__(self, settings, shared, on_event, may_walk):
+        self.settings, self.shared, self.on_event, self.may_walk = settings, shared, on_event, may_walk
+        self.script, self.raises, self.stops = [], None, []
+
+    def run(self):
+        for event in self.script:
+            self.on_event(event)
+        if self.raises is not None:
+            raise self.raises
+        return 0
+
+    def stop(self, source):
+        self.stops.append(source)
+
+
+class FakeThread:
+    """The fake `make_thread`'s product: `start()` runs nothing; `finish()` runs the worker's body on the test's thread
+    and leaves the thread dead; `alive_check`, when set, answers `is_alive()` instead."""
+
+    def __init__(self, *, target, args=(), name=None, daemon=None):
+        self.target, self.args, self.name, self.daemon = target, args, name, daemon
+        self.started, self.alive, self.alive_check = 0, False, None
+
+    def start(self):
+        self.started += 1
+        self.alive = True
+
+    def is_alive(self):
+        return self.alive_check() if self.alive_check is not None else self.alive
+
+    def finish(self):
+        self.target(*self.args)
+        self.alive = False
+
+
 @pytest.fixture
 def make_rig(make_gui, monkeypatch, tmp_path):
-    """`make(frame=True, drain=True, **keywords)`: a real window with a `RouteTab` on fakes (`keywords` replace the
-    defaults: `make_session`, `run_root`, `disk_free`, `new_out`, `git_head`, ...), a map and a class chosen, the
-    minimap area built (`frame=False`: no frame, so no minimap area) and the character found, after one drain. So the
-    tab is Ready, and a test breaks one thing. `rig.sessions` records the sessions the fake `make_session` built;
-    `rig.free` is what the default `disk_free` reports."""
-    def make(*, frame=True, drain=True, **keywords):
+    """`make(frame=True, drain=True, cls=RouteTab, **keywords)`: a real window with a `cls` tab on fakes (`keywords`
+    replace the defaults: `make_session`, `make_thread`, `run_root`, `disk_free`, `new_out`, `git_head`, ...), a map and
+    a class chosen, the minimap area built (`frame=False`: no frame, so no minimap area) and the character found, after
+    one drain. So the tab is Ready, and a test breaks one thing. `rig.sessions` records the `FakeSession`s the fake
+    `make_session` built and `rig.threads` the `FakeThread`s; `rig.free` is what the default `disk_free` reports."""
+    def make(*, frame=True, drain=True, cls=RouteTab, **keywords):
         run_root = tmp_path / "route"
-        sessions = []
+        sessions, threads = [], []
 
         def fake_session(settings, shared, on_event, may_walk):
-            made = SimpleNamespace(settings=settings, shared=shared, on_event=on_event, may_walk=may_walk)
+            made = FakeSession(settings, shared, on_event, may_walk)
             sessions.append(made)
             return made
 
-        rig = SimpleNamespace(sessions=sessions, run_root=run_root, out=run_root / RUN_NAME,
+        def fake_thread(**options):
+            made = FakeThread(**options)
+            threads.append(made)
+            return made
+
+        rig = SimpleNamespace(sessions=sessions, threads=threads, run_root=run_root, out=run_root / RUN_NAME,
                               csv=tmp_path / "fossil_foundry_2.csv", free=10 * START_FREE_BYTES)
-        options = dict(make_session=fake_session, run_root=run_root, disk_free=lambda path: rig.free,
-                       new_out=lambda: rig.out, git_head=lambda: HEAD)
+        options = dict(make_session=fake_session, make_thread=fake_thread, run_root=run_root,
+                       disk_free=lambda path: rig.free, new_out=lambda: rig.out, git_head=lambda: HEAD)
         options.update(keywords)
         built = []
 
         def factory(parent, owner):
-            built.append(RouteTab(parent, owner, **options))
+            built.append(cls(parent, owner, **options))
             return built[0]
 
         gui, shared, scheduled = make_gui(frame=_frame() if frame else None, route_tab_factory=factory)
@@ -595,3 +640,326 @@ def test_mapleGUI_start_with_no_route_tab(monkeypatch):
         assert gui.route_tab is None
     finally:
         gui.gui.destroy()
+
+
+# ---- RT-8a: the worker, the event queue, the watchdog and Stop (spec 5.5, 5.7) ----------------------------------
+
+CONNECTING = "Connecting to the board..."
+RUNNING = "Running. F12 or Stop ends the run. Clicking this app also stops it."
+STOPPING = "Stopping: releasing keys..."
+STOPPING_CONNECT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
+
+
+def _event(kind, text="", **extra):
+    return RunEvent(kind=kind, text=text, **extra)
+
+
+def _state(widget):
+    return str(widget.cget("state"))
+
+
+def _run_controls(tab):
+    """Spec 5.2's Enabled column apart from Start and Stop: the settings and the saved runs."""
+    return (tab.laps_entry, tab.minutes_entry, tab.countdown_spinbox, tab.open_button, tab.refresh_button,
+            tab.runs_list)
+
+
+def _start(rig):
+    rig.tab.startRun()
+    return rig.sessions[-1], rig.threads[-1]
+
+
+class SpyTab(RouteTab):
+    """Records the two hooks RT-8b fills, with the state and the status line as they were at the call."""
+
+    replay = False
+
+    def __init__(self, *args, **kwargs):
+        self.calls = []
+        super().__init__(*args, **kwargs)
+
+    def _onRunning(self):
+        self.calls.append(("running", self.state, self.status_var.get()))
+
+    def _onEnded(self, code, text):
+        self.calls.append(("ended", code, text, self.state, self.status_var.get()))
+        return self.replay
+
+
+def test_controls_locked_during_run_and_back_after(make_rig, monkeypatch):
+    rig = make_rig()
+    tab = rig.tab
+    locks = []
+    lock = rig.gui.setRunLocked
+    monkeypatch.setattr(rig.gui, "setRunLocked", lambda locked: (locks.append(locked), lock(locked)))
+
+    made, thread = _start(rig)
+
+    assert locks == [True] and _state(rig.gui.load_map_button) == "disabled"  # the Setup tab's lock ran (5.1)
+    assert (thread.target, thread.args, thread.name, thread.daemon) == (tab._work, (made,), "route-run", True)
+    assert thread.started == 1 and tab.worker is thread
+    assert (tab.state, tab.status_var.get()) == ("connecting", CONNECTING)
+    assert [_state(w) for w in _run_controls(tab)] == ["disabled"] * 6
+    assert (_state(tab.start_button), _state(tab.stop_button)) == ("disabled", "normal")
+    tab.drainEvents()  # readiness gives nothing back during a run
+    assert _state(tab.start_button) == "disabled"
+
+    made.on_event(_event("ended", "stopped/button", code=0))
+    tab.drainEvents()  # `ended` read while the worker is still returning: the controls wait for the worker's end
+
+    assert (tab.state, tab.status_var.get()) == ("ended", "Ended: you pressed Stop.")
+    assert locks == [True] and _state(tab.start_button) == "disabled"
+
+    thread.finish()
+    tab.drainEvents()
+
+    assert locks == [True, False] and tab.worker is None
+    assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6
+    assert (_state(tab.start_button), _state(tab.stop_button)) == ("normal", "disabled")  # the Ready row's controls
+    assert (tab.state, tab.status_var.get()) == ("ended", "Ended: you pressed Stop.")  # the text stays (choice 8)
+
+
+def test_start_twice_builds_one_session(make_rig):
+    rig = make_rig()
+    rig.tab.startRun()
+    rig.tab.startRun()
+    assert len(rig.sessions) == 1 and len(rig.threads) == 1 and rig.threads[0].started == 1
+    rig.tab.stopRun()
+    rig.tab.startRun()  # Start again while Stopping: still one
+    rig.sessions[0].on_event(_event("ended", "cancelled/button", code=0))
+    rig.tab.drainEvents()
+    rig.tab.startRun()  # and after `ended` while the worker is still returning
+    assert len(rig.sessions) == 1 and len(rig.threads) == 1
+
+
+def test_events_drained_into_the_status_line(make_rig):
+    rig = make_rig()
+    tab = rig.tab
+    made, _ = _start(rig)
+    steps = [
+        (_event("status", CONNECTING), "connecting", CONNECTING),
+        (_event("countdown", seconds_left=5), "countdown", "Click the game now. Starting in 5 ... F12 stops."),
+        (_event("countdown", seconds_left=4), "countdown", "Click the game now. Starting in 5 ... 4 ... F12 stops."),
+        (_event("running", "Running."), "running", RUNNING),
+        (_event("warning", "Recording stopped: x. The walk goes on."), "running",
+         RUNNING + " Recording stopped: x. The walk goes on."),  # appended after one space (choice 5)
+        (_event("ended", "max_laps/", code=0), "ended", "Ended: all laps done."),
+        (_event("warning", "Recording stopped: y. The walk goes on."), "ended",
+         "Ended: all laps done. Recording stopped: y. The walk goes on."),  # a late warning, appended to Ended too
+    ]
+    for event, state, text in steps:
+        made.on_event(event)
+        tab.drainEvents()
+        assert (tab.state, tab.status_var.get()) == (state, text), event
+
+
+def test_events_queued_together_are_read_in_one_drain(make_rig):
+    rig = make_rig()
+    made, _ = _start(rig)
+    for event in [_event("status", CONNECTING), _event("countdown", seconds_left=2), _event("countdown", seconds_left=1),
+                  _event("running", "Running."), _event("warning", "W."), _event("ended", "stopped/timer", code=0)]:
+        made.on_event(event)
+    rig.tab.drainEvents()
+    assert (rig.tab.state, rig.tab.status_var.get()) == ("ended", "Ended: the time limit was reached.")
+
+
+def test_stop_button(make_rig):
+    rig = make_rig()
+    tab = rig.tab
+    made, _ = _start(rig)
+
+    tab.stop_button.invoke()  # Stop's command; while connecting the connection attempt has to end first (5.6)
+
+    assert made.stops == ["button"]
+    assert (tab.state, tab.status_var.get()) == ("stopping", STOPPING_CONNECT)
+    assert _state(tab.stop_button) == "disabled"  # Stopping: nothing is enabled (5.2)
+    made.on_event(_event("countdown", seconds_left=5))  # put before the stop landed: Stopping's text stays
+    made.on_event(_event("warning", "Recording stopped: x. The walk goes on."))
+    tab.drainEvents()
+    assert (tab.state, tab.status_var.get()) == ("stopping", STOPPING_CONNECT + " Recording stopped: x. The walk goes on.")
+    tab.stopRun()  # pressed again while Stopping: nothing more is sent
+    assert made.stops == ["button"]
+
+
+@pytest.mark.parametrize("kind", ["countdown", "running"])
+def test_stop_button_after_connecting(make_rig, kind):
+    rig = make_rig()
+    made, _ = _start(rig)
+    made.on_event(_event(kind, seconds_left=3) if kind == "countdown" else _event(kind, "Running."))
+    rig.tab.drainEvents()
+    assert rig.tab.state == kind
+
+    rig.tab.stopRun()
+
+    assert made.stops == ["button"]
+    assert (rig.tab.state, rig.tab.status_var.get()) == ("stopping", STOPPING)
+
+
+def test_stop_with_no_run_does_nothing(make_rig):
+    rig = make_rig()
+    rig.tab.stopRun()
+    assert rig.tab.state == "ready" and rig.tab.status_var.get() == READY
+
+
+@pytest.mark.parametrize("folder_made", [True, False])
+def test_worker_that_ends_without_ended(make_rig, folder_made):
+    rig = make_rig()
+    tab = rig.tab
+    made, thread = _start(rig)
+    if folder_made:
+        rig.out.mkdir(parents=True)
+    tab.drainEvents()
+    assert tab.state == "connecting"  # alive and silent: nothing to show
+
+    thread.finish()  # run() returns with nothing posted
+    tab.drainEvents()
+
+    if folder_made:
+        assert tab.status_var.get() == f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
+    else:
+        assert tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert tab.state == "ended" and tab.worker is None
+    assert (_state(tab.start_button), _state(tab.stop_button)) == ("normal", "disabled")
+    assert [_state(w) for w in _run_controls(tab)] == ["normal"] * 6
+
+
+def test_worker_that_ends_without_ended_race_order(make_rig):
+    rig = make_rig(cls=SpyTab)
+    tab = rig.tab
+    made, thread = _start(rig)
+    made.on_event(_event("running", "Running."))
+    tab.drainEvents()
+
+    def ended_then_dead():  # alive at the drain; the worker posts `ended` and returns before is_alive() is asked
+        made.on_event(_event("ended", "stopped/hotkey", code=0))
+        return False
+
+    thread.alive_check = ended_then_dead
+    tab.drainEvents()
+
+    assert tab.status_var.get() == "Ended: you pressed F12."  # that event's 5.5 text, not the watchdog's
+    assert [call for call in tab.calls if call[0] == "ended"] == [("ended", 0, "stopped/hotkey", "ended", RUNNING)]
+    assert tab.worker is None and _state(tab.start_button) == "normal"
+
+
+def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, capsys):
+    hooked = []
+    monkeypatch.setattr(threading, "excepthook", hooked.append)
+
+    def raising_session(*args):
+        made = FakeSession(*args)
+        made.raises = RuntimeError("boom in run")
+        return made
+
+    rig = make_rig(make_session=raising_session, make_thread=threading.Thread)  # a real thread this time
+    rig.tab.startRun()
+    worker = rig.tab.worker
+    assert isinstance(worker, threading.Thread) and worker.name == "route-run" and worker.daemon
+    worker.join(10)
+    assert not worker.is_alive()
+
+    err = capsys.readouterr().err
+    assert "Traceback" in err and "RuntimeError: boom in run" in err
+    assert hooked == []
+
+    rig.tab.drainEvents()
+
+    assert rig.tab.state == "ended" and rig.tab.worker is None
+    assert rig.tab.status_var.get() == "Ended: the run stopped unexpectedly; see the console."
+    assert (_state(rig.tab.start_button), _state(rig.tab.stop_button)) == ("normal", "disabled")
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_hooks_called_once_per_event(make_rig, replay):
+    rig = make_rig(cls=SpyTab)
+    tab = rig.tab
+    tab.replay = replay
+    made, thread = _start(rig)
+    rig.out.mkdir(parents=True)
+
+    made.on_event(_event("running", "Running."))
+    tab.drainEvents()
+    assert tab.calls == [("running", "running", RUNNING)]  # after the state and the status line were set
+
+    made.on_event(_event("ended", "stopped/hotkey", code=0))
+    tab.drainEvents()
+    assert tab.calls[1:] == [("ended", 0, "stopped/hotkey", "ended", RUNNING)]  # before the status line was set
+    suffix = f" ({rig.out.name}). Replay is open." if replay else "."
+    assert tab.status_var.get() == "Ended: you pressed F12" + suffix  # choice 7 only when the hook says so
+
+    thread.finish()
+    tab.drainEvents()
+    tab.drainEvents()
+    assert len(tab.calls) == 2  # one call per event, none from the watchdog once `ended` was seen
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_hooks_watchdog_end_calls_on_ended_once(make_rig, replay):
+    rig = make_rig(cls=SpyTab)
+    tab = rig.tab
+    tab.replay = replay
+    _, thread = _start(rig)
+    rig.out.mkdir(parents=True)
+    tab.stopRun()
+    thread.finish()
+
+    tab.drainEvents()
+    tab.drainEvents()
+
+    assert tab.calls == [("ended", None, "", "ended", STOPPING_CONNECT)]  # before the watchdog's text
+    assert tab.status_var.get() == (f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
+                                    + (" Replay is open." if replay else ""))
+
+
+def test_drain_reschedules_when_its_body_raises(make_rig, monkeypatch):
+    rig = make_rig()
+    tab = rig.tab
+
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tab, "_refreshReadiness", boom)
+    rig.scheduled.clear()
+    with pytest.raises(RuntimeError):
+        tab.drainEvents()
+    assert rig.scheduled == [(100, tab.drainEvents)]  # the 100 ms loop goes on (RT-7 M3)
+
+
+def test_setup_canvas_loop_reschedules_when_its_body_raises(make_rig, monkeypatch):
+    rig = make_rig()
+
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rig.tab, "isRunLive", boom)
+    rig.scheduled.clear()
+    with pytest.raises(RuntimeError):
+        rig.gui._updateCanvas()
+    assert rig.scheduled == [(10, rig.gui._updateCanvas)]  # the 10 ms loop goes on (RT-6 m3)
+
+
+def test_default_session_builds_the_run_from_the_tabs_settings(make_rig):
+    rig = make_rig(make_session=defaultSession)
+    tab = rig.tab
+    tab.laps_var.set("3")
+    tab.minutes_var.set("2.5")
+    tab.countdown_var.set("7")
+
+    tab.startRun()
+
+    made = tab.session
+    assert isinstance(made, RunSession) and rig.threads[0].args == (made,)
+    assert made._settings == RunSettings(map_csv=rig.csv, character="kanna", laps=3, minutes=2.5, countdown_s=7,
+                                         seed=None, out=rig.out)
+    assert made._shared is rig.gui.sharedInfo
+    assert made._on_event == tab._events.put and made._may_walk == tab._mayWalk
+    assert made._sigint is False  # no SIGINT handler in the app (spec 5.6)
+    defaults = inspect.signature(RunSession).parameters  # and nothing else: the session's own defaults
+    for name in ("make_positions", "wait_first_frame", "make_link", "make_clock", "make_stop", "start_capture", "sleep"):
+        assert getattr(made, "_" + name) is defaults[name].default, name
+
+
+def test_ended_text_code_10_with_a_replay(folder):
+    assert (endedText(10, "off_graph/", folder, True)
+            == f"Ended: the character was lost (exit 10) ({folder.name}). Replay is open.")
+    assert endedText(10, "no_position/", folder, False) == "Ended: the character was lost (exit 10)."
