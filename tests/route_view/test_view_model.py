@@ -19,7 +19,7 @@ from src.input.protocol import Key
 from src.route.params import MovementParams
 from src.route.planner import Move, MoveKind
 from src.route.route_preview import preview
-from src.route.step_log import STEPS_FILE, header_line, read_run
+from src.route.step_log import STEPS_FILE, StepEvent, header_line, read_run
 from src.route_view.model import (
     FRAME_INDEX, FRAMES_DIR, WARN_CODE, WARN_MAP, RunModel, hop_route, load_folder, read_frame_index, render_text,
     route_changed,
@@ -301,6 +301,29 @@ def test_4_extending_with_the_third_repeat_replaces_the_line_in_place(tmp_path):
     live.extend(events[12:13])
     assert len(live.why) == count and live.why[-1] == "00:05.100 no character on the minimap (miss) x3"
     assert not live.ended
+
+
+def test_4_an_event_the_model_cannot_read_leaves_it_as_it_was(tmp_path):
+    """RT-ADJ-2 [review]: `extend` appended the event before its handler ran, so one handler error left `events` one
+    longer than the slots; the live follower keeps the model and retries, and every later `step` raised IndexError."""
+    folder = make_folder(tmp_path)
+    live, events = _open_live(folder)
+    unreadable = [StepEvent("stall", ns(50.0), {"best_cost_s": "x"}), StepEvent("stall", ns(60.0), {"best_cost_s": "x"})]
+    with pytest.raises(ValueError):
+        live.extend(unreadable[:1])  # first of the run: it must not become the run's time zero either
+    live.extend(events[:3])
+    last = render_text(live, live.step(2))
+    why = list(live.why)
+    for _ in range(2):  # the follower's retry hits the same error again
+        with pytest.raises(ValueError):
+            live.extend(unreadable[1:])
+        assert render_text(live, live.step(len(live.events) - 1)) == last  # IndexError before the fix
+        assert len(live.events) == 3 and live.why == why
+    live.extend(events[3:])
+    whole = _load(folder)
+    assert live.why == whole.why and live.ended
+    for k in range(len(G)):
+        assert render_text(live, live.step(k)) == render_text(whole, whole.step(k)), k
 
 
 # 5 ---------------------------------------------------------------------------------------------------------------

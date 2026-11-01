@@ -422,15 +422,22 @@ class RunModel:
     # events in
 
     def extend(self, events: Sequence[StepEvent]) -> None:
-        """Append `events`: the why lines, the slots and the indexes are built for the new ones only."""
+        """Append `events`: the why lines, the slots and the indexes are built for the new ones only. An event whose
+        handler raises is not added (nor its time kept), so `events` and the slots stay in step and a caller that keeps
+        the model (the live follower) can go on; the events before it stay added (RT-ADJ-2 [review])."""
         for event in events:
             i = len(self.events)
-            self.events.append(event)
+            t0, last_t = self._t0, self._last_t
             if event.t_ns is not None:
                 if self._t0 is None:
                     self._t0 = event.t_ns
                 self._last_t = event.t_ns
-            lines = self._handlers[event.ev](i, event, self._stamp(self._last_t))
+            try:
+                lines = self._handlers[event.ev](i, event, self._stamp(self._last_t))
+            except Exception:
+                self._t0, self._last_t = t0, last_t
+                raise
+            self.events.append(event)  # after the handler: it may raise, and no handler reads `events[i]`
             if event.ev != "read_failed":
                 self._collapse = None
             self.why.extend(lines)
