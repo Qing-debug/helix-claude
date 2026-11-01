@@ -2326,7 +2326,7 @@ def _three_runs(root):
     (root / "notes.txt").write_text("not a run")
     return [("2026-10-31T101500Z", f"{_local('2026-10-31T10:15:00+00:00')}  arcana  0 laps"),
             ("2026-10-30T090000Z", f"{_local('2026-10-30T09:00:00+00:00')}  fossil_foundry_2  3 laps"),
-            ("2026-10-29T080000Z", f"{_local('2026-10-29T08:00:00+00:00')}  fossil_foundry_2  1 laps")]
+            ("2026-10-29T080000Z", f"{_local('2026-10-29T08:00:00+00:00')}  fossil_foundry_2  1 lap")]
 
 
 def _rows(tab):

@@ -216,7 +216,7 @@ def _runLabel(folder: Path) -> str:
         laps = str((folder / LAPS_FILE).read_bytes().count(b"\n"))  # whole lines: one per lap done
     except OSError:
         pass
-    return f"{start}  {map_stem}  {laps} laps"
+    return f"{start}  {map_stem}  {laps} {'lap' if laps == '1' else 'laps'}"
 
 
 def _localStart(value: object) -> str:
