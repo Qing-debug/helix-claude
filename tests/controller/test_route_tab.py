@@ -2,15 +2,19 @@
 text), then the tab itself on `make_gui`'s withdrawn root, built on fakes: no board, no game, no git, no disk probe.
 
 Same real-Tk-root setup as test_gui_startup.py (skipped where Tk cannot open a display; `after` only records)."""
+import gc
 import inspect
 import threading
 import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 from types import SimpleNamespace
 
 import pytest
 
 import src.gui.gui as gui_module
+import src.gui.route_tab as route_tab_module
 import test_gui_startup
+import tk_bans
 from src.classes.classes import Kanna
 from src.gui.route_tab import RouteTab, classKey, countdownText, defaultSession, endedText, validateSettings
 from src.route import session
@@ -592,12 +596,6 @@ def test_is_run_live_follows_the_state(make_rig):
         assert tab.isRunLive() is live, state
 
 
-def test_app_close_destroys_at_once(make_rig):
-    destroyed = []
-    make_rig().tab.onAppClose(lambda: destroyed.append(1))
-    assert destroyed == [1]
-
-
 def test_updating_the_setup_canvas_asks_the_tab_if_a_run_is_live(make_rig):
     rig = make_rig()
     rig.gui._updateCanvas()  # calls route_tab.isRunLive(); an AttributeError here is what RT-6's guard would hide
@@ -852,11 +850,19 @@ def test_worker_wrapper_keeps_exceptions_off_the_thread(make_rig, monkeypatch, c
         return made
 
     rig = make_rig(make_session=raising_session, make_thread=threading.Thread)  # a real thread this time
-    rig.tab.startRun()
-    worker = rig.tab.worker
-    assert isinstance(worker, threading.Thread) and worker.name == "route-run" and worker.daemon
-    worker.join(10)
-    assert not worker.is_alive()
+    # Tk objects that earlier tests left in reference cycles are freed here, on the Tk thread, and the collector stays
+    # off while the worker runs: a collection inside the worker would call Tcl from it ("main thread is not in main
+    # loop"), keep it alive past the join and crash the process later.
+    gc.collect()
+    gc.disable()
+    try:
+        rig.tab.startRun()
+        worker = rig.tab.worker
+        assert isinstance(worker, threading.Thread) and worker.name == "route-run" and worker.daemon
+        worker.join(10)
+        assert not worker.is_alive()
+    finally:
+        gc.enable()
 
     err = capsys.readouterr().err
     assert "Traceback" in err and "RuntimeError: boom in run" in err
@@ -963,3 +969,195 @@ def test_ended_text_code_10_with_a_replay(folder):
     assert (endedText(10, "off_graph/", folder, True)
             == f"Ended: the character was lost (exit 10) ({folder.name}). Replay is open.")
     assert endedText(10, "no_position/", folder, False) == "Ended: the character was lost (exit 10)."
+
+
+# ---- RT-8a: closing the app (spec 5.5 "Closing the app mid-run") and the Tk bans (spec 5.12) ----------------------
+
+CLOSE_GAVE_UP = "The run's cleanup did not finish in 10 s; closing anyway."
+
+
+def _close_polls(rig):
+    return [entry for entry in rig.scheduled if entry[1] == rig.tab._pollClose]
+
+
+def _run_close_poll(rig):
+    """Run the one pending close poll, as the root's `after` would 100 ms later."""
+    polls = _close_polls(rig)
+    assert polls == [(100, rig.tab._pollClose)]  # one close poll pending at any time
+    rig.scheduled.remove(polls[0])
+    polls[0][1]()
+
+
+def _hosted_view(monkeypatch, tab, calls):
+    """Fakes for the view RT-8b hosts (`tab.view`) and its LiveController (`tab.live`) that log their teardown."""
+    monkeypatch.setattr(tab, "live", SimpleNamespace(stop=lambda: calls.append("live.stop")))
+    monkeypatch.setattr(tab, "view", SimpleNamespace(destroy=lambda: calls.append("view.destroy")))
+
+
+def test_close_with_no_run_destroys_at_once(make_rig, capsys):
+    rig = make_rig()
+    destroyed = []
+    rig.tab.onAppClose(lambda: destroyed.append(1))
+    assert destroyed == [1] and _close_polls(rig) == []
+    assert capsys.readouterr().out == ""
+
+
+def test_close_takes_the_view_down_before_the_window(make_rig, monkeypatch):
+    rig = make_rig()
+    calls = []
+    _hosted_view(monkeypatch, rig.tab, calls)
+    rig.tab.onAppClose(lambda: calls.append("host"))
+    assert calls == ["live.stop", "view.destroy", "host"]  # RT-4 m3: the view's destroy() after its host raises
+
+
+def test_close_destroys_the_window_even_when_the_view_raises(make_rig, monkeypatch):
+    rig = make_rig()
+    calls = []
+
+    def bad_destroy():
+        raise tk.TclError('bad window path name ".!frame"')
+
+    monkeypatch.setattr(rig.tab, "view", SimpleNamespace(destroy=bad_destroy))
+    with pytest.raises(tk.TclError):
+        rig.tab.onAppClose(lambda: calls.append("host"))
+    assert calls == ["host"]
+
+
+@pytest.mark.parametrize("drain_first", [False, True])
+def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, capsys, drain_first):
+    rig = make_rig()
+    tab = rig.tab
+    made, thread = _start(rig)
+    made.on_event(_event("countdown", seconds_left=5))
+    tab.drainEvents()
+    calls = []
+    _hosted_view(monkeypatch, tab, calls)
+
+    def destroy():
+        calls.append("host")
+
+    tab.onAppClose(destroy)
+
+    assert made.stops == ["window_close"]
+    assert (tab.state, tab.status_var.get()) == ("stopping", STOPPING)
+    assert _state(tab.stop_button) == "disabled" and calls == [] and len(_close_polls(rig)) == 1
+
+    tab.onAppClose(destroy)  # pressed again while it waits: one poll loop, nothing more sent
+    assert made.stops == ["window_close"] and len(_close_polls(rig)) == 1
+
+    _run_close_poll(rig)  # the worker is still in its cleanup
+    assert calls == [] and len(_close_polls(rig)) == 1
+
+    made.on_event(_event("ended", "cancelled/window_close", code=0))
+    thread.finish()
+    if drain_first:  # the drain finds the worker dead before the close poll does, and gives the controls back
+        tab.drainEvents()
+        assert tab.worker is None and _state(tab.start_button) == "normal"
+    tab.startRun()  # no new run while the window waits to close
+    assert len(rig.sessions) == 1 and len(rig.threads) == 1
+
+    _run_close_poll(rig)
+
+    assert calls == ["live.stop", "view.destroy", "host"] and _close_polls(rig) == []
+    assert capsys.readouterr().out == ""  # no console line: the cleanup finished in time
+
+
+def test_close_destroys_after_10_s(make_rig, capsys):
+    now = [100.0]
+    rig = make_rig(clock=lambda: now[0])
+    tab = rig.tab
+    made, thread = _start(rig)  # a worker that never ends
+    destroyed = []
+
+    tab.onAppClose(lambda: destroyed.append(1))
+
+    for seconds in (100.1, 105.0, 109.9):
+        now[0] = seconds
+        _run_close_poll(rig)
+        assert destroyed == [], seconds
+    assert capsys.readouterr().out == ""
+    now[0] = 110.0
+    _run_close_poll(rig)
+
+    assert destroyed == [1] and _close_polls(rig) == []
+    assert capsys.readouterr().out == CLOSE_GAVE_UP + "\n"  # one console line
+    assert made.stops == ["window_close"] and thread.is_alive()  # never joined: a daemon, it dies with the process
+
+
+_MISC_CALLS = ("focus_set", "focus", "focus_force", "tkraise", "lift", "grab_set")
+_WM_CALLS = ("wm_attributes", "attributes", "wm_resizable", "resizable", "wm_overrideredirect", "overrideredirect",
+             "wm_transient", "transient", "wm_iconbitmap", "iconbitmap", "wm_iconphoto", "iconphoto")
+
+
+def test_no_window_style_or_focus_call_during_a_run(make_rig, monkeypatch):
+    """Spec 5.12 rules 2-3 at run time: patched on the classes, so a call on any widget and through any alias is seen
+    (`tk.Misc.focus is tk.Misc.focus_set`, yet each name is its own class attribute)."""
+    rig = make_rig()
+    tab = rig.tab
+    called = []
+
+    def recorder(name):
+        def record(*args, **kwargs):
+            called.append(name)
+        return record
+
+    targets = [(tk.Misc, name) for name in _MISC_CALLS] + [(tk.Wm, name) for name in _WM_CALLS]
+    targets.append((tk.Toplevel, "__init__"))
+    for module in (messagebox, filedialog, simpledialog):
+        functions = [name for name, _ in inspect.getmembers(module, inspect.isfunction)]
+        assert functions, module.__name__
+        targets += [(module, name) for name in functions]
+    for owner, name in targets:
+        monkeypatch.setattr(owner, name, recorder(f"{owner.__name__}.{name}"))
+
+    made, thread = _start(rig)
+    for event in [_event("status", CONNECTING), _event("countdown", seconds_left=2),
+                  _event("countdown", seconds_left=1), _event("running", "Running."),
+                  _event("warning", "Recording stopped: x. The walk goes on.")]:
+        made.on_event(event)
+        tab.drainEvents()
+    tab.stop_button.invoke()
+    tab.onAppClose(lambda: None)
+    made.on_event(_event("ended", "stopped/button", code=0))
+    thread.finish()
+    tab.drainEvents()
+    _run_close_poll(rig)
+
+    assert called == []
+    tab.runs_list.focus()  # the patches are seen through an instance and an alias
+    rig.gui.gui.attributes("-topmost", True)
+    assert called == ["Misc.focus", "Wm.attributes"]
+
+
+def test_route_tab_source_has_no_focus_or_dialog_names():
+    assert tk_bans.focus_problems(inspect.getsource(route_tab_module)) == []
+
+
+@pytest.mark.parametrize("snippet, problem", [
+    ("w = tk.Toplevel(root)", "line 1: .Toplevel"),
+    ("w = Toplevel(root)", "line 1: Toplevel"),
+    ("from tkinter import Toplevel", "line 1: from tkinter import Toplevel"),
+    ("box = ttk.Combobox(root)", "line 1: .Combobox"),
+    ("box = Combobox(root)", "line 1: Combobox"),
+    ("from tkinter.ttk import Combobox", "line 1: from tkinter.ttk import Combobox"),
+    ("root.iconbitmap('a.ico')", "line 1: .iconbitmap(...)"),
+    ("root.iconphoto(False, image)", "line 1: .iconphoto(...)"),
+    ("root.wm_iconbitmap('a.ico')", "line 1: .wm_iconbitmap(...)"),
+    ("root.wm_iconphoto(False, image)", "line 1: .wm_iconphoto(...)"),
+    ("entry.focus()", "line 1: .focus(...)"),
+    ("flags = ('-toolwindow', 1)", "line 1: '-toolwindow'"),
+    ("flags = ('-fullscreen', 1)", "line 1: '-fullscreen'"),
+])
+def test_tk_bans_find_each_added_entry(snippet, problem):
+    assert tk_bans.focus_problems(snippet) == [problem]
+
+
+def test_tk_bans_keep_the_view_tests_entries_and_allow_the_focus_reads():
+    planted = "\n".join(["w.focus_force()", "w.attributes('-topmost', True)", "import tkinter.messagebox",
+                         "from tkinter import filedialog", "from tkinter.simpledialog import askstring",
+                         "root.tk.call('wm', 'resizable', root, 1, 1)", "w.overrideredirect(True)", "w.lift()",
+                         "w.transient(root)", "w.grab_set()", "w.tkraise()", "w.focus_set()", "w.resizable(0, 0)"])
+    found = tk_bans.focus_problems(planted)  # test_10's planted sample (tests/route_view/test_view_window.py)
+    assert len(found) == 14, found
+    # spec 9's reaction reads Tk's own focus: a bare `.focus` attribute, focus_get() and the focus events stay allowed
+    assert tk_bans.focus_problems("handler = w.focus\nw.focus_get()\nw.bind('<FocusIn>', f)") == []

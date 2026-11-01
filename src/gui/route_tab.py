@@ -4,8 +4,8 @@ This module is `src.gui`'s one door to the run driver: it imports `src.route.ses
 (import-linter contract "gui reaches input only through the run driver"). The pure helpers below hold the words and the
 rules the tab shows (settings checks, the class key, the end-of-run texts, the countdown line); none of them touches Tk.
 `RouteTab` is the tab itself: the top area, the readiness line, Start, the run's worker thread, the 100 ms drain of its
-event queue with the dead-worker watchdog, and Stop (RT-8a). The close wait (RT-8a), the hosted view (RT-8b), the
-app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
+event queue with the dead-worker watchdog, Stop, and the close handler that waits for a live run's cleanup (RT-8a). The
+hosted view (RT-8b), the app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
 """
 import math
 import queue
@@ -185,7 +185,9 @@ RUNNING_TEXT = "Running. F12 or Stop ends the run. Clicking this app also stops 
 STOPPING_TEXT = "Stopping: releasing keys..."
 STOPPING_CONNECT_TEXT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
 
-POLL_MS = 100  # the drain's period (spec 5.5, 5.7)
+POLL_MS = 100  # the drain's period, and the close handler's (spec 5.5, 5.7)
+CLOSE_WAIT_S = 10  # the close handler destroys the window after this even if the run's cleanup has not finished (5.5)
+CLOSE_GAVE_UP_TEXT = "The run's cleanup did not finish in 10 s; closing anyway."  # its one console line
 RouteState = Literal["not_ready", "ready", "connecting", "countdown", "running", "stopping", "ended"]
 _LIVE_STATES: tuple[RouteState, ...] = ("connecting", "countdown", "running", "stopping")  # Start pressed, cleanup not done
 _IDLE_STATES: tuple[RouteState, ...] = ("not_ready", "ready", "ended")  # the readiness line is kept up to date here
@@ -258,6 +260,7 @@ class RouteTab:
         self._ended_seen = False  # this run's `ended` event has been drained (the watchdog's test)
         self._countdown_first: int | None = None  # this run's first countdown count (plan choice 4)
         self._written: tuple | None = None  # (inputs, text) of the readiness line's last write (plan choice 8)
+        self._closing: tuple[Callable[[], None], float] | None = None  # (destroy, clock at the press) while it waits
         self.state = "not_ready"
         self.view = None
         self.live = None
@@ -464,9 +467,48 @@ class RouteTab:
         return self.state in _LIVE_STATES
 
     def onAppClose(self, destroy: Callable[[], None]) -> None:
-        """The window's close button. RT-7 has no run to wait for, so the window goes at once; RT-8a makes it cancel a
-        live run and wait for the cleanup."""
-        destroy()
+        """The window's close button (spec 5.5 "Closing the app mid-run"). With no worker the window goes at once.
+        With one: `session.stop("window_close")`, "Stopping: releasing keys..." with nothing enabled, then a close
+        poll every 100 ms (`_pollClose`) until the worker has ended or 10 s have passed. A second press while it waits
+        does nothing, so there is one poll loop."""
+        if self._closing is not None:
+            return
+        if self.worker is None:
+            self._closeWindow(destroy)
+            return
+        self._closing = (destroy, self._clock())
+        if self.session is not None:
+            self.session.stop("window_close")  # first call wins: after Stop or an end it changes nothing
+        self.state = "stopping"
+        self.status_var.set(STOPPING_TEXT)
+        self.stop_button.configure(state="disabled")
+        self._gui.gui.after(POLL_MS, self._pollClose)
+
+    def _pollClose(self) -> None:
+        """One close poll: the worker gone (dead, or already cleared by a drain) → the window goes; still alive after
+        `CLOSE_WAIT_S` → one console line, and the window goes anyway (the worker is a daemon and dies with the
+        process); else the next poll in 100 ms."""
+        assert self._closing is not None  # only onAppClose schedules it
+        destroy, pressed = self._closing
+        worker = self.worker
+        if worker is not None and worker.is_alive():
+            if self._clock() - pressed < CLOSE_WAIT_S:
+                self._gui.gui.after(POLL_MS, self._pollClose)
+                return
+            print(CLOSE_GAVE_UP_TEXT)
+        self._closeWindow(destroy)
+
+    def _closeWindow(self, destroy: Callable[[], None]) -> None:
+        """The view first, then its host (RT-4 m3: `RouteViewWindow.destroy()` after its host is gone raises
+        TclError): the live view's polling stops, the view goes, then `destroy()`, which runs even if the view
+        raised."""
+        try:
+            if self.live is not None:
+                self.live.stop()
+            if self.view is not None:
+                self.view.destroy()
+        finally:
+            destroy()
 
     # -- Start (spec 5.4) ---------------------------------------------------------------------------------------------
 
@@ -474,8 +516,9 @@ class RouteTab:
         """The Start button: the field checks, then the six checks of spec 5.4 in order, stopping at the first that
         fails and writing its text to the status line (never a dialog). With all of them passed it builds the run's
         session from the settings, locks the controls, shows Connecting and starts the worker. A press while a worker
-        exists (Start greyed out but pressed anyway, or pressed again while Stopping) does nothing: one worker at most."""
-        if self.worker is not None:
+        exists (Start greyed out but pressed anyway, or pressed again while Stopping) does nothing: one worker at most.
+        Nor does one while the window waits to close (a drain may give Start back before the close poll runs)."""
+        if self.worker is not None or self._closing is not None:
             return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
         if settings is None:
