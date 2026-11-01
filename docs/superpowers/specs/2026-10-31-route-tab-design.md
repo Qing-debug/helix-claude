@@ -203,8 +203,8 @@ What the view area shows (H68, H69, H70):
   title's mode part reads `ended: <reason>` (as a replay's title does), or `ended` when no `end` line was read. A
   "Back to live minimap" button shows above the view area while such a kept view is shown; it drops the view and
   shows the idle live minimap. Start, or opening a saved run (5.11), also leaves the kept view.
-- A saved run opened from the list replaces what is shown with its replay, bar included (5.11). (waits for Hong:
-  RDO110-D2) The "Back to live minimap" button also shows under a replay and leads back the same way; Start leaves a
+- A saved run opened from the list replaces what is shown with its replay, bar included (5.11). (RDO110-D2 answer A)
+  The "Back to live minimap" button also shows under a replay and leads back the same way; Start leaves a
   replay as it leaves a kept view.
 
 ### 5.3 Run settings
