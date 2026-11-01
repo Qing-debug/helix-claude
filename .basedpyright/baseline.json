@@ -284,16 +284,16 @@
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 218,
-                    "endColumn": 238,
+                    "startColumn": 223,
+                    "endColumn": 243,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 220,
-                    "endColumn": 230,
+                    "startColumn": 225,
+                    "endColumn": 235,
                     "lineCount": 1
                 }
             },

@@ -32,7 +32,13 @@ CHARACTER_NOT_FOUND_REASONS = {
 
 
 class MapleGUI:
-    def __init__(self, controller = None, sharedInfo = None ):
+    # Built by _setupGUI (contract C4, docs/superpowers/plans/2026-10-31-route-tab.md): the window is a Notebook of the
+    # Setup tab (everything the window held before the Route tab) and the Route tab's frame.
+    notebook: ttk.Notebook
+    setup_tab: tk.Frame
+    route_tab_frame: tk.Frame
+
+    def __init__(self, controller = None, sharedInfo = None, *, route_tab_factory = None):
         self.minimap_canvas_width = None
         self.minimap_canvas_height = None
         self.minimap_canvas = None
@@ -41,6 +47,8 @@ class MapleGUI:
         self.gui = tk.Tk()
         self.gui_console = None #created in _setupGUI so it can be parented to the scrollable inner frame
         self.scrollable_frame = None #inner frame inside the scrolling canvas; parent for all content widgets
+        self._route_tab_factory = route_tab_factory  # called as factory(route_tab_frame, self) at the end of _setupGUI
+        self.route_tab = None  # the factory's product; None while the factory is None
         self.node_count = 0
         self.controller = controller
         self.sharedInfo = sharedInfo
@@ -58,8 +66,8 @@ class MapleGUI:
         self.gui.mainloop()
 
     def _setupScrollableContainer(self):
-        """Build the scrollable wrapper. Returns the inner Frame that should parent all content widgets."""
-        container = tk.Frame(self.gui)
+        """Build the scrollable wrapper in the Setup tab. Returns the inner Frame that should parent all content widgets."""
+        container = tk.Frame(self.setup_tab)
         container.pack(fill=tk.BOTH, expand=True)
 
         scroll_canvas = tk.Canvas(container, bg='lightblue', highlightthickness=0)
@@ -139,12 +147,30 @@ class MapleGUI:
         self.gui.bind('<Control-0>', self._zoomReset)
         self.gui.bind('<Control-MouseWheel>', self._onCtrlMouseWheel)
 
+    def isSetupTabShown(self):
+        return self.notebook.select() == str(self.setup_tab)
+
+    def _onClose(self):
+        """WM_DELETE_WINDOW: the Route tab decides when the window may go (it waits for a live run's cleanup)."""
+        if self.route_tab is None:
+            self.gui.destroy()
+        else:
+            self.route_tab.onAppClose(self.gui.destroy)
+
     def _setupGUI(self):
         self.gui.configure(bg='lightblue')
-        self.gui.geometry("1000x1000")
+        self.gui.geometry("1120x1000")
+        self.gui.protocol("WM_DELETE_WINDOW", self._onClose)
 
         self._captureBaseFontSizes()
         self._bindZoomShortcuts()
+
+        self.notebook = ttk.Notebook(self.gui)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.setup_tab = tk.Frame(self.notebook, bg='lightblue')
+        self.route_tab_frame = tk.Frame(self.notebook)
+        self.notebook.add(self.setup_tab, text="Setup")
+        self.notebook.add(self.route_tab_frame, text="Route")
 
         self.scrollable_frame = self._setupScrollableContainer()
         parent = self.scrollable_frame
@@ -152,17 +178,17 @@ class MapleGUI:
         self.gui_console = tk.Text(parent)
         self.gui_console.pack()
 
-        draw_blue_node_button = tk.Button(parent, text="draw blue node on character", command=self.drawBlueNodeOnCharacter)
-        draw_blue_node_button.pack(side=tk.TOP, pady=5)
+        self.draw_blue_node_button = tk.Button(parent, text="draw blue node on character", command=self.drawBlueNodeOnCharacter)
+        self.draw_blue_node_button.pack(side=tk.TOP, pady=5)
 
-        draw_orange_node_button = tk.Button(parent, text="draw orange node on character", command=self.drawOrangeNodeOnCharacter)
-        draw_orange_node_button.pack(side=tk.TOP, pady=5)
+        self.draw_orange_node_button = tk.Button(parent, text="draw orange node on character", command=self.drawOrangeNodeOnCharacter)
+        self.draw_orange_node_button.pack(side=tk.TOP, pady=5)
 
-        clear_gui_console_button = tk.Button(parent, text = "clear console", command = self.clearGUIConsole)
-        clear_gui_console_button.pack(side=tk.TOP, pady=5)
+        self.clear_gui_console_button = tk.Button(parent, text = "clear console", command = self.clearGUIConsole)
+        self.clear_gui_console_button.pack(side=tk.TOP, pady=5)
 
-        clear_gui_minimap_button = tk.Button(parent, text = "clear drawn nodes on minimap", command = self._clearDrawnNodesOnGUIMinimap)
-        clear_gui_minimap_button.pack(side=tk.TOP, pady=5)
+        self.clear_gui_minimap_button = tk.Button(parent, text = "clear drawn nodes on minimap", command = self._clearDrawnNodesOnGUIMinimap)
+        self.clear_gui_minimap_button.pack(side=tk.TOP, pady=5)
 
         # --- Character picker (above Load Map) ---
         character_picker_label = tk.Label(parent, text="Character:")
@@ -171,21 +197,21 @@ class MapleGUI:
         self._character_class_options = {cls.__name__: cls for cls in CharacterClass.__subclasses__()}
         # Empty-string sentinel is the dropdown's first entry — represents "no selection."
         self._character_picker_var = tk.StringVar(value="")
-        character_picker = ttk.Combobox(
+        self.character_picker = ttk.Combobox(
             parent,
             textvariable=self._character_picker_var,
             values=list(self._character_class_options.keys()),
             state="readonly",
             width=20,
         )
-        character_picker.pack(side=tk.TOP, pady=(0, 10))
-        character_picker.bind("<<ComboboxSelected>>", self._onCharacterPickerChange)
+        self.character_picker.pack(side=tk.TOP, pady=(0, 10))
+        self.character_picker.bind("<<ComboboxSelected>>", self._onCharacterPickerChange)
 
-        load_map_button = tk.Button(parent, text="Load Map (Browse...)", command=self._loadMapBrowse)
-        load_map_button.pack(side=tk.TOP, pady=5)
+        self.load_map_button = tk.Button(parent, text="Load Map (Browse...)", command=self._loadMapBrowse)
+        self.load_map_button.pack(side=tk.TOP, pady=5)
 
-        open_editor_button = tk.Button(parent, text="Open Map Editor", command=self._openMapEditor)
-        open_editor_button.pack(side=tk.TOP, pady=5)
+        self.open_editor_button = tk.Button(parent, text="Open Map Editor", command=self._openMapEditor)
+        self.open_editor_button.pack(side=tk.TOP, pady=5)
 
         #delete once we have no need for direct testing or move to a separate part of GUI for testing purposes only
         # parse_CSV_button = tk.Button(parent, text = "(delete or move to a separate tab on the GUI) parse CSV", command = self.controller.parseCSV)
@@ -195,24 +221,24 @@ class MapleGUI:
         # build_graph_button = tk.Button(parent, text = "(delete or move to a separate tab on the GUI) create edges", command = self.controller.buildGraph)
         # build_graph_button.pack(side=tk.TOP, pady=5)
 
-        setup_agent_button = tk.Button(parent, text = "(delete or move to a separate tab on the GUI) setup agent", command = self.mockSetupAgentEnvironment)
-        setup_agent_button.pack(side = tk.TOP, pady=5)
+        self.setup_agent_button = tk.Button(parent, text = "(delete or move to a separate tab on the GUI) setup agent", command = self.mockSetupAgentEnvironment)
+        self.setup_agent_button.pack(side = tk.TOP, pady=5)
 
         #delete once we have no need for direct testing or move to a separate part of GUI for testing purposes only
-        display_graph_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to visualise the graph", command=self._drawGraph)
-        display_graph_button.pack(side=tk.TOP, pady=5)
+        self.display_graph_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to visualise the graph", command=self._drawGraph)
+        self.display_graph_button.pack(side=tk.TOP, pady=5)
 
         #delete once we have no need for direct testing or move to a separate part of GUI for testing purposes only
-        connect_character_node_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to add character node to graph (node is d in just for testing purposes only)", command=self.controller.connectCharacterNode)
-        connect_character_node_button.pack(side=tk.TOP, pady=5)
+        self.connect_character_node_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to add character node to graph (node is d in just for testing purposes only)", command=self.controller.connectCharacterNode)
+        self.connect_character_node_button.pack(side=tk.TOP, pady=5)
         #
         #delete once we have no need for direct testing or move to a separate part of GUI for testing purposes only
-        delete_node_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to delete character node from graph (node is hardcoded in just for testing purposes only)", command=self.controller.deleteNode)
-        delete_node_button.pack(side=tk.TOP, pady=5)
+        self.delete_node_button = tk.Button(parent, text="(delete or move to a separate tab on the GUI) used to delete character node from graph (node is hardcoded in just for testing purposes only)", command=self.controller.deleteNode)
+        self.delete_node_button.pack(side=tk.TOP, pady=5)
 
         # delete once we have no need for direct testing
-        get_path = tk.Button(parent, text="(delete after done testing) used get the path to goal node", command=self.showPathToGoalNode)
-        get_path.pack(side=tk.TOP, pady=5)
+        self.get_path_button = tk.Button(parent, text="(delete after done testing) used get the path to goal node", command=self.showPathToGoalNode)
+        self.get_path_button.pack(side=tk.TOP, pady=5)
 
         #delete once we have no need for direct testing of the setup_agent function
         # setup_agent = tk.Button(parent, text="(delete after done testing) setup agent", command=self.controller.setupAgent)
@@ -228,6 +254,11 @@ class MapleGUI:
         # arrives; until then this label stands where it will go, and the buttons that need it say so in the console.
         self.minimap_status_label = tk.Label(parent, text=MINIMAP_NOT_FOUND_LABEL, bg='lightblue')
         self.minimap_status_label.pack(side=tk.TOP, pady=10)
+
+        # The Route tab goes last so its constructor can read every Setup-tab widget (and the focus bindings that
+        # call it, RT-9, bind after this line). With no factory the tab stays an empty frame and route_tab is None.
+        if self._route_tab_factory is not None:
+            self.route_tab = self._route_tab_factory(self.route_tab_frame, self)
 
     def _minimapReady(self):
         """True once the minimap area exists. Before that, say so in the console and return False: the buttons that

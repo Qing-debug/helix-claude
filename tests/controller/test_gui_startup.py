@@ -32,23 +32,27 @@ def _lock_is_free(shared) -> bool:
     return free
 
 
-def _open_window(shared):
+def _open_window(shared, **options):
     """A MapleGUI on a new Tk root. On the dev PC, Tk now and then fails to read its own init files ("couldn't read
     file ... init.tcl: No error") for a moment, so try a few times before skipping the test."""
     for attempt in range(4):
         try:
-            return gui_module.MapleGUI(controller=Controller(sharedInfo=shared), sharedInfo=shared)
+            return gui_module.MapleGUI(controller=Controller(sharedInfo=shared), sharedInfo=shared, **options)
         except tk.TclError as err:
             if attempt == 3:
                 pytest.skip(f"Tk cannot open a display here: {err}")
             threading.Event().wait(0.3)  # not time.sleep: one test patches it to prove the window never sleeps
 
 
+_FACTORY_DEFAULT = object()  # "not given": MapleGUI's own default applies; None is a real value (no Route tab)
+
+
 @pytest.fixture
 def make_gui(monkeypatch):
     """A set-up window (its `_setupGUI` run) with no minimap frame yet; `after` only records, so nothing is re-run.
     `time.sleep` raises for the whole test: the old startup wait (sleep 5 s, then retry every 10 s) must make a test
-    fail at once, not hang it."""
+    fail at once, not hang it. `make(route_tab_factory=...)` is handed to `MapleGUI` only when given, so the tests of
+    the Route tab can pass a fake and the rest get MapleGUI's default (src/gui/CLAUDE.md)."""
     made = []
 
     def no_sleep(seconds):
@@ -56,9 +60,10 @@ def make_gui(monkeypatch):
 
     monkeypatch.setattr(time, "sleep", no_sleep)
 
-    def make(frame=None):
+    def make(frame=None, route_tab_factory=_FACTORY_DEFAULT):
         shared = _shared(frame)
-        gui = _open_window(shared)
+        options = {} if route_tab_factory is _FACTORY_DEFAULT else {"route_tab_factory": route_tab_factory}
+        gui = _open_window(shared, **options)
         made.append(gui)
         gui.gui.withdraw()
         scheduled = []
