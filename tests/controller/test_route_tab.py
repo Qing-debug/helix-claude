@@ -1036,6 +1036,33 @@ def test_drain_collects_about_every_second_while_the_worker_lives(make_rig, gc_c
     assert gc_calls == [("collect", MAIN)] * 2 + [("unfreeze", MAIN), ("collect", MAIN), ("enable", MAIN)]  # no worker: no more
 
 
+class _Garbage:
+    """An object in a reference cycle (it holds itself), so only the cycle collector frees it."""
+
+    def __init__(self):
+        self.cycle = self
+
+
+def test_garbage_frozen_at_start_is_freed_on_the_tk_thread_when_the_worker_is_cleared(make_rig):
+    """RDO110-R m1: what exists at Start is frozen (the drain's collections skip it), so cyclic garbage that was
+    reachable at Start and is dropped during the run is freed only by `_clearWorker`'s collection after the unfreeze,
+    on the Tk thread (RT-8a I1, ruling orch 108). With that collection removed, nothing frees it."""
+    rig = make_rig()
+    freed = []
+    junk = _Garbage()
+    weakref.finalize(junk, lambda: freed.append(threading.current_thread().name))
+    _, thread = _start(rig)  # Start's own collection runs before the freeze, and `junk` is still reachable: it is frozen
+    del junk  # now cyclic garbage in the permanent generation
+    for _ in range(route_tab_module.GC_EVERY_POLLS):
+        rig.tab.drainEvents()  # the periodic collection walks only what the run made since Start
+    assert freed == []
+
+    thread.finish()
+    rig.tab.drainEvents()
+
+    assert freed == [MAIN] and rig.tab.worker is None and gc.isenabled()
+
+
 @pytest.fixture
 def collections():
     """The name of the thread each garbage collection ran on, automatic or called, during the test."""
