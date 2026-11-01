@@ -637,6 +637,18 @@ def test_load_folder_fails_when_the_folder_has_no_run(tmp_path):
     assert isinstance(result, Failure) and str(tmp_path) in result.failure()
 
 
+@pytest.mark.parametrize("header_changes, events, error", [
+    ({"wall_ns": 10**30}, None, "OverflowError"),  # `datetime.fromtimestamp` past time_t
+    ({"wall_ns": -10**18}, None, "OSError"),  # Windows: Errno 22 for a time before 1970 or after year 3000
+    ({}, [("leg", 1.0, 0, 0, None, (113, 60)), ("stall", 2.0, "x")], "ValueError"),  # a wrong-typed field
+])
+def test_load_folder_fails_on_a_value_it_cannot_show(tmp_path, header_changes, events, error):
+    folder = make_folder(tmp_path, events, default_header(perf_ns=5_000_000_000, **header_changes))
+    result = load_folder(folder, repo_root=REPO_ROOT, current_git_head=GIT_HEAD)
+    assert isinstance(result, Failure), result
+    assert str(folder) in result.failure() and "cannot show the run" in result.failure() and error in result.failure()
+
+
 def test_why_time_of_day_rounds_to_the_millisecond_and_carries_into_the_second(tmp_path):
     # `_stamp` rounds the whole time to ms before it splits it, so a half millisecond goes up and 999.5 ms carries.
     wall, perf = 1_761_900_000_000_000_000, 5_000_000_000  # wall is a whole second

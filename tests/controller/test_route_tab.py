@@ -2649,6 +2649,26 @@ def test_damaged_run_row_and_open_error(make_rig, tmp_path):
     assert tab.status_var.get() == "unreadable"  # kept until a readiness input changes (choice 8)
 
 
+def test_open_a_run_that_cannot_be_shown_puts_the_reason_on_the_status_line(make_rig, tmp_path):
+    """RT-final-R-ADJ-D1 = A: a run whose header time is out of range (the real `load_folder`) fails to open with its
+    reason on the status line, as the other load errors do; the shown view stays and nothing goes to the console (H72)."""
+    rig = _hosting_rig(make_rig, tmp_path, cls=ConsoleLinesTab)
+    tab = rig.tab
+    folder = _saved_replay(rig)
+    _fill(rig)
+    _open(rig)
+    view, log = tab.view, list(rig.log)
+    assert view is not None and tab._backShown()
+    view_runs.make_folder(folder, G, view_runs.default_header(wall_ns=10**30, perf_ns=5_000_000_000))
+    status, console = tab.status_var.get(), len(tab.console)
+    _open(rig)
+    assert rig.loads == [folder, folder]
+    assert status != tab.status_var.get() and str(folder) in tab.status_var.get()
+    assert "OverflowError" in tab.status_var.get()
+    assert tab.view is view and rig.log == log and _one_view(tab) and tab._backShown()
+    assert tab.console[console:] == []
+
+
 def test_open_with_no_row_selected_says_so_in_the_console(make_rig, tmp_path):
     """H72: a press on Open that opens nothing would be silent, so it prints one error line "Replay not opened: <the
     reason>" in the console box and changes neither the view nor the status line."""
