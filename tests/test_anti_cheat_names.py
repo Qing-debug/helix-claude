@@ -71,6 +71,32 @@ def test_the_scan_can_fail(tmp_path):
     ]
 
 
+def test_each_banned_name_is_caught(tmp_path):
+    """Pins all 15 joined names (RT-11-R m1): each line plants one name, written with split points other than
+    BANNED's, so a typo in any piece of BANNED (or a name dropped or reordered) leaves its line without its hit."""
+    planted = (
+        "GetFore" + "groundWindow",
+        "EnumW" + "indows",
+        "EnumPro" + "cesses",
+        "CreateTool" + "help32Snapshot",
+        "Op" + "enProcess",
+        "FindW" + "indow",
+        "GetWin" + "dowText",
+        "GetCla" + "ssName",
+        "GetWindowThread" + "ProcessId",
+        "TASK" + "LIST",
+        "get-pro" + "cess",
+        "PSU" + "TIL",
+        "ims" + "how",
+        "namedW" + "indow",
+        "waitK" + "ey",
+    )
+    fixture = tmp_path / "fixture.py"
+    fixture.write_text("\n".join(planted) + "\n", encoding="utf-8")
+    assert len(BANNED) == len(planted) == 15
+    assert banned_names([fixture]) == [f"{fixture}:{i}: {name}" for i, name in enumerate(BANNED, start=1)]
+
+
 def test_scope():
     names = {p.relative_to(REPO).as_posix() for p in scanned_files(REPO)}
     assert "src/gui/gui.py" in names
