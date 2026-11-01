@@ -229,8 +229,13 @@ def build_app(holder: FrameHolder, setup: SimSetup, *, run_root: Path, new_out: 
 
 
 def run_app(holder: FrameHolder, setup: SimSetup, run_root: Path, laps: int) -> str | None:
-    """The "app" mode: the window, Start pressed by the tool, the window closed once the tab is Ended and its worker
-    gone. None when the run went through the tab, else why it did not start."""
+    """The "app" mode: the window, Start pressed by the tool, the window closed once the tab's worker is gone. None
+    when the run went through the tab, else why it did not start.
+
+    The watch waits for the worker, not for the Ended state: the drain step that clears a dead worker has shown the
+    run's end (`ended`, or the watchdog's) and then refreshes readiness in the same step, which turns Ended into Ready
+    when the fields changed since its last look, as they do here (set in the same call as Start). Whether the run
+    finished is read from its `steps.jsonl` afterwards (`read_sends`)."""
     built = build_app(holder, setup, run_root=run_root, new_out=lambda: run_root / "app", app_focus=False)
     if not is_successful(built):
         return built.failure()
@@ -239,7 +244,7 @@ def run_app(holder: FrameHolder, setup: SimSetup, run_root: Path, laps: int) -> 
 
     def watch() -> None:
         tab = gui.route_tab
-        if tab is not None and tab.state == "ended" and tab.worker is None:
+        if tab is not None and tab.worker is None:  # armed only once Start started a worker
             gui.gui.destroy()
         else:
             gui.gui.after(WATCH_MS, watch)

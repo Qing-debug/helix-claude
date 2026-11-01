@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from returns.result import Success
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))  # the tool is a script, not a package
@@ -249,6 +250,76 @@ def test_cli_refusal_opens_no_window(monkeypatch, tmp_path):
     assert route_tab_sim.measure(runtime.SharedFrame(), None, tmp_path, laps=2) == 2
     assert opened == []
     assert json.loads((tmp_path / "timing.json").read_text(encoding="utf-8"))["over_threshold"] is None
+
+
+class _Var:
+    def __init__(self, value: str = ""):
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+class _FakeRoot:
+    """Tk's `after`, `destroy` and `mainloop` on a virtual clock (no window); the loop gives up after `cap` calls."""
+
+    def __init__(self, cap: int = 1000):
+        self.now = 0
+        self.calls: list[tuple[int, int, object]] = []
+        self.destroyed = False
+        self.cap = cap
+
+    def after(self, ms, fn) -> None:
+        self.calls.append((self.now + ms, len(self.calls), fn))
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+    def mainloop(self) -> None:
+        for _ in range(self.cap):
+            if self.destroyed or not self.calls:
+                return
+            self.calls.sort(key=lambda call: call[:2])
+            self.now, _, fn = self.calls.pop(0)
+            fn()
+
+
+class _FakeTab:
+    """The Route tab as `run_app` sees it. Its run ends as the real drain step ends one (`RouteTab.drainEvents`): the
+    `ended` is shown, the dead worker is cleared, then the readiness refresh runs in the same step, and because the
+    tool set the fields in the same call as Start (no drain saw them), it finds them changed and turns Ended into
+    Ready (`RouteTab._refreshReadiness`)."""
+
+    def __init__(self, root: _FakeRoot):
+        self.root = root
+        self.state = "ready"
+        self.worker = None
+        self.laps_var, self.minutes_var, self.countdown_var = _Var(), _Var(), _Var("5")
+        self.status_var = _Var("Ready")
+
+    def startRun(self) -> None:
+        self.worker = object()
+        self.state = "connecting"
+        self.root.after(3000, self._drain_finds_the_worker_dead)
+
+    def _drain_finds_the_worker_dead(self) -> None:
+        self.state = "ended"
+        self.worker = None
+        self.state = "ready"
+
+
+def test_app_run_closes_the_window_once_the_worker_is_gone(monkeypatch, tmp_path):
+    root = _FakeRoot()
+    tab = _FakeTab(root)
+    gui = SimpleNamespace(gui=root, route_tab=tab, route_tab_frame=None, notebook=SimpleNamespace(select=lambda f: None),
+                          start=root.mainloop)
+    monkeypatch.setattr(route_tab_sim, "build_app", lambda *a, **k: Success(gui))
+    assert route_tab_sim.run_app(runtime.SharedFrame(), None, tmp_path, laps=14) is None
+    assert root.destroyed
+    assert (tab.laps_var.get(), tab.minutes_var.get(), tab.countdown_var.get()) == ("14", "", "1")
 
 
 def test_tool_never_names_the_board():
