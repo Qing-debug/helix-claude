@@ -473,7 +473,7 @@ tab is not shown, so the walker shares the interpreter with one redraw (the Rout
 while the bot walks, and when shown it draws only while the Route tab is in front. The cost of
 running the walker inside the app is not measured (RVT92 [review], route-view spec 5.6): the plan adds a measurement
 step that compares the `sent` events' `reaction_ms` and `waited_ms` of an in-app simulator run with a CLI simulator run.
-Who runs it (waits for Hong: RTP96-RB-D1): an agent under answer A, Hong under answer B (6.3 gives both wordings).
+Who runs it: an agent, on an idle PC (Hong's answer A, H75; 6.3).
 
 The mousewheel handler (`gui.py:81-85`) acts only while the Setup tab is shown, so wheel events over the Route tab's
 canvas and slider are not taken by the Setup tab's scroll canvas.
@@ -686,14 +686,12 @@ including `view_check`) with:
 
 Replace the bullet "Never open a route-view replay ... H-1, has not run yet" with:
 
-> - A walk starts only from the Route tab's Start button or `python -m src.route.walk --supervised`, and only with Hong's go: an agent never presses Start and never runs the walk against the board (tests drive `RunSession` with fake links). During a run the app opens no window and changes no window style (spec `docs/superpowers/specs/2026-10-31-route-tab-design.md` 5.12). Never open a standalone replay (`python -m src.route_view`) while a walk runs: a new window takes focus when clicked, and the board's keys go to whichever window has focus.
+> - A walk starts only from the Route tab's Start button or `python -m src.route.walk --supervised`, and only with Hong's go: an agent never presses Start in the app (`python -m src.main`) and never runs the walk against the board (tests drive `RunSession` with fake links); it may run the simulator tool `tools/route_tab_sim.py measure`, which has no board and sends no key, on an idle PC (H15). The manual-mode check (`tools/route_tab_sim.py manual`) stays Hong's (H75). During a run the app opens no window and changes no window style (spec `docs/superpowers/specs/2026-10-31-route-tab-design.md` 5.12). Never open a standalone replay (`python -m src.route_view`) while a walk runs: a new window takes focus when clicked, and the board's keys go to whichever window has focus.
 > - Hong's anti-cheat standing fact (H56): while MapleStory runs, nothing of ours may read or write its memory, open, query or enumerate its process or window, or ask Windows which window is in front. `tests/test_anti_cheat_names.py` fails if a banned call name appears outside `src/input/harness/`, whose tools run only with MapleStory closed.
 
-(waits for Hong: RTP96-RB-D1) The "A walk starts only ..." bullet is written for answer B: the rule stays as it is
-and Hong runs the in-app timing measurement (5.7). Answer A changes one sentence: its clause "an agent never presses Start and never runs
-the walk against the board" becomes "an agent never presses Start in the app (`python -m src.main`) and never runs the
-walk against the board; it may run the simulator tool `tools/route_tab_sim.py measure`, which has no board and sends no
-key, on an idle PC (H15)". The rest of the bullet is the same under both answers.
+Hong's answer A (H75, RTP96-RB-D1) narrowed the first sentence of that bullet: the rule is about the real app and the
+board, so an agent may run the simulator-only timing tool `tools/route_tab_sim.py measure` on an idle PC, and the
+manual-mode check stays Hong's.
 
 In the H15 bullet, replace "MapleStory is not running (the tools' own check still applies and is never bypassed)" with
 this text (Hong's RVT95-1 pick, H66):
@@ -889,7 +887,7 @@ Rough order (RVT92 section 5, adjusted): (1) `session.py` from `walk.main`, walk
 (first confirm the inferred `focus_get()` behaviour there); (7) live background from `SharedInfo`, time of day; (8)
 saved-run list; (9) contracts, anti-cheat name test, removals, and the capture loop's `imshow`/`waitKey` pair becoming
 one `time.sleep` (5.12-5); (10) docs and safety text (section 6.3);
-(11) the in-app timing measurement (5.7; who runs it waits for Hong: RTP96-RB-D1, see 6.3); (12) the recording size measurement: record frames for a timed stretch
+(11) the in-app timing measurement (5.7; an agent runs it, H75, see 6.3); (12) the recording size measurement: record frames for a timed stretch
 with no keys sent (the recorder over `SharedInfo` with the game's minimap visible, or a simulator run with recording
 on), compute MB per hour from the `frames/` folder size, and set Start's free-space refusal (2 GB) and the recorder's
 floor (1 GB) from it (5.11), with the measured rate replacing "about 0.5 GB per hour" in the tab's Recording line.

@@ -2425,3 +2425,35 @@ Cost if wrong: about 5-8 lines in 3 files (option B).
 Undo: Hong says so.
 
 Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-7); `.superpowers/orchestrator/2026-10-21-phase1/notes/RV-redo.md` section 2.
+
+## H75 (2026-11-01): An agent may run the simulator-only timing tool; the real app and the board stay Hong's (QA108-5, RTP96-RB-D1)
+
+Question: the route tab's safety rule says "an agent never presses Start", but the in-app timing measurement (plan RT-12 step 5, `tools/route_tab_sim.py measure`) presses Start in a simulator copy of the app, with no board, no game and no key sent. May an agent run it? Options: A narrow the rule to the real app and the board, and the agent runs it; B keep the rule and Hong runs it (hands item H-4).
+
+Ruling [Hong]: option A. His pick, verbatim: "Narrow the rule: an agent never presses Start in the real app (python -m src.main) and never walks with the board; it may run the simulator-only timing tool on an idle PC. The manual-mode check stays yours."
+
+Reason: not given beyond the pick.
+
+Affects: the tab spec 5.7, 6.3 (the walk bullet's first sentence) and section 11 step 11; the root `CLAUDE.md` safety rules (a walk bullet carrying the narrowed rule); plan RT-8b, RT-12 (Files and step 5), RT-14 and the hands list (H-4 is dropped; H-2, the manual check, stays Hong's). The H15 standing permission and the MapleStory question are unchanged. No code.
+
+Cost if wrong: a one-sentence text change in 3 files, and an H-4 row back in the plan (option B).
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-5); `.superpowers/orchestrator/2026-10-21-phase1/notes/DOC112.md`.
+
+## H76 (2026-11-01): `walker.py` stays frozen except for the step observer and the `log` keyword (orchestrator ruling, orch 111; RT-8c piece 4b, H71)
+
+Question: H71 sends every line a run prints to the app's console box, but `RouteWalker` (frozen, `src/route/CLAUDE.md`) printed two of those lines straight to stderr. May `walker.py` change?
+
+Ruling [orchestrator, orch 111; not Hong's decision]: yes, for exactly one thing, the `log` keyword. `walker.py` gets the module-level `_print_error` (the old stderr print) and `RouteWalker(..., *, observer=None, log=_print_error)` stored as `_log_line`, and the two lines that used to print (the sink-failure line and the observer-failure line) call `self._log_line`. With no `log` given they print exactly as before. `RunSession` passes its own `log`. Nothing else in the file changes; the other exception is the step observer (H53). This is the same sentence as the Frozen bullet of `src/route/CLAUDE.md` (commit 9715a11).
+
+Reason: H71 (Hong: "dont use the teerminal. Use the app's console box.") covers every run line, and the walker's two prints were among them; a keyword with a print default keeps the CLI unchanged and the frozen file's behaviour the same.
+
+Affects: `src/route/walker.py` (`_print_error`, the `log` keyword, `_log_line`), its test `test_7_the_guard_and_a_sink_failure_report_through_log`, `src/route/CLAUDE.md` Frozen bullet. Built in commit 66eceb2.
+
+Cost if wrong: a few keyword lines to drop from `walker.py` and its call sites.
+
+Undo: remove the `log` keyword from `RouteWalker` and the argument `RunSession` passes to it; restore the two prints.
+
+Pointer: `.superpowers/sdd/2026-10-31-route-tab/progress.md` (RDO110-4b2 entry, "ruling orch 111"); commits 66eceb2 and 9715a11.
