@@ -424,7 +424,8 @@ class RunModel:
     def extend(self, events: Sequence[StepEvent]) -> None:
         """Append `events`: the why lines, the slots and the indexes are built for the new ones only. An event whose
         handler raises is not added (nor its time kept), so `events` and the slots stay in step and a caller that keeps
-        the model (the live follower) can go on; the events before it stay added (RT-ADJ-2 [review])."""
+        the model (the live follower) can go on; the events before it stay added (RT-ADJ-2 [review]). A caller must
+        therefore not retry a whole batch after a rejection."""
         for event in events:
             i = len(self.events)
             t0, last_t = self._t0, self._last_t
@@ -709,8 +710,8 @@ class RunModel:
 
 def load_folder(folder: Path, *, repo_root: Path, current_git_head: str | None) -> Result[RunModel, str]:
     """`read_run` + the frame index + `RunModel.open` + `extend` + `add_frames`. Failure when `read_run` fails, or when
-    `extend` raises on a line holds a value the model cannot show (a damaged or hand-edited file: a time out of range,
-    a wrong-typed field); the text names the folder and the exception."""
+    `extend` raises on a line that holds a value the model cannot show (a damaged or hand-edited file: a time out of
+    range, a wrong-typed field); the text names the folder and the exception."""
     folder = Path(folder)
     run = read_run(folder)
     if not is_successful(run):
