@@ -11,7 +11,8 @@ H70). Every line a run in the app prints (the worker's traceback, the session's 
 minimap's errors) goes to the Setup tab's console box, not the terminal, through `_toConsole` (H71; RDO110-D3 A). The
 app-focus flag and its stop (RT-9), and the saved-run list (spec 5.11, RT-10): its rows (`savedRuns`, `formatSize`),
 filled by `startPolling` and Refresh, with each folder's size summed off the Tk thread (`folderSize`, the
-`saved-run-sizes` thread) and drained like the run's events.
+`saved-run-sizes` thread) and drained like the run's events, and Open, which hosts the selected run's replay in place of
+the idle minimap or a kept run view.
 """
 import contextlib
 import gc
@@ -175,6 +176,9 @@ def countdownText(first: int, left: int) -> str:
 SIZE_PENDING_TEXT = "size ..."  # a row's size until the size thread has summed its folder
 _UNREAD = "?"  # a field of a row that cannot be read
 _SESSION_FILE = "session.json"  # the run's settings, as `session.py` writes them (`_SESSION` there)
+# H72's console line ("Replay not opened: <the reason>") for an Open that would otherwise say nothing; the reason's
+# words are RT-10's (RT-10-D1, provisional)
+NO_ROW_SELECTED_TEXT = "Replay not opened: no saved run is selected"
 
 
 class SavedRun(NamedTuple):
@@ -440,7 +444,7 @@ class RouteTab:
         tk.Label(header, text="Saved runs").pack(side=tk.LEFT)
         self.refresh_button = tk.Button(header, text="Refresh", command=self.refreshSavedRuns)
         self.refresh_button.pack(side=tk.RIGHT)
-        self.open_button = tk.Button(header, text="Open")
+        self.open_button = tk.Button(header, text="Open", command=self.openSavedRun)
         self.open_button.pack(side=tk.RIGHT, padx=8)
         listing = tk.Frame(saved)
         listing.pack(side=tk.TOP, fill=tk.X)
@@ -983,3 +987,29 @@ class RouteTab:
             yield listbox
         finally:
             listbox.configure(state=state)
+
+    def openSavedRun(self) -> None:
+        """Open (spec 5.11): load the selected run with `load_run` (`load_folder`, with the HEAD `startPolling` read)
+        and host it as a replay in place of the idle live minimap or a kept run view (spec 5.2, H69, H70): the shown
+        view goes (`_dropView`), the minimap is hidden, the replay is built in `view_frame` and "Back to live minimap"
+        shows over it (`_showBack`, RDO110-D2 answer A). The status line keeps its text. A load that fails puts its
+        error on the status line and leaves the view as it was (so no load is silent, H72); with no row selected
+        nothing loads and the console box gets H72's one line. While the run's worker exists it does nothing, even if
+        called directly (the list and Open are greyed out then): `load_folder` redirects stdout process-wide, as the
+        run's map load on the worker does, and two overlapping redirects leave stdout on a dead buffer (DBG115). Start
+        drops a replay before its worker starts, so no run ends while one is shown (`_onEnded` never sees it)."""
+        if self.worker is not None:
+            return
+        selected = self.runs_list.curselection()
+        if not selected:
+            self._toConsole(NO_ROW_SELECTED_TEXT, True)
+            return
+        folder = self._saved[selected[0]].folder
+        loaded = self._load_run(folder, repo_root=_REPO, current_git_head=self._head)
+        if not is_successful(loaded):
+            self.status_var.set(loaded.failure())
+            return
+        self._dropView()
+        self._hideMinimap()
+        self.view = self._make_view(self.view_frame, folder, loaded.unwrap(), live=False)
+        self._showBack()

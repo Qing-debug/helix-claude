@@ -1741,8 +1741,8 @@ def test_back_to_live(make_rig, tmp_path):
 
 
 def _host_replay(rig, folder):
-    """A saved run's replay hosted as RT-10's Open will host it: the idle minimap hidden, the replay in `view_frame`,
-    the Back button shown (`_showBack`). Open is not built yet (RT-10), so this stands in for it."""
+    """A saved run's replay hosted by hand as Open hosts it: the idle minimap hidden, the replay in `view_frame`, the
+    Back button shown (`_showBack`). Built for RDO110-D2 before Open existed; `test_back_from_a_replay` drives Open."""
     tab = rig.tab
     _write_run(folder, G)
     tab._hideMinimap()
@@ -2439,3 +2439,179 @@ def test_format_size():
     assert formatSize(0) == "0 MB"
     assert formatSize(int(999.4 * 2**20)) == "999 MB"
     assert formatSize(int(999.6 * 2**20)) == "1.0 GB"  # 1000 MB once rounded: shown in GB
+
+
+# ---- RT-10: Open (spec 5.11; H69, H70, RDO110-D2 answer A, H72, DBG115) -------------------------------------------
+
+NO_ROW_SELECTED = "Replay not opened: no saved run is selected"
+
+
+def _saved_replay(rig, name="2026-10-30T090000Z"):
+    """A whole saved run (G, its map, no `session.json`) under the rig's run root."""
+    folder = rig.run_root / name
+    _write_run(folder, G)
+    return folder
+
+
+def _fill(rig):
+    """The first fill (`startPolling`), its sizes summed and drained."""
+    rig.tab.startPolling()
+    rig.tab.size_thread.join()
+    rig.tab.drainEvents()
+
+
+def _open(rig, row=0):
+    rig.tab.runs_list.selection_set(row)
+    rig.tab.open_button.invoke()
+
+
+class ConsoleLinesTab(RouteTab):
+    """Records every console-box line as (text, error) instead of writing it."""
+
+    def __init__(self, *args, **kwargs):
+        self.console = []
+        super().__init__(*args, **kwargs)
+
+    def _toConsole(self, text, error):
+        self.console.append((text, error))
+
+
+def test_open_loads_a_replay(make_rig, tmp_path):
+    calls = []
+
+    def load_run(folder, **kwargs):
+        calls.append((folder, kwargs))
+        return load_folder(folder, **kwargs)
+
+    rig = _hosting_rig(make_rig, tmp_path, load_run=load_run)
+    tab = rig.tab
+    folder = _saved_replay(rig)
+    _fill(rig)
+    _open(rig)
+    assert calls == [(folder, {"repo_root": route_tab_module._REPO, "current_git_head": HEAD})]  # the polled HEAD
+    view = tab.view
+    assert view is rig.views[0] and not view.live and view.folder == folder and tab.live is None
+    assert view.model is not None and len(view.model.events) == len(G) and _one_view(tab) and tab._backShown()
+
+
+@pytest.mark.parametrize("shown", ["minimap", "kept_view"])
+def test_open_replaces_the_minimap_and_a_kept_view(make_rig, tmp_path, shown):
+    """Spec 5.11, H69, H70 (the RT-8c amendment): Open's replay takes the place of the idle live minimap or of a run's
+    kept view, which goes; "Back to live minimap" shows over it (RDO110-D2 A). The status line keeps its text, and
+    the drains after it leave the replay alone (RDO110-3: `_onEnded` runs only for a run's end, and Start drops a
+    replay before any run can end)."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    folder = _saved_replay(rig)
+    if shown == "kept_view":
+        _kept_run(rig)
+    status, log = tab.status_var.get(), list(rig.log)
+    _fill(rig)
+    draws = minimap.draws
+    _open(rig)
+    replay = rig.views[-1]
+    assert tab.view is replay and not replay.live and replay.folder == folder and _one_view(tab)
+    assert tab._backShown() and minimap.canvas not in _packed(tab)
+    assert rig.log[len(log):] == (["view0.destroy"] if shown == "kept_view" else [])
+    for _ in range(2):
+        tab.drainEvents()
+    assert tab.view is replay and _one_view(tab) and tab._backShown() and minimap.draws == draws  # not drawn under it
+    assert tab.status_var.get() == status and rig.log[len(log):] == (["view0.destroy"] if shown == "kept_view" else [])
+
+
+def test_back_from_a_replay(make_rig, tmp_path):
+    """RDO110-D2 answer A through the real Open: Back drops the replay and shows the idle live minimap, drawn again
+    from the next drain on; the button hides and the status line keeps its text."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    _saved_replay(rig)
+    _fill(rig)
+    status = tab.status_var.get()
+    _open(rig)
+    assert tab.view is rig.views[0] and tab._backShown()
+    draws = minimap.draws
+    tab.back_button.invoke()
+    assert tab.view is None and tab.live is None and _packed(tab) == [minimap.canvas] and not tab._backShown()
+    assert rig.log == ["view0.destroy"] and tab.status_var.get() == status
+    tab.drainEvents()
+    assert minimap.draws == draws + 1
+
+
+def test_list_disabled_while_live(make_rig, tmp_path):
+    """Spec 5.11: the list, Open and Refresh are disabled while a run is live, and pressing them does nothing; they
+    come back when the worker has ended."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    _saved_replay(rig)
+    _fill(rig)
+    tab.runs_list.selection_set(0)
+    first = tab.size_thread
+    made, thread = _start(rig)
+    saved = (tab.runs_list, tab.open_button, tab.refresh_button)
+    assert [_state(w) for w in saved] == ["disabled"] * 3
+    tab.open_button.invoke()
+    tab.refresh_button.invoke()
+    assert rig.loads == [] and tab.view is None and tab.size_thread is first
+    _finish(rig, made, thread, "stopped/button")
+    assert [_state(w) for w in saved] == ["normal"] * 3
+
+
+def test_open_never_loads_while_a_worker_exists(make_rig, tmp_path):
+    """DBG115: `load_folder` redirects stdout process-wide, as the run's map load on the worker does, and two
+    overlapping redirects leave stdout on a dead buffer. So Open loads nothing while the run's worker exists, whatever
+    calls it, even once its `ended` was read; it loads once the worker is cleared."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    folder = _saved_replay(rig)
+    _fill(rig)
+    tab.runs_list.selection_set(0)
+    made, thread = _start(rig)
+    tab.openSavedRun()
+    made.on_event(_event("ended", "stopped/button", code=0))
+    tab.drainEvents()  # `ended` read while the worker is still returning
+    assert tab.worker is thread and tab.state == "ended"
+    tab.openSavedRun()
+    assert rig.loads == [] and tab.view is None
+    thread.finish()
+    tab.drainEvents()
+    tab.openSavedRun()
+    assert rig.loads == [folder] and tab.view is rig.views[0] and not tab.view.live
+
+
+def test_damaged_run_row_and_open_error(make_rig, tmp_path):
+    """Review Focus 4: a run folder whose `session.json` is missing or not JSON shows `?` for what cannot be read; a
+    `load_folder` Failure puts its text on the status line, raises nothing and leaves the view as it was (a kept run
+    view with its Back button here). The failure is not silent, so no console line (H72)."""
+    rig = _hosting_rig(make_rig, tmp_path, load_fails=True, cls=ConsoleLinesTab)
+    tab = rig.tab
+    damaged = _saved_folder(rig.run_root, "2026-10-30T090000Z")  # `steps.jsonl` only
+    torn = _saved_folder(rig.run_root, "2026-10-29T080000Z", laps=2)
+    (torn / "session.json").write_text('{"start_utc": "2026-10-29T08:', encoding="utf-8")
+    _kept_run(rig)
+    view, log, status = tab.view, list(rig.log), tab.status_var.get()
+    _fill(rig)
+    assert [row.rsplit("  ", 1)[0] for row in _rows(tab)] == ["?  ?  ? laps", "?  ?  2 laps"]
+    console = len(tab.console)
+    _open(rig)
+    assert rig.loads == [damaged] and tab.status_var.get() == "unreadable" != status
+    assert tab.view is view and view.live and rig.log == log and _one_view(tab) and tab._backShown()
+    assert tab.console[console:] == []
+    tab.drainEvents()
+    assert tab.status_var.get() == "unreadable"  # kept until a readiness input changes (choice 8)
+
+
+def test_open_with_no_row_selected_says_so_in_the_console(make_rig, tmp_path):
+    """H72: a press on Open that opens nothing would be silent, so it prints one error line "Replay not opened: <the
+    reason>" in the console box and changes neither the view nor the status line."""
+    rig = _hosting_rig(make_rig, tmp_path, cls=ConsoleLinesTab)
+    tab = rig.tab
+    _saved_replay(rig)
+    _fill(rig)
+    status, console = tab.status_var.get(), len(tab.console)
+    tab.open_button.invoke()
+    assert tab.console[console:] == [(NO_ROW_SELECTED, True)]
+    assert rig.loads == [] and tab.view is None and tab.status_var.get() == status
