@@ -234,7 +234,7 @@ def test_1_following_a_folder_while_a_writer_thread_writes_it(tmp_path, roots, m
         thread.join()
     model = t.window.model
     assert model is not None and len(model.events) == 26 and model.ended and t.live.ended
-    assert t.window.bar.winfo_manager() == "pack" and not t.window.live
+    assert t.window.bar.winfo_manager() != "pack" and t.window.live  # left as last drawn, no replay bar (H69)
     assert _title(t.window).startswith("Route view · ended: max_laps")
     assert t.window.shown_background == "frames/frame_000024.png"
     scheduled = len(t.after)
@@ -355,16 +355,18 @@ def test_5_one_more_line_on_fifty_thousand_is_cheap(tmp_path, roots, monkeypatch
 # 6 ----------------------------------------------------------------------------------------------------------------
 
 
-def test_end_switches_to_replay_without_window_calls(tmp_path, roots, monkeypatch):
+def test_end_freezes_the_window_without_window_calls(tmp_path, roots, monkeypatch):
+    """Route tab H68, H69: at `end` the window is not switched to replay; it stays live (no replay bar), as last drawn,
+    and only its title's mode says the run ended."""
     folder = _live_folder(tmp_path, LINES[:25])
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
     assert t.after == [(POLL_MS, t.live.tick)] and t.log == [] and t.window.live and not t.live.ended
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
-    assert t.window.live is False and t.live.ended is True
+    assert t.window.live is True and t.live.ended is True
     assert t.log == []  # neither `withdraw` nor `deiconify` was called on the root
-    assert t.window.bar.winfo_manager() == "pack"
+    assert t.window.bar.winfo_manager() != "pack" and t.window.index == len(t.window.model.events) - 1
     assert _title(t.window).startswith("Route view · ended: max_laps · ")
     assert len(t.after) == 1  # no further tick
     t.live.tick()
@@ -391,7 +393,8 @@ def test_a_folder_that_ended_before_the_first_poll_touches_no_window_call(tmp_pa
     folder = _live_folder(tmp_path, LINES)
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
-    assert t.log == [] and not t.window.live and t.after == []
+    assert t.log == [] and t.window.live and t.after == []
+    assert _title(t.window).startswith("Route view · ended: max_laps · ")
 
 
 # 7 ----------------------------------------------------------------------------------------------------------------
@@ -467,8 +470,8 @@ def test_m2_lines_read_in_a_failed_tick_go_into_the_model_on_the_next_one(tmp_pa
 
 
 def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roots, monkeypatch, capsys):
-    """RV-8 review m2: the run still switches to replay when the tick that reads `end` fails after its poll (the walk
-    is over, and the same error may come every tick)."""
+    """RV-8 review m2: the run still ends when the tick that reads `end` fails after its poll (the walk is over, and the
+    same error may come every tick); the title gives the `end` line's reason though the model did not take it."""
     folder = _live_folder(tmp_path, LINES[:25])
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
@@ -480,7 +483,8 @@ def test_m2_an_error_on_the_tick_that_reads_end_still_ends_the_run(tmp_path, roo
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
     assert t.live.ended and len(t.after) == 1  # no further tick
-    assert not t.window.live and t.log == [] and "follow error: RuntimeError: x" in capsys.readouterr().out
+    assert t.window.live and t.log == [] and "follow error: RuntimeError: x" in capsys.readouterr().out
+    assert not t.window.model.ended and _title(t.window).startswith("Route view · ended: max_laps · ")
 
 
 
@@ -518,25 +522,25 @@ def test_m2b_an_event_the_model_rejects_every_time_is_retried_once_then_skipped_
 
 
 def test_m3_end_runs_at_most_once_even_if_a_call_inside_it_raises(tmp_path, roots, monkeypatch, capsys):
-    """RV-9 review m3: `set_live(False)` raising inside `_end` must not make `update`'s error path run `_end` again."""
+    """RV-9 review m3: `set_mode` raising inside `_end` must not make `update`'s error path run `_end` again."""
     folder = _live_folder(tmp_path, LINES[:25])
     t = _live(roots, monkeypatch, folder)
     t.live.tick()
     capsys.readouterr()
     calls = []
 
-    def boom(live):
-        calls.append(live)
+    def boom(text):
+        calls.append(text)
         raise RuntimeError("x")
 
-    monkeypatch.setattr(t.window, "set_live", boom)
+    monkeypatch.setattr(t.window, "set_mode", boom)
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
     assert t.live.ended and len(t.after) == 1
-    assert calls == [False] and t.log == []
+    assert calls == ["ended: max_laps"] and t.log == []
     assert capsys.readouterr().out == "follow error: RuntimeError: x\n"
     t.live.update()  # an ended controller does nothing more
-    assert calls == [False] and t.log == []
+    assert calls == ["ended: max_laps"] and t.log == []
 
 
 # the live picture (route tab plan C3, choice 12; spec 5.8) ---------------------------------------------------------
@@ -588,17 +592,21 @@ def test_live_picture_kept_when_only_steps_change(tmp_path, roots, monkeypatch):
     assert loads == [] and t.window.shown_image is picture and t.window.shown_background == "live"
 
 
-def test_the_end_puts_the_recorded_picture_back_at_once(tmp_path, roots, monkeypatch):
-    """RT5-2a-D2: `set_live(False)` only drops the kept picture, so `_end` redraws and the live picture goes now."""
+def test_the_end_keeps_the_live_picture(tmp_path, roots, monkeypatch):
+    """Route tab H69 (replaces RT5-2a-D2's switch to the recorded frame): the last live picture stays after `end`, and
+    the window keeps it for its own redraws."""
     folder = _live_folder(tmp_path, LINES[:25])
     _add_frame(folder, 0, 1.05)
     t = _live_with_frame(roots, monkeypatch, folder, lambda: _frame(30))
     t.live.tick()
     assert t.window.shown_background == "live"
+    picture = t.window.shown_image
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()
-    assert t.live.ended and t.window.live is False
-    assert t.window.shown_background == "frames/frame_000000.png"
+    assert t.live.ended and t.window.live is True
+    assert t.window.shown_background == "live" and t.window.shown_image.tobytes() == picture.tobytes()
+    t.window._redraw_here()
+    assert t.window.shown_background == "live"
 
 
 def test_a_live_frame_that_raises_on_the_header_tick_loses_no_line(tmp_path, roots, monkeypatch, capsys):
@@ -627,8 +635,8 @@ def test_a_live_frame_that_raises_on_the_header_tick_loses_no_line(tmp_path, roo
 
 
 def test_a_live_frame_that_raises_on_the_end_tick_still_ends_the_run(tmp_path, roots, monkeypatch, capsys):
-    """RT-5 review I1: the `end` line is stored (so the run ends and the window switches to replay) even if `live_frame`
-    raises on the tick that reads it."""
+    """RT-5 review I1: the `end` line is stored (so the run ends and the window is frozen) even if `live_frame` raises
+    on the tick that reads it."""
     folder = _live_folder(tmp_path, LINES[:25])
     _add_frame(folder, 0, 1.05)
     broken = []
@@ -646,8 +654,8 @@ def test_a_live_frame_that_raises_on_the_end_tick_still_ends_the_run(tmp_path, r
     _append(folder / STEPS_FILE, LINES[25])
     t.live.tick()  # reads `end`; the callable raises
     assert t.live.ended and t.window.model is not None and t.window.model.ended
-    assert t.window.live is False and len(t.after) == 1  # no further tick
-    assert t.window.shown_background == "frames/frame_000000.png"  # the recorded picture replaced the live one
+    assert t.window.live is True and len(t.after) == 1  # no further tick
+    assert t.window.shown_background == "live"  # the live picture made so far stays (H69)
     assert _status(t.window) == "follow error: live frame: RuntimeError: x"
     assert capsys.readouterr().out == "follow error: live frame: RuntimeError: x\n"
 

@@ -3,7 +3,8 @@
 `Follower` reads the complete new lines of `steps.jsonl` and `frames/index.jsonl` since its last poll (a line without
 its newline waits for the next poll). `LiveController` polls it every `POLL_MS` from Tk's event loop, grows the model,
 redraws only when something changed (decoding only the newest frame), says so when no step has come for `SILENT_S`,
-and at `end` switches the window to replay (`set_live(False)` and a redraw; it makes no call on the root). With a
+and at `end` stops following and leaves the window as last drawn, still live (no replay bar, the live picture kept),
+with its title's mode set to `ended: <reason>` (route tab H68, H69, plan RT-8c; it makes no call on the root). With a
 `live_frame` callable (route tab spec 5.8, plan choice 12) the picture behind the view is the newest frame it returns,
 not a recorded file. `stop()` ends the ticks: after it `tick()` and `update()` return at once, because a tick already
 queued with `after` can still fire.
@@ -110,6 +111,7 @@ class LiveController:
         self._skipped = 0  # events skipped so far (RV-9 review m2)
         self._frames: list[tuple[int, str]] = []
         self._end_read = False  # an `end` line has been read (whether or not it reached the model)
+        self._end_reason: str | None = None  # that line's reason, for the title (the model may not have taken it)
         self._printed: str | None = None
         self._stopped = False
 
@@ -126,8 +128,8 @@ class LiveController:
 
     def update(self) -> None:
         """One poll and redraw; never raises (hard rule 5): an error goes to the status line and stdout. Lines the
-        failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window
-        switches to replay, RV-8 review m2): the walk is over, and the same error may come every tick."""
+        failed poll read stay pending for the next one; but if `end` was read, the run ends at once (the window is
+        left as last drawn, RV-8 review m2): the walk is over, and the same error may come every tick."""
         if self.ended or self._stopped:
             return
         try:
@@ -143,7 +145,9 @@ class LiveController:
     def _update(self) -> None:
         polled = self.follower.poll()
         new_picture = self._read_live_frame()
-        self._end_read = self._end_read or any(event.ev == "end" for event in polled.events)
+        for event in polled.events:
+            if event.ev == "end":
+                self._end_read, self._end_reason = True, event.data.get("reason")
         self._pending.extend(polled.events)
         if polled.frames:
             self._background = polled.frames[-1][1]
@@ -226,15 +230,15 @@ class LiveController:
         return True
 
     def _end(self) -> None:
-        """`end` read (spec 5.4): stop following and switch the window to replay. No call on the root and no callback:
-        the owner learns of the end from `ended`. Runs at most once: if a call in it raises, `update`'s error path does
-        not run it again (RV-9 review m3)."""
+        """`end` read (spec 5.4; route tab spec 5.2, H68, H69): stop following and leave the window as last drawn. It
+        stays live, so no replay bar shows and its last live picture, panel and why lines stay; only the title's mode
+        part becomes `ended: <reason>` (`ended: no reason` for an `end` without one), as a replay's title reads. No
+        call on the root and no callback: the owner learns of the end from `ended`. Runs at most once: if a call in it
+        raises, `update`'s error path does not run it again (RV-9 review m3)."""
         if self.ended:
             return
         self.ended = True
-        self._picture = None
-        self.window.set_live(False)  # the title's mode becomes `ended: <reason>`; the window drops its kept picture
-        self.window._redraw_here()  # and the replay's own frame replaces the live picture at once (RT5-2a-D2)
+        self.window.set_mode(f"ended: {self._end_reason or 'no reason'}")
 
     def _report(self, text: str) -> None:
         self.window.set_status(text)

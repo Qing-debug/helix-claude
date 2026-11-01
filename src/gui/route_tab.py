@@ -5,9 +5,9 @@ This module is `src.gui`'s one door to the run driver: it imports `src.route.ses
 rules the tab shows (settings checks, the class key, the end-of-run texts, the countdown line); none of them touches Tk.
 `RouteTab` is the tab itself: the top area, the readiness line, Start, the run's worker thread, the 100 ms drain of its
 event queue with the dead-worker watchdog, Stop, the close handler that waits for a live run's cleanup (RT-8a), the
-hosted route view: the run's live view and its replay at the end (RT-8b), and the idle live minimap shown when no view
-is (`src/gui/live_minimap.py`, RT-8c, H70). The app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by
-those tasks.
+hosted route view: the run's live view (RT-8b), kept in place and frozen at the end with a "Back to live minimap" button
+(no replay opens, H68, H69, RT-8c), and the idle live minimap shown when no view is (`src/gui/live_minimap.py`, RT-8c,
+H70). The app-focus flag (RT-9) and the saved-run list (RT-10) are added to it by those tasks.
 """
 import gc
 import math
@@ -26,9 +26,7 @@ from returns.result import Result
 
 from src.gui.live_minimap import LiveMinimap
 from src.route import session
-from src.route.leg_log import LEGS_FILE
 from src.route.session import FrameHolder, RunEvent, RunSession, RunSettings
-from src.route.step_log import STEPS_FILE
 from src.route_view.follow import LiveController
 from src.route_view.model import RunModel, load_folder
 from src.route_view.window import RouteViewWindow
@@ -117,50 +115,40 @@ def classKey(instance: object) -> str | None:
     return None
 
 
-def _with_replay(sentence: str, folder: Path | None, replay_open: bool) -> str:
-    """Choice 7: an "Ended:" sentence names the run folder and says the replay is open, but only when a replay did
-    open. The sentence's final full stop is dropped before the folder name."""
-    if replay_open and folder is not None and sentence.startswith("Ended:"):
-        return f"{sentence.removesuffix('.')} ({folder.name}). Replay is open."
-    return sentence
-
-
-def endedText(code: int | None, text: str, folder: Path | None, replay_open: bool) -> str:
-    """The status line for a run that has ended (spec 5.5 with plan choices 3, 6 and 7). `code` and `text` are the
-    `ended` event's: with a code, `text` is `f"{reason}/{source}"` (`reason` is stop.json's, or "none" with no
-    stop.json; `source` is the first stop trigger, "" for none), and a non-zero code is read before `text`. With no
-    code `text` is the exception text. `folder` is the run folder (only its name, and whether it exists, matter);
-    `replay_open` is whether a replay opened at the end."""
+def endedText(code: int | None, text: str, folder: Path | None) -> str:
+    """The status line for a run that has ended (spec 5.5 with plan choices 3 and 6; choice 7's folder name and
+    " Replay is open." went with H68, RT-8c). `code` and `text` are the `ended` event's: with a code, `text` is
+    `f"{reason}/{source}"` (`reason` is stop.json's, or "none" with no stop.json; `source` is the first stop trigger,
+    "" for none), and a non-zero code is read before `text`. With no code `text` is the exception text. `folder` is the
+    run folder: only the 5.5 texts that name it use it (codes 6 and 7, and the "stopped unexpectedly" text when the
+    folder exists); every other text stands alone, with no folder name (ruling orch 110)."""
     if code is None:
         if folder is not None and folder.exists():
-            sentence = f"Ended: {text}. See the console and {folder.name}."
-            return sentence + (" Replay is open." if replay_open else "")
+            return f"Ended: {text}. See the console and {folder.name}."
         return f"Ended: {text}. See the console."
     if code in _WALKER_FAILED_CODES:
         if folder is None:
             return "Ended: the walker failed; see the console."
-        sentence = f"Ended: the walker failed; see {folder.name}."
-        return sentence + (" Replay is open." if replay_open else "")
+        return f"Ended: the walker failed; see {folder.name}."
     if code in _CODE_TEXTS:
-        return _with_replay(_CODE_TEXTS[code], folder, replay_open)
+        return _CODE_TEXTS[code]
     reason, _, source = text.partition("/")
     if code == 0:
         if reason == "max_laps":
-            return _with_replay(_ALL_LAPS_DONE, folder, replay_open)  # whatever the source: the laps were done
+            return _ALL_LAPS_DONE  # whatever the source: the laps were done
         known = {"stopped": _STOPPED_TEXTS, "cancelled": _CANCELLED_TEXTS}.get(reason)
         if known is not None and source in known:
-            return _with_replay(known[source], folder, replay_open)
+            return known[source]
     if code != 0:
         return f"Ended (exit {code}, {text})."  # a code no producer sends (walk.py:6-9); the code is the useful fact
     return f"Ended ({text})."  # a pair no producer sends; nothing raises
 
 
-def _unexpectedEndText(folder: Path | None, replay_open: bool) -> str:
+def _unexpectedEndText(folder: Path | None) -> str:
     """Spec 5.5's watchdog text, for a worker that ended with no `ended` event: "and <run folder>" only when the
-    folder exists, and then choice 7's " Replay is open." when a replay opened."""
+    folder exists."""
     if folder is not None and folder.exists():
-        sentence = f"Ended: the run stopped unexpectedly; see the console and {folder.name}."
-        return sentence + (" Replay is open." if replay_open else "")
+        return f"Ended: the run stopped unexpectedly; see the console and {folder.name}."
     return "Ended: the run stopped unexpectedly; see the console."
 
 
@@ -192,6 +180,7 @@ CONNECTING_TEXT = "Connecting to the board..."
 RUNNING_TEXT = "Running. F12 or Stop ends the run. Clicking this app also stops it."
 STOPPING_TEXT = "Stopping: releasing keys..."
 STOPPING_CONNECT_TEXT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
+BACK_TEXT = "Back to live minimap"  # spec 5.2, H69: shown with a kept run view
 
 POLL_MS = 100  # the drain's period, and the close handler's (spec 5.5, 5.7)
 CLOSE_WAIT_S = 10  # the close handler destroys the window after this even if the run's cleanup has not finished (5.5)
@@ -242,6 +231,7 @@ class RouteTab:
     countdown_var: tk.StringVar
     runs_list: tk.Listbox
     view_frame: tk.Frame
+    back_button: tk.Button
     live_minimap: LiveMinimap
     view: RouteViewWindow | None
     live: LiveController | None
@@ -300,8 +290,9 @@ class RouteTab:
 
     def _build(self, parent: tk.Misc) -> None:
         """The widgets of spec 5.2: the top area, the saved-runs area at the bottom and the container the view will be
-        hosted in between them, with the idle live minimap's canvas built (not packed) in it. No dialog, no Toplevel,
-        no Combobox (spec 5.12)."""
+        hosted in between them, with the idle live minimap's canvas built (not packed) in it, and the "Back to live
+        minimap" button in a frame of its own, packed between the top area and the view only while a kept run view is
+        shown (`_showBack`). No dialog, no Toplevel, no Combobox (spec 5.12)."""
         top = tk.Frame(parent)
         top.pack(side=tk.TOP, fill=tk.X, padx=8, pady=6)
         tk.Label(top, textvariable=self.map_class_var, anchor="w").pack(side=tk.TOP, fill=tk.X)
@@ -356,6 +347,9 @@ class RouteTab:
         self.view_frame = tk.Frame(parent)
         self.view_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.live_minimap = self._make_minimap(self.view_frame, self._gui)
+        self._back_frame = tk.Frame(parent)  # packed only while shown, so the view area loses no height otherwise
+        self.back_button = tk.Button(self._back_frame, text=BACK_TEXT, command=self.backToLive)
+        self.back_button.pack(side=tk.LEFT)
 
     # -- what the Setup tab holds ------------------------------------------------------------------------------------
 
@@ -451,8 +445,8 @@ class RouteTab:
         """The run's end on the tab when no `ended` came (the watchdog, or a worker that could not start): Ended,
         `_onEnded(None, "")`, then spec 5.5's "stopped unexpectedly" text."""
         self.state = "ended"
-        replay_open = self._onEnded(None, "")
-        self._say(_unexpectedEndText(self._out, replay_open))
+        self._onEnded(None, "")
+        self._say(_unexpectedEndText(self._out))
 
     def _clearWorker(self) -> None:
         """The worker has ended or never started: forget it and, if Start turned automatic garbage collection off,
@@ -484,8 +478,8 @@ class RouteTab:
 
     def _showEvent(self, event: RunEvent) -> None:
         """One event to spec 5.2's state and status line. A `warning` is appended after one space in any state
-        (choice 5). `ended` sets the state, asks `_onEnded` whether a replay opened, then writes `endedText` (choice
-        7). While Stopping its text stays until the end: an earlier `status` or `countdown` read late changes nothing,
+        (choice 5). `ended` sets the state, calls `_onEnded` (the run's view is kept, frozen), then writes `endedText`.
+        While Stopping its text stays until the end: an earlier `status` or `countdown` read late changes nothing,
         and a `running` still reaches `_onRunning` (the walk did start). While the window waits to close no event
         writes the status line (`_say`)."""
         if event.kind == "warning":
@@ -493,8 +487,8 @@ class RouteTab:
         elif event.kind == "ended":
             self._ended_seen = True
             self.state = "ended"
-            replay_open = self._onEnded(event.code, event.text)
-            self._say(endedText(event.code, event.text, self._out, replay_open))
+            self._onEnded(event.code, event.text)
+            self._say(endedText(event.code, event.text, self._out))
         elif self.state == "stopping":
             if event.kind == "running":
                 self._onRunning()
@@ -540,38 +534,42 @@ class RouteTab:
         with shared.minimap_frame_lock:
             return shared.minimap_frame
 
-    def _onEnded(self, code: int | None, text: str) -> bool:
+    def _onEnded(self, code: int | None, text: str) -> None:
         """Called once per end (an `ended` event's code and text, or `(None, "")` from the watchdog), after the state
-        is set and before the status line; True when a replay of this run opened (choice 7). `ended` comes after the
-        walk's cleanup, so the run's files are complete. A live view first reads the lines no tick has read yet; if
-        that reached the run's `end` line it has switched itself to replay (`follow.py`), its controller stops and the
-        answer is True. Otherwise any view goes, and with a step or leg log in the run folder the folder is loaded and
-        its replay built in place of the idle minimap: True; with neither, or a folder that cannot be read, False, and
-        `view_frame` shows nothing after a live view, or still the idle minimap when the run ended before `running`
-        (waits for Hong: RDO110-D1). While the window waits to close nothing opens: the close takes the view down
-        (RT-8a fix round)."""
-        if self._closing is not None:
-            return False
-        live = self.live
-        if live is not None:
-            live.update()
-            live.stop()
-            self.live = None
-            if live.ended:
-                return True
-        self._dropView()
-        out = self._out
-        if out is None or not ((out / STEPS_FILE).exists() or (out / LEGS_FILE).exists()):
-            return False
-        loaded = self._load_run(out, repo_root=_REPO, current_git_head=self._head)
-        if not is_successful(loaded):
-            return False
-        self._hideMinimap()
-        self.view = self._make_view(self.view_frame, out, loaded.unwrap(), live=False)
-        return True
+        is set and before the status line. No replay opens (H68): the run's live view stays in place, frozen (H69).
+        `ended` comes after the walk's cleanup, so the run's files are complete: the live view reads the lines no tick
+        has read yet (`update()`), then its controller stops. The view stays live, so it shows no replay bar and keeps
+        its last live picture, panel and why lines; its title's mode reads `ended: <reason>` once its `end` line was
+        read (`follow.py`), else `ended`. Then "Back to live minimap" shows. A run that ended before `running` has no
+        run view, so the idle minimap Start showed stays, with no button (waits for Hong: RDO110-D1; answer A is
+        built). While the window waits to close nothing changes: the close takes the view down (RT-8a fix round)."""
+        live, view = self.live, self.view
+        if self._closing is not None or live is None or view is None:
+            return
+        live.update()
+        live.stop()
+        self.live = None
+        if not live.ended:
+            view.set_mode("ended")
+        self._showBack()
+
+    def backToLive(self) -> None:
+        """The "Back to live minimap" button (spec 5.2, H69): the kept run view goes and the idle live minimap shows;
+        the button hides with the view (`_dropView`). The status line keeps the run's Ended text."""
+        self._showMinimap()
+
+    def _showBack(self) -> None:
+        """Show "Back to live minimap" above the view area, while a kept run view is shown (H69). (open: RDO110-D2) A
+        saved run's replay (RT-10) would show it too."""
+        if not self._backShown():
+            self._back_frame.pack(side=tk.TOP, fill=tk.X, padx=8, before=self.view_frame)
+
+    def _backShown(self) -> bool:
+        return self._back_frame.winfo_manager() == "pack"
 
     def _showMinimap(self) -> None:
-        """Show the idle live minimap (spec 5.2, H70): any hosted view goes, then the minimap's canvas is packed."""
+        """Show the idle live minimap (spec 5.2, H70): any hosted view goes (and with it the Back button), then the
+        minimap's canvas is packed."""
         self._dropView()
         if not self._minimapShown():
             self.live_minimap.canvas.pack(side=tk.TOP, anchor=tk.NW)
@@ -584,10 +582,12 @@ class RouteTab:
         return self.live_minimap.canvas.winfo_manager() == "pack"
 
     def _dropView(self) -> None:
-        """Stop the live view's polling and destroy the hosted view, if there is one; no view is left in `view_frame`."""
+        """Stop the live view's polling and destroy the hosted view, if there is one; no view is left in `view_frame`,
+        and the Back button, which shows only with a kept view, hides."""
         live, view = self.live, self.view
         self.live = None
         self.view = None
+        self._back_frame.pack_forget()
         if live is not None:
             live.stop()
         if view is not None:
@@ -653,8 +653,8 @@ class RouteTab:
         Just before the worker starts, garbage is collected here and automatic collection is turned off until the
         worker is cleared (RT-8a I1). A worker that cannot be built or started ends the run on the tab at once, with
         the watchdog's text and the controls back, and the error goes on to Tk's callback handler (RT-8a m2). Once
-        every check has passed, the view shown before Start (a replay) goes and the idle live minimap shows until
-        `running` (spec 5.2, H70)."""
+        every check has passed, the view shown before Start (the last run's kept view) goes with its Back button and
+        the idle live minimap shows until `running` (spec 5.2, H69, H70)."""
         if self.worker is not None or self._closing is not None:
             return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())

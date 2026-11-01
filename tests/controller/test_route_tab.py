@@ -112,7 +112,7 @@ def folder(tmp_path):
     (8, "stopped/hotkey", "Ended (exit 8, stopped/hotkey)."),
 ])
 def test_ended_text_table(code, text, expected):
-    assert endedText(code, text, None, False) == expected
+    assert endedText(code, text, None) == expected
 
 
 @pytest.mark.parametrize("code, expected", [
@@ -126,49 +126,37 @@ def test_ended_text_table(code, text, expected):
 ])
 @pytest.mark.parametrize("text", ["none/", "max_laps/", "stopped/hotkey", "link_down/", "anything"])
 def test_ended_text_maps_a_nonzero_code_first(code, expected, text, folder):
-    assert endedText(code, text, folder, False) == expected
+    assert endedText(code, text, folder) == expected
 
 
 @pytest.mark.parametrize("code", [6, 7])
 @pytest.mark.parametrize("text", ["none/", "stopped/hotkey", "x"])
 def test_ended_text_walker_failed_names_the_folder_once(code, text, folder):
-    assert endedText(code, text, folder, False) == f"Ended: the walker failed; see {folder.name}."
-    assert endedText(code, text, folder, True) == f"Ended: the walker failed; see {folder.name}. Replay is open."
-
-
-def test_ended_text_suffix_follows_replay_open_only(folder):
-    (folder / "steps.jsonl").write_text("{}\n", encoding="utf-8")
-    assert endedText(0, "stopped/hotkey", folder, True) == f"Ended: you pressed F12 ({folder.name}). Replay is open."
-    assert (endedText(0, "cancelled/button", folder, True)
-            == f"Ended: cancelled before the walk (you pressed Stop) ({folder.name}). Replay is open.")
-    assert (endedText(0, "max_laps/", folder, True)
-            == f"Ended: all laps done ({folder.name}). Replay is open.")
-    assert (endedText(1, "link_down/", folder, True)
-            == f"Ended: the board link was lost ({folder.name}). Replay is open.")
-    # the folder holds a step log, but no replay opened: no suffix and no name (choice 7)
-    assert endedText(0, "stopped/hotkey", folder, False) == "Ended: you pressed F12."
-    assert endedText(0, "cancelled/button", folder, False) == "Ended: cancelled before the walk (you pressed Stop)."
+    assert endedText(code, text, folder) == f"Ended: the walker failed; see {folder.name}."
 
 
 @pytest.mark.parametrize("code, text", [
+    (0, "stopped/hotkey"), (0, "stopped/button"), (0, "stopped/timer"), (0, "max_laps/"), (0, "max_laps/hotkey"),
+    (0, "cancelled/hotkey"), (0, "cancelled/button"), (1, "link_down/"), (10, "off_graph/"), (10, "no_position/"),
     (0, "stopped/app_focus"), (0, "cancelled/app_focus"), (0, "cancelled/countdown_focus"), (0, "stopped/window_close"),
     (0, "xyz/abc"), (0, "none/"), (2, "none/"), (3, "none/"), (4, "none/"), (5, "none/"), (9, "none/"), (11, "none/"),
 ])
-def test_ended_text_other_prefixes_take_no_suffix(code, text, folder):
-    assert endedText(code, text, folder, True) == endedText(code, text, folder, False)
-    assert endedText(code, text, folder, True) == endedText(code, text, None, False)
+def test_ended_texts_never_name_the_folder(code, text, folder):
+    """H68 removed choice 7 and ruling orch 110 the folder's name: no text gets the name or " Replay is open.", even
+    with a step log in the folder; only spec 5.5's own texts that name it (codes 6 and 7, "stopped unexpectedly") do."""
+    (folder / "steps.jsonl").write_text("{}\n", encoding="utf-8")
+    shown = endedText(code, text, folder)
+    assert shown == endedText(code, text, None) and folder.name not in shown and "Replay" not in shown
+    assert endedText(0, "stopped/hotkey", folder) == "Ended: you pressed F12."
 
 
 def test_ended_text_unexpected_stop(folder, tmp_path):
     error = "the run stopped unexpectedly: RuntimeError: x"
-    assert (endedText(None, error, folder, False)
+    assert (endedText(None, error, folder)
             == f"Ended: the run stopped unexpectedly: RuntimeError: x. See the console and {folder.name}.")
-    assert (endedText(None, error, folder, True)
-            == f"Ended: the run stopped unexpectedly: RuntimeError: x. See the console and {folder.name}."
-               " Replay is open.")
     gone = tmp_path / "never_made"  # an exception before the leg log leaves no folder
-    assert endedText(None, error, gone, False) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
-    assert endedText(None, error, None, False) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
+    assert endedText(None, error, gone) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
+    assert endedText(None, error, None) == "Ended: the run stopped unexpectedly: RuntimeError: x. See the console."
 
 
 def test_countdown_text():
@@ -713,8 +701,6 @@ def _start(rig):
 class SpyTab(RouteTab):
     """Records the two hooks RT-8b fills, with the state and the status line as they were at the call."""
 
-    replay = False
-
     def __init__(self, *args, **kwargs):
         self.calls = []
         super().__init__(*args, **kwargs)
@@ -724,7 +710,6 @@ class SpyTab(RouteTab):
 
     def _onEnded(self, code, text):
         self.calls.append(("ended", code, text, self.state, self.status_var.get()))
-        return self.replay
 
 
 def test_controls_locked_during_run_and_back_after(make_rig, monkeypatch):
@@ -1048,7 +1033,7 @@ def test_a_worker_that_cannot_start_ends_the_run(make_rig, gc_calls, failing):
 
 
 class EndRaisesTab(SpyTab):
-    """`_onEnded` raises, as a replay that cannot be built could (RT-8a fix re-review minor)."""
+    """`_onEnded` raises, as a call on the kept view could (RT-8a fix re-review minor)."""
 
     def _onEnded(self, code, text):
         super()._onEnded(code, text)
@@ -1072,11 +1057,9 @@ def test_a_dead_worker_is_cleared_when_on_ended_raises(make_rig, gc_calls):
     assert len(tab.calls) == 1 and _state(tab.start_button) == "normal"
 
 
-@pytest.mark.parametrize("replay", [False, True])
-def test_hooks_called_once_per_event(make_rig, replay):
+def test_hooks_called_once_per_event(make_rig):
     rig = make_rig(cls=SpyTab)
     tab = rig.tab
-    tab.replay = replay
     made, thread = _start(rig)
     rig.out.mkdir(parents=True)
 
@@ -1087,8 +1070,7 @@ def test_hooks_called_once_per_event(make_rig, replay):
     made.on_event(_event("ended", "stopped/hotkey", code=0))
     tab.drainEvents()
     assert tab.calls[1:] == [("ended", 0, "stopped/hotkey", "ended", RUNNING)]  # before the status line was set
-    suffix = f" ({rig.out.name}). Replay is open." if replay else "."
-    assert tab.status_var.get() == "Ended: you pressed F12" + suffix  # choice 7 only when the hook says so
+    assert tab.status_var.get() == "Ended: you pressed F12."  # no folder name (H68, ruling orch 110)
 
     thread.finish()
     tab.drainEvents()
@@ -1096,11 +1078,9 @@ def test_hooks_called_once_per_event(make_rig, replay):
     assert len(tab.calls) == 2  # one call per event, none from the watchdog once `ended` was seen
 
 
-@pytest.mark.parametrize("replay", [False, True])
-def test_hooks_watchdog_end_calls_on_ended_once(make_rig, replay):
+def test_hooks_watchdog_end_calls_on_ended_once(make_rig):
     rig = make_rig(cls=SpyTab)
     tab = rig.tab
-    tab.replay = replay
     _, thread = _start(rig)
     rig.out.mkdir(parents=True)
     tab.stopRun()
@@ -1110,8 +1090,7 @@ def test_hooks_watchdog_end_calls_on_ended_once(make_rig, replay):
     tab.drainEvents()
 
     assert tab.calls == [("ended", None, "", "ended", STOPPING_CONNECT)]  # before the watchdog's text
-    assert tab.status_var.get() == (f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
-                                    + (" Replay is open." if replay else ""))
+    assert tab.status_var.get() == f"Ended: the run stopped unexpectedly; see the console and {rig.out.name}."
 
 
 def test_drain_reschedules_when_its_body_raises(make_rig, monkeypatch):
@@ -1160,12 +1139,6 @@ def test_default_session_builds_the_run_from_the_tabs_settings(make_rig):
     defaults = inspect.signature(RunSession).parameters  # and nothing else: the session's own defaults
     for name in ("make_positions", "wait_first_frame", "make_link", "make_clock", "make_stop", "start_capture", "sleep"):
         assert getattr(made, "_" + name) is defaults[name].default, name
-
-
-def test_ended_text_code_10_with_a_replay(folder):
-    assert (endedText(10, "off_graph/", folder, True)
-            == f"Ended: the character was lost (exit 10) ({folder.name}). Replay is open.")
-    assert endedText(10, "no_position/", folder, False) == "Ended: the character was lost (exit 10)."
 
 
 # ---- RT-8a: closing the app (spec 5.5 "Closing the app mid-run") and the Tk bans (spec 5.12) ----------------------
@@ -1375,7 +1348,7 @@ def test_tk_bans_keep_the_view_tests_entries_and_allow_the_focus_reads():
     assert tk_bans.focus_problems("handler = w.focus\nw.focus_get()\nw.bind('<FocusIn>', f)") == []
 
 
-# -- RT-8b: the hosted live view and its replay at the end (spec 5.2 Hosting, 5.8) ----------------------------------------
+# -- RT-8b: the hosted live view; RT-8c: kept, frozen, at the end (spec 5.2 Hosting, 5.8; H68, H69) -----------------------
 
 G = view_runs.G  # a run of two legs, 26 steps, ending with the `end` line
 
@@ -1443,13 +1416,13 @@ def _finish(rig, made, thread, text="max_laps/", code=0):
     rig.tab.drainEvents()
 
 
-def _replayed_run(rig, *, snapshot=False):
-    """A whole run whose replay is open at its end (the live view read the `end` line)."""
+def _kept_run(rig):
+    """A whole run whose live view is kept, frozen, at its end (it read the `end` line), with the Back button."""
     made, thread = _start(rig)
-    _write_run(rig.outs[-1], G, snapshot=snapshot)
+    _write_run(rig.outs[-1], G)
     _post(rig, made, _event("running", "Running."))
     _finish(rig, made, thread)
-    assert rig.tab.view is not None and rig.tab.view.live is False
+    assert rig.tab.view is not None and rig.tab.view.live and rig.tab.live is None and rig.tab._backShown()
 
 
 def _packed(tab):
@@ -1479,7 +1452,7 @@ def _route_tab_in_front(rig):
     rig.gui.notebook.select(rig.gui.route_tab_frame)
 
 
-def test_view_rebuilt_per_run_and_replay(make_rig, tmp_path):
+def test_view_rebuilt_per_run_and_kept_at_its_end(make_rig, tmp_path):
     rig = _hosting_rig(make_rig, tmp_path)
     tab = rig.tab
     for run in range(2):
@@ -1489,13 +1462,14 @@ def test_view_rebuilt_per_run_and_replay(make_rig, tmp_path):
         assert tab.view is rig.views[run] and tab.live is rig.lives[run] and tab.view.live and _one_view(tab)
         _append(rig.outs[run], G[5:])
         _finish(rig, made, thread)
-        assert tab.view is rig.views[run] and tab.view.live is False and tab.view.folder == rig.outs[run]
-        assert tab.live is None and _one_view(tab) and tab.status_var.get().endswith("Replay is open.")
+        assert tab.view is rig.views[run] and tab.view.live and tab.view.folder == rig.outs[run]
+        assert tab.live is None and _one_view(tab) and tab.status_var.get() == "Ended: all laps done."
     assert rig.log == ["live0.stop", "view0.destroy", "live1.stop"] and len(rig.views) == 2 and rig.loads == []
 
 
-def test_final_steps_reach_the_replay_when_ended_drains_before_a_tick(make_rig, tmp_path):
-    """Plan review RA3 I5: `ended` drained before the next 100 ms tick still shows the run's last steps."""
+def test_final_steps_reach_the_frozen_view_when_ended_drains_before_a_tick(make_rig, tmp_path):
+    """Plan review RA3 I5: `ended` drained before the next 100 ms tick still shows the run's last steps, in the kept
+    view (H69)."""
     rig = _hosting_rig(make_rig, tmp_path)
     tab = rig.tab
     made, thread = _start(rig)
@@ -1508,47 +1482,77 @@ def test_final_steps_reach_the_replay_when_ended_drains_before_a_tick(make_rig, 
     _finish(rig, made, thread)
     full = load_folder(out, repo_root=view_runs.REPO_ROOT, current_git_head=None).unwrap()
     view = tab.view
-    assert view is rig.views[0] and view.live is False and _one_view(tab) and rig.loads == []
+    assert view is rig.views[0] and view.live and _one_view(tab) and rig.loads == []
     assert view.model is not None and len(view.model.events) == len(full.events) == len(G)
-    assert tab.status_var.get().endswith("Replay is open.")
+    assert view.index == len(G) - 1 and tab.status_var.get() == "Ended: all laps done."
 
 
-@pytest.mark.parametrize("case", ["stop_connecting", "kept_replay", "live_no_end", "live_no_end_load_fails",
-                                  "legs_only"])
-def test_end_without_a_live_view(make_rig, tmp_path, case):
-    rig = _hosting_rig(make_rig, tmp_path, load_fails=case == "live_no_end_load_fails")
+@pytest.mark.parametrize("end_line", [True, False])
+def test_end_freezes_the_live_view(make_rig, tmp_path, end_line):
+    """Spec 5.2 (H68, H69): at the end no replay opens and nothing is loaded; the run's live view stays in
+    `view_frame`, frozen: still live (no replay bar), its last live picture kept, its controller stopped, its title's
+    mode `ended: <reason>` (`ended` when no `end` line was read), and "Back to live minimap" shows between the top
+    area and the view."""
+    rig = _hosting_rig(make_rig, tmp_path)
     tab = rig.tab
-    if case == "kept_replay":
-        _replayed_run(rig)  # Start drops this replay (H70)
-    views, loads, log = len(rig.views), len(rig.loads), len(rig.log)
+    made, thread = _start(rig)
+    out = rig.outs[0]
+    _write_run(out, G[:5])
+    _post(rig, made, _event("running", "Running."))
+    view = tab.view
+    assert view is not None and view.shown_background == "live" and not tab._backShown()
+    _append(out, G[5:] if end_line else G[5:-1])
+    _finish(rig, made, thread, "stopped/button")
+    assert tab.view is view and view is rig.views[0] and view.live is True and view.bar.winfo_manager() != "pack"
+    assert tab.live is None and rig.log == ["live0.stop"] and rig.loads == [] and _one_view(tab)
+    assert view.title_label.cget("text").split(" · ")[1] == ("ended: max_laps" if end_line else "ended")
+    assert view.shown_background == "live" and len(view.model.events) == len(G) - (0 if end_line else 1)
+    assert tab.status_var.get() == "Ended: you pressed Stop."
+    assert tab._backShown() and tab.back_button.cget("text") == "Back to live minimap"
+    slaves = tab.view_frame.master.pack_slaves()
+    assert slaves.index(tab._back_frame) == slaves.index(tab.view_frame) - 1
+
+
+@pytest.mark.parametrize("case", ["stop_connecting", "kept_view", "legs_only"])
+def test_end_without_a_live_view(make_rig, tmp_path, case):
+    """A run that ends before `running` has no run view to keep: the idle minimap Start showed stays, with no Back
+    button, and nothing is loaded, even with a leg log in the folder (H68; waits for Hong: RDO110-D1)."""
+    rig = _hosting_rig(make_rig, tmp_path)
+    tab = rig.tab
+    if case == "kept_view":
+        _kept_run(rig)  # Start drops this run's kept view (H69, H70)
+    views, log = len(rig.views), len(rig.log)
     made, thread = _start(rig)
     out = rig.outs[-1]
     out.mkdir(parents=True)
-    if case in ("stop_connecting", "kept_replay"):
-        tab.stopRun()
-        (out / "stop.json").write_text("{}", encoding="utf-8")
-        _finish(rig, made, thread, "cancelled/button")
-        assert len(rig.views) == views and len(rig.loads) == loads
-        # (waits for Hong: RDO110-D1) no run view was built, so the idle minimap Start showed stays
-        assert tab.view is None and _packed(tab) == [tab.live_minimap.canvas]
-        assert tab.status_var.get() == "Ended: cancelled before the walk (you pressed Stop)."
-        assert rig.log[log:] == (["view0.destroy"] if case == "kept_replay" else [])
-        return
     if case == "legs_only":
         view_runs.make_legs_folder(out)
-    else:
-        _write_run(out, G[:-1])  # no `end` line
-        _post(rig, made, _event("running", "Running."))
-        assert tab.live is not None and tab.view.live
-    _finish(rig, made, thread, "stopped/button")
-    assert rig.loads == [out] and tab.live is None
-    assert rig.log == ([] if case == "legs_only" else ["live0.stop", "view0.destroy"])
-    if case == "live_no_end_load_fails":
-        assert tab.view is None and _packed(tab) == []
-        assert tab.status_var.get() == endedText(0, "stopped/button", out, False)
-    else:
-        assert tab.view is rig.views[-1] and tab.view.live is False and tab.view.model is not None and _one_view(tab)
-        assert tab.status_var.get() == endedText(0, "stopped/button", out, True)
+    tab.stopRun()
+    (out / "stop.json").write_text("{}", encoding="utf-8")
+    _finish(rig, made, thread, "cancelled/button")
+    assert len(rig.views) == views and rig.loads == []
+    assert tab.view is None and _packed(tab) == [tab.live_minimap.canvas] and not tab._backShown()
+    assert tab.status_var.get() == "Ended: cancelled before the walk (you pressed Stop)."
+    assert rig.log[log:] == (["view0.destroy"] if case == "kept_view" else [])
+
+
+def test_back_to_live(make_rig, tmp_path):
+    """Spec 5.2 (H69): "Back to live minimap" drops the kept view and shows the idle live minimap, drawn again from
+    the next drain on; the button hides and the Ended text stays."""
+    rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
+    tab = rig.tab
+    minimap = tab.live_minimap
+    _route_tab_in_front(rig)
+    _kept_run(rig)
+    ended = tab.status_var.get()
+    draws = minimap.draws
+    tab.drainEvents()
+    assert minimap.draws == draws  # not drawn while the kept view is shown
+    tab.back_button.invoke()
+    assert tab.view is None and tab.live is None and _packed(tab) == [minimap.canvas] and not tab._backShown()
+    assert rig.log == ["live0.stop", "view0.destroy"] and tab.status_var.get() == ended
+    tab.drainEvents()
+    assert minimap.draws == draws + 1 and tab.status_var.get() == ended == "Ended: all laps done."
 
 
 def test_live_view_reads_the_shared_frame(make_rig, tmp_path):
@@ -1618,28 +1622,29 @@ def test_minimap_not_drawn_while_the_setup_tab_is_shown(make_rig):
     assert tab.live_minimap.draws == 1
 
 
-def test_start_drops_a_replay_and_shows_the_minimap_until_running(make_rig, tmp_path):
-    """Spec 5.2 (H70): Start, once its checks pass, drops the replay shown before it; the idle live minimap shows,
-    and is drawn, through Connecting and the countdown; at `running` the run's live view replaces it (waits for Hong:
-    RDO110-D1; answer A is built). A refused Start drops nothing."""
+def test_start_leaves_a_kept_view(make_rig, tmp_path):
+    """Spec 5.2 (H69, H70): Start, once its checks pass, drops the last run's kept view and its Back button; the idle
+    live minimap shows, and is drawn, through Connecting and the countdown; at `running` the run's live view replaces
+    it (waits for Hong: RDO110-D1; answer A is built). A refused Start drops nothing."""
     rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
     tab = rig.tab
     minimap = tab.live_minimap
     _route_tab_in_front(rig)
-    _replayed_run(rig)
+    _kept_run(rig)
     kept = tab.view
-    assert _one_view(tab) and rig.log == ["live0.stop"]
+    assert _one_view(tab) and rig.log == ["live0.stop"] and tab._backShown()
     draws = minimap.draws
     tab.drainEvents()
-    assert minimap.draws == draws  # hidden under the replay: not drawn
+    assert minimap.draws == draws  # hidden under the kept view: not drawn
     agent = rig.gui.controller.agent
     agent.CSVParser.CSV_file = None
     tab.startRun()  # refused by a check (no map loaded)
-    assert len(rig.sessions) == 1 and tab.view is kept and _one_view(tab)
+    assert len(rig.sessions) == 1 and tab.view is kept and _one_view(tab) and tab._backShown()
     agent.CSVParser.CSV_file = rig.csv
 
     made, _ = _start(rig)
     assert rig.log == ["live0.stop", "view0.destroy"] and tab.view is None and _packed(tab) == [minimap.canvas]
+    assert not tab._backShown()
     for event in (_event("status", CONNECTING), _event("countdown", seconds_left=1)):
         draws = minimap.draws
         _post(rig, made, event)
@@ -1651,7 +1656,8 @@ def test_start_drops_a_replay_and_shows_the_minimap_until_running(make_rig, tmp_
 
 
 def test_minimap_hidden_from_running_to_the_end(make_rig, tmp_path):
-    """Spec 5.7: hidden from `running` to the end of the run, the minimap adds no redraw while the bot walks."""
+    """Spec 5.7: hidden from `running` to the end of the run, the minimap adds no redraw while the bot walks; nor
+    while the run's kept view is shown after it (H69)."""
     rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
     tab = rig.tab
     minimap = tab.live_minimap
@@ -1668,7 +1674,9 @@ def test_minimap_hidden_from_running_to_the_end(make_rig, tmp_path):
     assert minimap.draws == draws and _one_view(tab)
     _append(rig.outs[0], G[10:])
     _finish(rig, made, thread, "stopped/button")
-    assert minimap.draws == draws and _one_view(tab) and tab.view.live is False
+    assert minimap.draws == draws and _one_view(tab) and tab.view.live and tab.live is None
+    tab.drainEvents()
+    assert minimap.draws == draws
 
 
 def test_no_window_style_or_focus_call_with_the_hosted_view(make_rig, tmp_path, monkeypatch):
@@ -1686,16 +1694,18 @@ def test_no_window_style_or_focus_call_with_the_hosted_view(make_rig, tmp_path, 
     for chunk in (G[5:10], G[10:20]):
         _append(out, chunk)
         live.tick()  # a 100 ms tick
-    _finish(rig, made, thread, "stopped/button")  # no `end` line: the replay is loaded from the folder
-    assert tab.view is not None and tab.view.live is False and tab.status_var.get().endswith("Replay is open.")
-    _replayed_run(rig)  # and one whose live view turns into the replay
+    _finish(rig, made, thread, "stopped/button")  # no `end` line: the view is kept as it is
+    assert tab.view is not None and tab.view.live and tab.status_var.get() == "Ended: you pressed Stop."
+    tab.back_button.invoke()  # back to the idle minimap, drawn on the next drain
+    tab.drainEvents()
+    _kept_run(rig)  # and one whose live view read its `end` line
     canvas = tab.live_minimap.canvas
     assert called == [] and len(canvas.find_withtag("bg")) == 1 and canvas.find_withtag("node")
 
 
 def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
-    """RT-8a fix round [fyi]: `_onEnded` still runs while a close waits; it opens nothing (the close takes the view
-    down)."""
+    """RT-8a fix round [fyi]: `_onEnded` still runs while a close waits; it changes nothing and shows no Back button
+    (the close takes the view down)."""
     rig = _hosting_rig(make_rig, tmp_path)
     tab = rig.tab
     made, thread = _start(rig)
@@ -1706,6 +1716,7 @@ def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
     _append(rig.outs[0], G[5:])
     _finish(rig, made, thread, "stopped/window_close")
     assert rig.loads == [] and len(rig.views) == 1 and tab.view is rig.views[0] and tab.view.live
+    assert not tab._backShown()
     assert rig.log == [] and tab.status_var.get() == STOPPING
     _run_close_poll(rig)
     assert destroyed == [1] and rig.log == ["live0.stop", "view0.destroy"]
@@ -1729,15 +1740,16 @@ def test_no_live_view_is_built_while_a_close_waits(make_rig, tmp_path):
 
 
 @pytest.mark.parametrize("cyclic", [False, True])
-def test_the_kept_replays_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cyclic):
-    """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the replay shown before Start is destroyed by
-    Start (H70), just before the collection that precedes the freeze; its image (a Tcl image whose `__del__` calls Tcl) is freed on the Tk thread by the
-    time the run's end has been drained, also when only the cycle collector can free it."""
+def test_the_kept_views_image_is_freed_on_the_tk_thread(make_rig, tmp_path, cyclic):
+    """The GC guard covers the hosted view (RT-8a I1, ruling orch 108): the last run's view kept before Start is
+    destroyed by Start (H69, H70), just before the collection that precedes the freeze; its image (a Tcl image whose
+    `__del__` calls Tcl) is freed on the Tk thread by the time the run's end has been drained, also when only the cycle
+    collector can free it."""
     rig = _hosting_rig(make_rig, tmp_path, spy=False)
     tab = rig.tab
-    _replayed_run(rig, snapshot=True)
+    _kept_run(rig)
     photo = tab.view.shown_photo
-    assert photo is not None and tab.view.shown_background == SNAPSHOT
+    assert photo is not None and tab.view.shown_background == "live"
     name, freed = str(photo), []
     weakref.finalize(photo, lambda: freed.append(threading.current_thread().name))
     if cyclic:
