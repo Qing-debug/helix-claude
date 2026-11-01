@@ -2311,3 +2311,117 @@ Cost if wrong: one line back in `vision.py`.
 Undo: Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/ledger-QA.md:106`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/RVT96.json` (RVT96-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/RTS95-R.md` finding I3; question bank QB129.
+
+## H68 (2026-11-01): No automatic replay at the end of a run; Hong opens a replay himself (his question on QA108-1)
+
+Question: he asked on the Q&A page whether "After a run ends, the Route tab opens a replay of it" means the replay opens by itself (question q-20261101-132022-a398, on QA108-1, RT-8b-R-D1). It did: the spec had the view switch to replay at the end, and RT-8b built that.
+
+Ruling [Hong]: no automatic replay. His words, verbatim (the orchestrator's `Decision (Hong)` log line, 2026-11-01): "If so, no. Only we should choose to load the replay ourselves, noth avee it automatically come up after we finish a rune".
+
+Reason: his own. The switch came from the retired H50's option text ("The viewer keeps running after the walk ends, switched to replay of that run", decisions.md H50), never asked of him for the tab, so no decision of his is overturned.
+
+Affects: the tab spec 5.2 (the Ended row, "At the end of a run", "What the view area shows"), 5.9 (the follower row); the plan's choice 7 (the " Replay is open." suffix goes) and Task RT-8c piece 3 (`follow.py`'s switch at `end`, `route_tab.py`'s `_onEnded`). QA108-1 (a console line when the end-of-run replay fails to load) loses its main case; see H72.
+
+Cost if wrong: the end-of-run replay comes back (RT-8b's code is in git history, 06cde84).
+
+Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261101-132022-a398.md`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-1); `.superpowers/orchestrator/2026-10-21-phase1/briefs/RDO110-implementer.md` (decision 1).
+
+## H69 (2026-11-01): At the end of a run its last live picture and why lines stay, frozen, with a "Back to live minimap" button (QA109-1, QB146)
+
+Question: with no automatic replay (H68), what should the view area show right after a run ends? Options: A keep the last live picture and the why log on screen, with no replay bar, until he opens a saved run or presses Start; B clear the view area.
+
+Ruling [Hong]: option A, refined in chat. His pick, verbatim: "Keep the last live picture and the "why" lines on screen, frozen and with no replay bar, until you open a saved run or press Start." His chat answer, verbatim: "Freeze, + button": the picture and the why lines freeze so he can read what happened, with a "Back to live minimap" button; Start or opening a saved run also leave it.
+
+Reason: the set's text for A: he can still read why the run ended without opening a replay.
+
+Affects: the tab spec 5.2 ("What the view area shows", the Ended row's Enabled column); plan Task RT-8c piece 3 (`_onEnded` keeps the view, `LiveController._end` stops following without switching, `back_button`). The run-end clause of QA110-1's option A ("the end of a run goes back to it") is replaced by this decision, as he settled in chat.
+
+Cost if wrong: small; the view goes back to the idle live minimap at the end instead.
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA109.json` (QA109-1); `.superpowers/orchestrator/2026-10-21-phase1/briefs/QA109-qa-set.md` block 1; question bank QB146 (filled with the note "conflicts with QB148; asked in chat 2026-11-01").
+
+## H70 (2026-11-01): The Route tab's view area shows the live minimap whenever the tab is idle; Start goes straight into the live run view (QA110-1, QB148)
+
+Question: when no run is going and no replay is open, should the Route tab's view area show the live minimap instead of staying empty? Options: A show the live minimap (4x, the loaded map's rotation, the character) whenever the tab is idle, Start goes straight into the live run view and the end of a run goes back to it; B keep the plan (empty until Start or Open).
+
+Ruling [Hong]: option A, minus its run-end clause, which H69 replaces. His pick, verbatim: "Show the live minimap in the view area whenever the tab is idle, at 4x size, with the loaded map's rotation and the character. Start goes straight into the live run view".
+
+Reason: the set's text for A: it matches what he expects, and the tab never sits blank or shows an old run by mistake.
+
+Design (the implementer's call, RDO110): the idle view is not a mode of `RouteViewWindow` (built for one run folder, spec 5.2 Hosting) but a light canvas of the tab's own, `LiveMinimap` in `src/gui/live_minimap.py`, drawn on the tab's 100 ms drain while shown and the Route tab is in front: the shared frame at 4x, the loaded map's nodes read with the editor's reader and drawn in the view's look, and the character from route's `CharacterLocator` with no console line on a miss. From Start until Running the minimap stays and the run's live view replaces it at Running (open: RDO110-D1). This supersedes the open questions RTF98-4b-D1 (QA108-8, what the view shows from Start until Running) and RTF98-6a-D1 (QA108-9): nothing is kept from Start, so `set_bar_enabled` goes.
+
+Affects: the tab spec 5.2, 5.7 (the drain draws it), 5.9 (a new row), 5.11 (Open replaces it); plan C7, Task RT-8c piece 2, RT-10's amendment.
+
+Cost if wrong: a new small module and its tests; easy to undo.
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA110.json` (QA110-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261101-132747-8aba.md`; question bank QB148.
+
+## H71 (2026-11-01): Error details go to the app's console box, not the terminal; no colours yet (QA109-2)
+
+Question: the Route tab's end-of-run texts said "see the console", meaning the terminal the app was started from, where the details were printed; the app also has its own box labelled "console". Options: A also write the details into the app's console box and keep printing them in the terminal; B leave them in the terminal and say "see the terminal window".
+
+Ruling [Hong]: option A with his note, which drops the terminal. His note, verbatim: "dont use the teerminal. Use the app's console box. Later on we may customise it to makee it more UX friendly (special colours like red to denote errors)."
+
+Reason: his question (q-20261101-132132-4a74) showed the word "console" pointed him to the wrong place.
+
+Affects: the tab spec 5.5 (the "see the console box on the Setup tab" texts and "Where the details go"), 5.6 (the worker's wrapper), 5.7; plan choice 11 and Task RT-8c piece 4. One method of the tab writes every console line, with an error flag, so colours can come later; none now. Which lines go there is open (RDO110-D3: every line a run prints, or only the traceback).
+
+Cost if wrong: a queue and one writer method; easy to reverse.
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA109.json` (QA109-2); `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261101-132132-4a74.md`.
+
+## H72 (2026-11-01): A replay that fails to open says "Replay not opened: <the reason>" in one console line; the status line stays as it is (QA108-1, RT-8b-R-D1)
+
+Question: when the end-of-run replay could not load, the tab said nothing about why. Options: A print one console line with the reason, the status line unchanged; B nothing (as built).
+
+Ruling [Hong]: option A. His pick, verbatim: "Print one line in the console: "Replay not opened: <the reason>". The status line stays as it is."
+
+Reason: not given beyond the pick.
+
+Affects: with H68 the end-of-run load is gone, and the only other load in the tab, Saved runs' Open (plan RT-10), puts the load error on the status line, so no load path is silent and nothing prints the line today. A silent path added later prints it into the console box (H71). Spec 5.5 "Where the details go", plan RT-10's amendment.
+
+Cost if wrong: none now.
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/QA108-set.md`.
+
+## H73 (2026-11-01): A press on Stop during a walk shows the click text (QA108-6, RTP96-RA3-D1)
+
+Question: pressing Stop while the bot walks is itself a click on the app, so the "app got the keyboard" stop (H64) lands first and the status line reads "Stopped: you clicked the app. Press Start to run again." instead of "Ended: you pressed Stop." (inferred from Windows/Tk event order, not run). Options: A accept it and say so in the spec and the hands-on checks; B one shared text for both; C tell a Stop press apart by asking Windows where the pointer is (against H56).
+
+Ruling [Hong]: option A. His pick, verbatim: "Accept it: the click text shows for a Stop press during a walk. The spec and your hands-on check expectations are updated to say so."
+
+Reason: not given beyond the pick.
+
+Affects: the tab spec 5.5 (the Stop and `app_focus` rows) and section 9; plan H-2 and H-3, RT-9's A test (now plain). No code text changes; H64's quote stays as he said it.
+
+Cost if wrong: a text change (option B, about 15-20 lines in 4 files).
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-6); `.superpowers/orchestrator/2026-10-21-phase1/notes/RV-redo.md` section 1.
+
+## H74 (2026-11-01): During a run the Setup tab stays clickable; its buttons are greyed out (QA108-7, RTF98-1-D1)
+
+Question: during a run every Setup-tab button and the class picker are greyed out; is the Setup tab's header greyed out too (so its minimap cannot be shown), or does it stay selectable? Options: A it stays selectable (as built); B the header is greyed out too.
+
+Ruling [Hong]: option A. His pick, verbatim: "The tab stays clickable; its buttons are greyed out."
+
+Reason: not given beyond the pick.
+
+Affects: the tab spec 5.1 (its sentence); plan C4; the markers in `gui.py`'s `setRunLocked` docstring and RT-6's test comment (plan RT-8c piece 4). RT-6 built this already (`setRunLocked` leaves the tab state alone; `test_run_lock_disables_exactly_these` asserts `normal`).
+
+Cost if wrong: about 5-8 lines in 3 files (option B).
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-7); `.superpowers/orchestrator/2026-10-21-phase1/notes/RV-redo.md` section 2.

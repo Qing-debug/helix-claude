@@ -10,6 +10,13 @@ when it gets the keyboard (section 9), the no-new-window rule stays (5.12), an a
 question only as H66 says (6.3), and the capture thread's "Minimap" window is removed (5.12). Every choice in this
 spec is settled.*
 
+*Amended 2026-11-01 (unit RDO110) for Hong's answers of that day, H68-H74 (section 2, rows 17-23): no automatic
+replay at the end of a run, and the run's last live picture and why lines stay frozen with a "Back to live minimap"
+button (5.2); the live minimap in the view area whenever the tab is idle (5.2); error details in the app's console box,
+not the terminal (5.5); the click text for a Stop press during a walk (5.5, section 9); and the Setup tab staying
+clickable during a run (5.1). Three choices made to carry them out wait for a ruling, each marked `(waits for Hong:
+RDO110-D<n>)`.*
+
 ## 1. Summary
 
 Today a walk starts from the command line (`python -m src.route.walk --supervised`) and `--view` opens the route view
@@ -52,6 +59,13 @@ text and the test changes.
 | 14 | Tk's own foreground query is accepted outside a run (the app triggers none today); the rule "no new window, style or icon change during a run" stays | "Fine as it is (Recommended)" (RVT94-2, option A) | H65 |
 | 15 | An agent answers the key-test tools' "Is MapleStory closed?" with `y` only if Hong said in that same session that MapleStory is closed; otherwise it asks him first | "The agent answers 'y' only if you said in that same session that MapleStory is closed; otherwise it asks you first (Recommended)" (RVT95-1, option A) | H66 |
 | 16 | The capture thread's separate "Minimap" window is removed; the capture itself is unchanged | "Remove it (Recommended)" (RVT96-1, option A) | H67 |
+| 17 | No automatic replay at the end of a run; Hong opens a replay himself | "If so, no. Only we should choose to load the replay ourselves, noth avee it automatically come up after we finish a rune" (his question q-20261101-132022-a398 on QA108-1) | H68 |
+| 18 | At a run's end its last live picture and why lines stay on screen, frozen, with no replay bar and a "Back to live minimap" button, until he presses it, opens a saved run or presses Start | "Keep the last live picture and the "why" lines on screen, frozen and with no replay bar, until you open a saved run or press Start." (QA109-1, option A) and, asked in chat, "Freeze, + button" | H69 |
+| 19 | The view area shows the live minimap (4x, the loaded map's rotation, the character) whenever the tab is idle; Start goes straight into the live run view | "Show the live minimap in the view area whenever the tab is idle, at 4x size, with the loaded map's rotation and the character. Start goes straight into the live run view" (QA110-1, option A; its run-end clause is replaced by row 18) | H70 |
+| 20 | Error details go to the app's console box, not the terminal; no colours yet | "dont use the teerminal. Use the app's console box. Later on we may customise it to makee it more UX friendly (special colours like red to denote errors)." (QA109-2, option A, with his note) | H71 |
+| 21 | A replay that fails to open says so in one console line; the status line stays as it is | "Print one line in the console: "Replay not opened: <the reason>". The status line stays as it is." (QA108-1, option A) | H72 |
+| 22 | A press on Stop during a walk shows the click text | "Accept it: the click text shows for a Stop press during a walk. The spec and your hands-on check expectations are updated to say so." (QA108-6, option A) | H73 |
+| 23 | During a run the Setup tab stays clickable; its buttons are greyed out | "The tab stays clickable; its buttons are greyed out." (QA108-7, option A) | H74 |
 
 Still in force from the route-view spec: H51 (4x default, 2x/3x/4x buttons), H52 (every run saves `minimap.png` at its
 start), H53 (observer argument, route preview, `src/route_view` package), H54 (window-only tools may run with
@@ -114,9 +128,9 @@ disabled: every button of the Setup tab and its character picker, that is Load M
 dev buttons (`gui.py:198-215`), the draw blue node and draw orange node buttons, clear console and clear drawn nodes. Load
 Map, the picker, Open Map Editor and the dev buttons change the graph or open a window (section 5.12); the other four
 are greyed out too because Hong's pick (H64, RVT94-1 option B, "Same tab as A", whose tab has "everything except Stop
-greyed out") leaves only Stop usable during a run. All of them come back after the cleanup. (waits for Hong:
-RTF98-1-D1) Whether the Setup tab's header itself stays selectable during a run (the plan builds "it does") gets one
-sentence here once Hong answers.
+greyed out") leaves only Stop usable during a run. All of them come back after the cleanup. The Setup tab's header stays selectable during a run, so Hong can still
+look at its minimap; only its buttons and the picker are greyed out (H74: "The tab stays clickable; its buttons are
+greyed out.").
 
 ### 5.2 The Route tab, as Hong sees it
 
@@ -162,16 +176,36 @@ States of the top area:
 | Countdown | "Click the game now. Starting in 5 ... 4 ... 3 ... 2 ... 1. F12 stops." | Stop |
 | Running | "Running. F12 or Stop ends the run. Clicking this app also stops it." (section 9) | Stop |
 | Stopping | "Stopping: releasing keys..."; if Stop was pressed while connecting, "Stopping: waiting for the board connection attempt to end (up to 30 s)..." (5.6) | none |
-| Ended | "Ended: <reason in words> (<run folder name>). Replay is open." (texts in 5.5, including a worker that ended without saying so) | settings, Start, saved runs |
+| Ended | "Ended: <reason in words>" (texts in 5.5, including a worker that ended without saying so); no replay opens (H68) | settings, Start, saved runs, "Back to live minimap" while the run's view is kept (below) |
 
-At the end of a run the view switches to replay of that run (as the old viewer did at `end`, `follow.py:207-221`
-minus the focus calls). Error texts per exit code are in 5.5.
+At the end of a run no replay opens (H68): Hong opens one himself from Saved runs (5.11). Error texts per exit code
+are in 5.5.
 
-(waits for Hong: RTF98-4b-D1) From Start until Running (Connecting and the countdown) the view area keeps the replay
-it showed before Start, if any, with its replay bar greyed out like the rest of the tab (only Stop is usable, 5.1,
-H64), until the live view replaces it at Running; answer B empties the view area at Start instead. (waits for Hong:
-RTF98-6a-D1) A run that ends before Running and leaves no step or leg log ends with the view area empty under the
-plan as written; the other answer keeps that earlier replay and gives its bar back.
+What the view area shows (H68, H69, H70):
+- The idle live minimap, whenever no run view and no replay is shown: at app start, after "Back to live minimap", and
+  from Start until Running. It is the live minimap at 4x with the loaded map's rotation and the character (H70). It is
+  not a `RouteViewWindow`, which is built for one run folder (Hosting, above), but a light canvas of the tab's own,
+  `LiveMinimap` (`src/gui/live_minimap.py`), built once with the tab and hidden while another view is shown. On each
+  100 ms drain, while it is shown and the Route tab is in front, it draws the shared minimap frame (read under the
+  lock, as 5.8) scaled 4x as the view scales it (nearest neighbour, `window.py:543-553`); the loaded map's nodes, read
+  from `CSV_file` with the editor's reader as the run model reads `map.csv` (`model.py:357-368`: blue nodes labelled
+  `#1`, `#2`, ... in rotation order, orange ones smaller, in the view's colours), read again only when `CSV_file`
+  changes; and the character where route's `CharacterLocator` finds it (built from the same icon files as
+  `MapleGUI._findCharacter`, `gui.py:294-315`; a miss draws no marker and writes no console line). Before the first
+  frame it shows the dark canvas and "Minimap not found yet"; with no map loaded, the minimap and the character only.
+- Start goes straight into the live run view (H70): Start (once its checks pass) drops a kept run view or a replay, so
+  the idle live minimap shows through Connecting and the countdown, and at Running the run's live view replaces it.
+  The run view is built at Running, not at Start: a view built earlier would say "no new steps for 10 s" during a
+  countdown of up to 60 s (plan RT-8b). Nothing in the view area needs greying out then: the minimap has no controls.
+  (waits for Hong: RDO110-D1) A run that ends before Running has no run view to keep, so the minimap stays.
+- At the end of a run its live view stays in place, frozen (H69): it reads the lines no poll has read yet and stops
+  following; the last live picture, the panel and the why lines stay as last drawn, with no replay bar, and the
+  title's mode part reads `ended: <reason>` (as a replay's title does), or `ended` when no `end` line was read. A
+  "Back to live minimap" button shows above the view area while such a kept view is shown; it drops the view and
+  shows the idle live minimap. Start, or opening a saved run (5.11), also leaves the kept view.
+- A saved run opened from the list replaces what is shown with its replay, bar included (5.11). (waits for Hong:
+  RDO110-D2) The "Back to live minimap" button also shows under a replay and leads back the same way; Start leaves a
+  replay as it leaves a kept view.
 
 ### 5.3 Run settings
 
@@ -225,13 +259,13 @@ Ways a run ends, each a `StopControl.trigger(source)` except the natural end:
 | How | Source in `stop.json` | Status line |
 |---|---|---|
 | F12 (game in front) | `hotkey` (as today, `runtime.py:81`) | "Ended: you pressed F12." |
-| Stop button | `button` (new) | "Ended: you pressed Stop." (waits for Hong: RTP96-RA3-D1) |
+| Stop button | `button` (new) | "Ended: you pressed Stop." while connecting, or in the countdown before Hong has clicked the game. While the game has the keyboard (walking, or the countdown after he clicked it) a press on Stop is first a click on the app: the `app_focus` stop lands first (`StopControl` keeps the first trigger, `runtime.py:6`) and its text shows (H73) |
 | Minutes reached | as `walk` today (the timer) | "Ended: the time limit was reached." |
 | Laps done | none (natural end, exit 0; `stop.json` reason `max_laps`, also when a stop lands as the last lap ends) | "Ended: all laps done." |
 | Character lost (B19-D1) | `off_graph` / `no_position` | "Ended: the character was lost (exit 10)." |
 | App window closed | `window_close` (new) | none (the app closes after the cleanup) |
-| App got the keyboard while walking (section 9) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." (waits for Hong: RTP96-RA3-D1) |
-| Stop before the walk (route load, connect or countdown) | `button`, `window_close` or `app_focus`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." (`app_focus`: "Stopped: you clicked the app. Press Start to run again."; waits for Hong: RTP96-RA3-D1) |
+| App got the keyboard while walking (section 9), a press on Stop while walking included (H73) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." |
+| Stop before the walk (route load, connect or countdown) | `button`, `window_close` or `app_focus`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." (`app_focus`: "Stopped: you clicked the app. Press Start to run again."; a press on Stop after he clicked the game shows it too, H73) |
 | App still had the keyboard when the countdown ended (section 9) | `countdown_focus` (new), reason `cancelled` (5.6) | "Not started: click the game first. Press Start, then click the game before the countdown ends." |
 
 Other exit codes (same numbers as `walk.py:6-9`): 1 "Ended: the board link was lost.", 2 "Could not start: the run
@@ -239,16 +273,30 @@ folder could not be written." (on the worker this is the leg log failing to open
 start: no minimap frame or character found.", 4 "Could not start: the board did not connect.", 5 "Could not start:
 the map, route or character icon did not load.", 6 and 7 "Ended: the walker failed; see <run folder>.", 9 "Could not
 start: the F12 stop key could not be installed." An `ended` event with `code=None` (an exception left `run()`, 5.6)
-shows "Ended: the run stopped unexpectedly: <error>. See the console and <run folder>." A run that got as far as the
-leg log (after connect) leaves its folder, as `walk` does; a cancel always leaves one with its `stop.json` (5.6). In
-both "stopped unexpectedly" texts (this one and the next paragraph's) the words "and <run folder>" are shown only when
-that folder exists (an exception before the leg log, e.g. in the route load, leaves none); otherwise the text ends at
-"the console." ("See the console." in this one, "; see the console." in the next paragraph's).
+shows "Ended: the run stopped unexpectedly: <error>. See the console box on the Setup tab and <run folder>." A run
+that got as far as the leg log (after connect) leaves its folder, as `walk` does; a cancel always leaves one with its
+`stop.json` (5.6). In both "stopped unexpectedly" texts (this one and the next paragraph's) the words "and <run
+folder>" are shown only when that folder exists (an exception before the leg log, e.g. in the route load, leaves
+none); otherwise the text ends at "the console box on the Setup tab." ("See the console box on the Setup tab." in
+this one, "; see the console box on the Setup tab." in the next paragraph's). Code 6 or 7 with no run folder reads
+"Ended: the walker failed; see the console box on the Setup tab." (H71 for all of these.)
 
 The tab never stays in Running or Stopping without a live worker: its 100 ms queue drain also checks
 `worker.is_alive()`; a worker that has ended with no `ended` event seen (after one more drain of the queue) is treated
-as ended with the text "Ended: the run stopped unexpectedly; see the console and <run folder>.", and the controls come
-back as for any end.
+as ended with the text "Ended: the run stopped unexpectedly; see the console box on the Setup tab and <run folder>.",
+and the controls come back as for any end.
+
+Where the details go (H71): error details go to the app's console box (the Setup tab's `gui_console`, written by
+`MapleGUI._printToGUIConsole`, `gui.py:455-461`), not the terminal. That is the traceback of an exception that leaves
+`run()` (the worker's wrapper, 5.6) and (waits for Hong: RDO110-D3) every line a run in the app prints: the run
+driver's (e.g. "walk failed: <error>", "error: connect failed: <reason>") and the live view's ("follow error: ...").
+`RunSession` and `LiveController` each gain a keyword seam for their lines (`log`, `report`) whose default prints as
+today, so the CLI walk is unchanged. The worker never touches Tk: it puts each line on a queue of the tab's own, which
+the 100 ms drain writes into the box before the run events. One method of the tab writes every line, with a flag for
+errors, so errors can be coloured later; there are no colours now (H71). A replay that fails to open would print
+"Replay not opened: <the reason>" there with the status line unchanged (H72), but no load path is silent any more:
+the end-of-run load is gone (H68) and Open puts its load error on the status line (5.11). The one line printed when a
+close gives up waiting (below) stays as it is (RT-8a-D1 is open).
 
 The cleanup is `walk`'s, in its order (timer, release_all, recorder, `stop.json`, step log `end`, leg log,
 `link.close`, stop control close; `walk.py:473-507`), now inside `RunSession` (5.6) so the CLI and the tab share it.
@@ -388,7 +436,8 @@ Class key: the tab holds a class instance (`controller.agent.characterClass`, `g
   the exit code, or with `code=None` and the exception text ("the run stopped unexpectedly: <type>: <message>") when an
   exception is leaving `run()`. `run()` still re-raises (the CLI keeps today's behaviour, including a held
   `KeyboardInterrupt` re-raised by `runtime.run_cleanup`, `walk.py:469-471`). The tab's worker thread target wraps
-  `run()` in `try/except BaseException` and prints the traceback to the console, so no exception leaves the worker.
+  `run()` in `try/except BaseException` and sends the traceback to the app's console box (5.5, H71), so no exception
+  leaves the worker.
 - `StopControl.start(sigint: bool = True)` gains the flag; `RunSession` passes `sigint` through. The CLI runs on the
   main thread and passes `True` (Ctrl+C as today); the tab passes `False`, since there is no console and
   `signal.signal` fails off the main thread.
@@ -408,14 +457,15 @@ CLI walk records (H62); `--record` stays accepted and does nothing, so older com
 
 | Thread | Does | Touches Tk |
 |---|---|---|
-| Tk main | mainloop, both tabs, drains the run event queue every 100 ms, `LiveController` poll | yes |
+| Tk main | mainloop, both tabs, drains the run event queue and the console-line queue (5.5) every 100 ms and draws the idle live minimap on that drain (5.2), `LiveController` poll | yes |
 | capture (existing) | `capture_and_process_minimap` on `SharedInfo` | no |
 | run worker (new, daemon) | `RunSession.run()` | no |
 | `BleLink-loop`, `stop-hook`, `stop-control`, `step-log`, `record`, `walk-timer`, `route-stop-guard` | as in the walk today (`record` runs the catching wrapper of 5.6) | no |
 | `saved-run-sizes` (new, daemon) | sums the saved runs' folder sizes for the list (5.11) | no |
 
 While a run is live the Setup tab's `_updateCanvas` keeps its 10 ms loop but skips building the picture when the Setup
-tab is not shown, so the walker shares the interpreter with one redraw (the Route tab's) instead of two. The cost of
+tab is not shown, so the walker shares the interpreter with one redraw (the Route tab's) instead of two. The idle live minimap (5.2) is hidden from Running to the end of the run, so it adds no redraw
+while the bot walks, and when shown it draws only while the Route tab is in front. The cost of
 running the walker inside the app is not measured (RVT92 [review], route-view spec 5.6): the plan adds a measurement
 step that compares the `sent` events' `reaction_ms` and `waited_ms` of an in-app simulator run with a CLI simulator run.
 Who runs it (waits for Hong: RTP96-RB-D1): an agent under answer A, Hong under answer B (6.3 gives both wordings).
@@ -434,12 +484,13 @@ file lag. The step lines lag the walk by up to about 0.1-0.3 s (the poll), as be
 
 | Piece | Where | Change |
 |---|---|---|
-| Run driver | `src/route/session.py` (new) | from `walk.main` (5.6) |
+| Run driver | `src/route/session.py` (new) | from `walk.main` (5.6); a `log` seam for the lines it prints (5.5) |
 | Walk CLI | `src/route/walk.py` | thin over `RunSession`; `--view`, `_start_viewer`, `_wait_for_viewer`, `_ready_within`, `_VIEW_*` removed |
 | Stop control | `src/route/runtime.py` | `start(sigint=True)`; nothing else |
-| View model, follower | `src/route_view/model.py`, `follow.py` | as is, except `LiveController` loses the hide/show/style code in `_end` (`follow.py:207-221`) and the `Focus` protocol (:42-47); its texts lose `--replay` (:38-39) |
+| View model, follower | `src/route_view/model.py`, `follow.py` | as is, except `LiveController` loses the hide/show/style code in `_end` (`follow.py:207-221`) and the `Focus` protocol (:42-47); its texts lose `--replay` (:38-39); at `end` it no longer switches the window to replay but stops following and leaves the view as last drawn (H68, H69), and its lines go through a `report` seam (5.5) |
 | View widgets | `src/route_view/window.py` | `RouteViewWindow(parent: tk.Misc, ...)` packs into a given Frame; `title()` (:405) becomes a label |
-| Route tab | `src/gui/route_tab.py` (new; camelCase methods, as `src/gui`) | settings, Start/Stop, countdown text, saved-run list, event queue, hosts `RouteViewWindow` |
+| Route tab | `src/gui/route_tab.py` (new; camelCase methods, as `src/gui`) | settings, Start/Stop, countdown text, saved-run list, event queue, hosts `RouteViewWindow`, the idle live minimap and the "Back to live minimap" button; writes the console box (5.5) |
+| Idle live minimap | `src/gui/live_minimap.py` (new; camelCase methods, as `src/gui`) | the light canvas of 5.2 (H70) |
 | Notebook | `src/gui/gui.py` | `ttk.Notebook` with Setup and Route; close handler (5.5); the focus binding of section 9 |
 | Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) becomes one `time.sleep(FRAME_DELAY_MS / 1000)`; nothing else (H67, 5.12) |
 | Standalone replay | `src/route_view/__main__.py` | `python -m src.route_view --follow <folder>` always opens a replay; `--ready` and the live path removed |
@@ -484,7 +535,8 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
   Combobox drop-down, both of which are new windows, 5.12). It shows the folders under `data/route` that hold
   `steps.jsonl` or `legs.jsonl`, newest first, as "<local start time> <map file name> <laps done> <size>".
   "Refresh" re-reads the folder; "Open" loads the selected run with `load_folder` (`model.py:690`) into the view as a
-  replay. The list, Open and Refresh are disabled while a run is live.
+  replay, in place of the idle live minimap or a kept run view (5.2); a load that fails puts its error on the status
+  line and leaves the view as it was. The list, Open and Refresh are disabled while a run is live.
 - Sizes: a long run holds tens of thousands of frame files (10 per second is 36 000 per hour), so summing them on the
   Tk thread would freeze the app. The list is filled at once with "size ..." and a daemon thread (`saved-run-sizes`)
   sums each folder's file sizes (`os.scandir`, no Tk) and posts the results to a queue that the tab drains with
@@ -710,7 +762,9 @@ New:
   class with no key refuses Start; a worker that ends without an `ended` event (a fake worker thread that just
   returns) brings the tab to Ended with the "stopped unexpectedly" text and the controls back; the worker wrapper
   keeps an exception from `run()` off the thread (no traceback escapes, controls back); a view rebuilt per
-  run/replay (the old `RouteViewWindow` destroyed); the close handler calls `stop("window_close")` and destroys
+  run/replay (the old `RouteViewWindow` destroyed); at the end of a run the run's view kept, frozen, with no replay and
+  the "Back to live minimap" button (H68, H69); the idle live minimap shown when idle and from Start until Running
+  (H70); error details written into the console box, none on the terminal (H71); the close handler calls `stop("window_close")` and destroys
   only after the worker ends or 10 s; no message box, Toplevel, `wm` style or icon call and no focus call during a
   run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called); the focus
   binding of section 9 (a generated `<FocusIn>` on the withdrawn root after the app had lost the keyboard calls
@@ -793,7 +847,8 @@ How the tab uses it:
 - When the flag rises (it was clear, the app now has the keyboard) while the run is in its countdown or walking, the
   tab calls `session.stop("app_focus")`. While walking this is a `trigger`, like the Stop button: the walker stops,
   the cleanup releases every key (its second step, 5.5), and the status line reads "Stopped: you clicked the app.
-  Press Start to run again." (waits for Hong: RTP96-RA3-D1) In the countdown it is a stop before the walk (5.6,
+  Press Start to run again." A press on Stop while walking is such a click, so it shows this text too (H73). In the
+  countdown it is a stop before the walk (5.6,
   cancel payload, same text). Before the countdown (connecting) no key is sent yet, so the binding does nothing then;
   the check at the countdown's end covers it.
 - At the end of the countdown `run()` calls the `may_walk` the tab passed (5.6), which only reads the flag
@@ -806,8 +861,7 @@ How the tab uses it:
 - Tests (section 8): tab tests for the binding and the countdown refusal, and `RunSession` tests for `may_walk` and
   the `app_focus` source. Hong checks it by hand once, with no game and no board: an in-app simulator run (built as
   the 5.7 timing measurement builds it, simulator positions and link, so no key goes anywhere), where he clicks
-  another ordinary window and then the app (the run stops with the "you clicked the app" text; waits for Hong:
-  RTP96-RA3-D1), and lets one
+  another ordinary window and then the app (the run stops with the "you clicked the app" text), and lets one
   countdown end with the app in front (the run does not start).
 
 Hong's RVT94-2 pick ("Fine as it is (Recommended)", H65) keeps 5.12 rule 2 as written. 5.1's greying out of Load Map,
