@@ -258,7 +258,9 @@ def make_rig(make_gui, monkeypatch, tmp_path):
     replace the defaults: `make_session`, `make_thread`, `run_root`, `disk_free`, `new_out`, `git_head`, ...), a map and
     a class chosen, the minimap area built (`frame=False`: no frame, so no minimap area) and the character found, after
     one drain. So the tab is Ready, and a test breaks one thing. `rig.sessions` records the `FakeSession`s the fake
-    `make_session` built and `rig.threads` the `FakeThread`s; `rig.free` is what the default `disk_free` reports."""
+    `make_session` built and `rig.threads` the `FakeThread`s; `rig.free` is what the default `disk_free` reports.
+    The "Close anyway?" box is never a real one here (it would block the test): `gui.askCloseAnyway` appends 1 to
+    `rig.asks` and answers `rig.close_answer` (No until a test sets it)."""
     def make(*, frame=True, drain=True, cls=RouteTab, **keywords):
         run_root = tmp_path / "route"
         sessions, threads = [], []
@@ -274,7 +276,8 @@ def make_rig(make_gui, monkeypatch, tmp_path):
             return made
 
         rig = SimpleNamespace(sessions=sessions, threads=threads, run_root=run_root, out=run_root / RUN_NAME,
-                              csv=tmp_path / "fossil_foundry_2.csv", free=10 * START_FREE_BYTES)
+                              csv=tmp_path / "fossil_foundry_2.csv", free=10 * START_FREE_BYTES, asks=[],
+                              close_answer=False)
         options = dict(make_session=fake_session, make_thread=fake_thread, run_root=run_root,
                        disk_free=lambda path: rig.free, new_out=lambda: rig.out, git_head=lambda: HEAD)
         options.update(keywords)
@@ -287,6 +290,7 @@ def make_rig(make_gui, monkeypatch, tmp_path):
         gui, shared, scheduled = make_gui(frame=_frame() if frame else None, route_tab_factory=factory)
         rig.gui, rig.tab, rig.shared, rig.scheduled = gui, built[0], shared, scheduled
         rig.scheduled_by_the_build = list(scheduled)
+        gui.askCloseAnyway = lambda: (rig.asks.append(1), rig.close_answer)[1]  # the window is destroyed with the test
         agent = gui.controller.agent
         agent.CSVParser.CSV_file = rig.csv
         agent.characterClass = Kanna()
@@ -739,6 +743,8 @@ CONNECTING = "Connecting to the board..."
 RUNNING = "Running. F12 or Stop ends the run. Clicking this app also stops it."
 STOPPING = "Stopping: releasing keys..."
 STOPPING_CONNECT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
+CLOSING = "Closing - waiting for the run to finish cleaning up..."  # Hong's mockup (QB182); the close's status line
+CLOSING_CONNECT = "Closing - waiting for the board connection attempt to end (up to 30 s)..."
 
 
 def _event(kind, text="", **extra):
@@ -1341,9 +1347,6 @@ def test_default_session_builds_the_run_from_the_tabs_settings(make_rig):
 
 # ---- RT-8a: closing the app (spec 5.5 "Closing the app mid-run") and the Tk bans (spec 5.12) ----------------------
 
-CLOSE_GAVE_UP = "The run's cleanup did not finish in 10 s; closing anyway."
-
-
 def _close_polls(rig):
     return [entry for entry in rig.scheduled if entry[1] == rig.tab._pollClose]
 
@@ -1407,7 +1410,7 @@ def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, cap
     tab.onAppClose(destroy)
 
     assert made.stops == ["window_close"]
-    assert (tab.state, tab.status_var.get()) == ("stopping", STOPPING)
+    assert (tab.state, tab.status_var.get()) == ("stopping", CLOSING)
     assert _state(tab.stop_button) == "disabled" and calls == [] and len(_close_polls(rig)) == 1
 
     tab.onAppClose(destroy)  # pressed again while it waits: one poll loop, nothing more sent
@@ -1417,13 +1420,13 @@ def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, cap
     assert calls == [] and len(_close_polls(rig)) == 1
     made.on_event(_event("warning", "Recording stopped: x. The walk goes on."))
     tab.drainEvents()
-    assert tab.status_var.get() == STOPPING  # the close's text stays until the window goes (RT-8a m1)
+    assert tab.status_var.get() == CLOSING  # the close's text stays until the window goes (RT-8a m1)
 
     made.on_event(_event("ended", "cancelled/window_close", code=0))
     thread.finish()
     if drain_first:  # the drain finds the worker dead before the close poll does; nothing comes back (RT-8a m1)
         tab.drainEvents()
-        assert tab.worker is None and tab.status_var.get() == STOPPING
+        assert tab.worker is None and tab.status_var.get() == CLOSING
         assert _state(rig.gui.load_map_button) == "disabled" and _state(tab.start_button) == "disabled"
         assert [_state(w) for w in _run_controls(tab)] == ["disabled"] * 6
     tab.startRun()  # no new run while the window waits to close
@@ -1432,31 +1435,162 @@ def test_close_during_countdown_cancels_then_destroys(make_rig, monkeypatch, cap
     _run_close_poll(rig)
 
     assert calls == ["live.stop", "view.destroy", "host"] and _close_polls(rig) == []
-    assert capsys.readouterr().out == ""  # no console line: the cleanup finished in time
+    assert capsys.readouterr().out == "" and rig.asks == []  # no console line, no box: the cleanup finished in time
 
 
-def test_close_destroys_after_10_s(make_rig, capsys, gc_calls):
-    now = [100.0]
+def _close_rig(make_rig, start=100.0, connecting=False):
+    """A rig whose clock is `now[0]`, with a started run in its countdown (`connecting`: still connecting) whose worker
+    has not ended."""
+    now = [start]
     rig = make_rig(clock=lambda: now[0])
+    made, thread = _start(rig)
+    if not connecting:
+        made.on_event(_event("countdown", seconds_left=5))
+        rig.tab.drainEvents()
+    return rig, now, made, thread
+
+
+def _end_the_cleanup(made, thread):
+    made.on_event(_event("ended", "cancelled/window_close", code=0))
+    thread.finish()
+
+
+def test_close_with_a_cleanup_that_runs_long_waits_and_prints_nothing(make_rig, capsys):
+    """Hong's decision (QB182, H79): the window stays open until the cleanup ends, however long that takes; it no
+    longer gives up by itself at 10 s, and the old give-up line is gone."""
+    rig, now, made, thread = _close_rig(make_rig)
     tab = rig.tab
-    made, thread = _start(rig)  # a worker that never ends
     destroyed = []
-
     tab.onAppClose(lambda: destroyed.append(1))
-
-    for seconds in (100.1, 105.0, 109.9):
+    for seconds in (100.1, 109.9, 110.0, 135.0, 4000.0):
         now[0] = seconds
         _run_close_poll(rig)
-        assert destroyed == [], seconds
-    assert capsys.readouterr().out == ""
-    now[0] = 110.0
+        assert destroyed == [] and tab.status_var.get() == CLOSING, seconds
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "") and rig.asks == []  # only a click asks, never the poll
+    assert made.stops == ["window_close"] and thread.is_alive()
+
+    _end_the_cleanup(made, thread)  # the cleanup ends at last: the window closes by itself
     _run_close_poll(rig)
 
-    assert destroyed == [1] and _close_polls(rig) == []
-    assert capsys.readouterr().out == CLOSE_GAVE_UP + "\n"  # one console line
-    assert made.stops == ["window_close"] and thread.is_alive()  # never joined: a daemon, it dies with the process
-    assert not gc.isenabled() and ("enable", MAIN) not in gc_calls  # left off: the process is exiting (RT-8a I1)
-    assert ("unfreeze", MAIN) not in gc_calls
+    assert destroyed == [1] and _close_polls(rig) == [] and rig.asks == []
+    assert gc.isenabled()  # a worker that ended brings automatic collection back, as for any end (RT-8a I1)
+
+
+@pytest.mark.parametrize("connecting, text", [(True, CLOSING_CONNECT), (False, CLOSING)])
+def test_close_status_says_what_it_waits_for(make_rig, connecting, text):
+    """Right after Start the wait is the board connection attempt (up to 30 s); later it is the run's cleanup."""
+    rig, _, _, _ = _close_rig(make_rig, connecting=connecting)
+    assert rig.tab.state == ("connecting" if connecting else "countdown")
+    rig.tab.onAppClose(lambda: None)
+    assert (rig.tab.state, rig.tab.status_var.get()) == ("stopping", text)
+
+
+def test_a_second_click_before_10_s_does_nothing_new(make_rig):
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    destroyed = []
+    tab.onAppClose(lambda: destroyed.append(1))
+    for seconds in (100.0, 105.0, 109.9):
+        now[0] = seconds
+        tab.onAppClose(lambda: destroyed.append(2))
+        assert (destroyed, rig.asks, made.stops) == ([], [], ["window_close"]), seconds
+        assert len(_close_polls(rig)) == 1 and tab.status_var.get() == CLOSING  # one poll loop, same line
+        assert (tab.state, _state(tab.stop_button)) == ("stopping", "disabled")
+
+
+def test_a_second_click_after_10_s_asks_and_yes_closes_anyway(make_rig, monkeypatch, capsys, gc_calls):
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    calls = []
+    _hosted_view(monkeypatch, tab, calls)
+    tab.onAppClose(lambda: calls.append("host"))
+    now[0] = 110.0  # 10 s after the first press
+    rig.close_answer = True
+
+    tab.onAppClose(lambda: calls.append("second press"))
+
+    assert rig.asks == [1]
+    assert calls == ["live.stop", "view.destroy", "host"]  # the view first, then the first press's window
+    assert capsys.readouterr().out == "" and made.stops == ["window_close"]
+    assert thread.is_alive() and not gc.isenabled()  # never joined: a daemon, it dies with the process (RT-8a I1)
+    assert ("enable", MAIN) not in gc_calls and ("unfreeze", MAIN) not in gc_calls
+
+
+def test_a_second_click_after_10_s_asks_and_no_keeps_waiting(make_rig):
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    destroyed = []
+    tab.onAppClose(lambda: destroyed.append(1))
+    now[0] = 110.0
+
+    tab.onAppClose(lambda: destroyed.append(2))  # No
+
+    assert rig.asks == [1] and destroyed == [] and tab.status_var.get() == CLOSING
+    assert len(_close_polls(rig)) == 1  # the same poll loop, no second one
+    now[0] = 111.0
+    tab.onAppClose(lambda: destroyed.append(2))  # every click after 10 s asks again
+    assert rig.asks == [1, 1] and destroyed == []
+
+    _end_the_cleanup(made, thread)
+    _run_close_poll(rig)
+    assert destroyed == [1] and rig.asks == [1, 1]
+
+
+def test_a_second_click_asks_nothing_once_the_cleanup_has_ended(make_rig):
+    """The worker ended but the 100 ms poll has not run yet: the click only waits for it, with no box."""
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    destroyed = []
+    tab.onAppClose(lambda: destroyed.append(1))
+    now[0] = 112.0
+    _end_the_cleanup(made, thread)
+
+    tab.onAppClose(lambda: destroyed.append(2))
+
+    assert rig.asks == [] and destroyed == []
+    _run_close_poll(rig)
+    assert destroyed == [1]
+
+
+def test_the_cleanup_ending_under_the_box_closes_the_window_after_it(make_rig):
+    """The close poll may run while the box is open (Tk's timers go on in the box's own loop; not run here, so
+    inferred): the window must not be destroyed under a box that is still showing."""
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    destroyed = []
+    inside = []
+
+    def ask():
+        rig.asks.append(1)
+        _end_the_cleanup(made, thread)
+        _run_close_poll(rig)  # the poll fires while the box is up
+        inside.append(list(destroyed))
+        return False  # the box is answered No (or closed), afterwards
+
+    rig.gui.askCloseAnyway = ask
+    tab.onAppClose(lambda: destroyed.append(1))
+    now[0] = 110.0
+    tab.onAppClose(lambda: destroyed.append(2))
+
+    assert rig.asks == [1] and inside == [[]] and destroyed == []
+    assert len(_close_polls(rig)) == 1  # the poll went on waiting
+    _run_close_poll(rig)
+    assert destroyed == [1] and rig.asks == [1]
+
+
+def test_the_close_box_is_a_yes_no_question_on_the_main_window(make_gui, monkeypatch):
+    gui, _, _ = make_gui()
+    seen = []
+
+    def askyesno(title=None, message=None, **options):
+        seen.append((title, message, options))
+        return True
+
+    monkeypatch.setattr(gui_module.messagebox, "askyesno", askyesno)
+    assert gui.askCloseAnyway() is True
+    assert seen == [("Helix", "The run is still cleaning up. Close anyway?",
+                     {"default": "no", "parent": gui.gui})]  # Enter keeps waiting; Hong's QB182 wording
 
 
 _MISC_CALLS = ("focus_set", "focus", "focus_force", "tkraise", "lift", "grab_set")
@@ -1962,7 +2096,7 @@ def test_no_replay_opens_while_a_close_waits(make_rig, tmp_path):
     _finish(rig, made, thread, "stopped/window_close")
     assert rig.loads == [] and len(rig.views) == 1 and tab.view is rig.views[0] and tab.view.live
     assert not tab._backShown()
-    assert rig.log == [] and tab.status_var.get() == STOPPING
+    assert rig.log == [] and tab.status_var.get() == CLOSING
     _run_close_poll(rig)
     assert destroyed == [1] and rig.log == ["live0.stop", "view0.destroy"]
 
@@ -1978,7 +2112,7 @@ def test_no_live_view_is_built_while_a_close_waits(make_rig, tmp_path):
     tab.onAppClose(lambda: destroyed.append(1))
     _post(rig, made, _event("running", "Running."))
     assert rig.views == [] and tab.view is None and tab.live is None and rig.log == []
-    assert tab.status_var.get() == STOPPING
+    assert tab.status_var.get() == CLOSING_CONNECT  # the close came while connecting; the late `running` changed nothing
     _finish(rig, made, thread, "stopped/window_close")
     _run_close_poll(rig)
     assert destroyed == [1] and rig.log == []

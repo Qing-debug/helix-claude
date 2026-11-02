@@ -281,11 +281,14 @@ CONNECTING_TEXT = "Connecting to the board..."
 RUNNING_TEXT = "Running. F12 or Stop ends the run. Clicking this app also stops it."
 STOPPING_TEXT = "Stopping: releasing keys..."
 STOPPING_CONNECT_TEXT = "Stopping: waiting for the board connection attempt to end (up to 30 s)..."
+# spec 5.5 "Closing the app mid-run" (H79): the status line while the window waits for the run's cleanup. The first is
+# Hong's mockup word for word (QB182); the second says what the wait is when the run is still connecting.
+CLOSING_TEXT = "Closing - waiting for the run to finish cleaning up..."
+CLOSING_CONNECT_TEXT = "Closing - waiting for the board connection attempt to end (up to 30 s)..."
 BACK_TEXT = "Back to live minimap"  # spec 5.2, H69: shown with a kept run view
 
 POLL_MS = 100  # the drain's period, and the close handler's (spec 5.5, 5.7)
-CLOSE_WAIT_S = 10  # the close handler destroys the window after this even if the run's cleanup has not finished (5.5)
-CLOSE_GAVE_UP_TEXT = "The run's cleanup did not finish in 10 s; closing anyway."  # its one console line
+CLOSE_WAIT_S = 10  # a press on the close button this long after the first asks "Close anyway?" (5.5, H79)
 # Python's cycle collector runs on whichever thread allocates past its threshold. On the worker it could free a Tk
 # object (a Variable's or an image's `__del__` calls Tcl), which waits for the Tk thread with no timeout and can deadlock
 # it on a lock both take (the event queue's). So while a worker lives automatic collection is off and every collection
@@ -376,6 +379,7 @@ class RouteTab:
         self._countdown_first: int | None = None  # this run's first countdown count (plan choice 4)
         self._written: tuple | None = None  # (inputs, text) of the readiness line's last write (plan choice 8)
         self._closing: tuple[Callable[[], None], float] | None = None  # (destroy, clock at the press) while it waits
+        self._asking = False  # the "Close anyway?" box is open: the close poll must not destroy the window under it
         self._collector_off = False  # Start turned automatic garbage collection off and nothing has turned it back on
         self._polls_alive = 0  # drains that found this run's worker alive (the periodic collection's count)
         self._saved: list[SavedRun] = []  # the saved-run list's runs, one per row, in its order (RT-10)
@@ -752,11 +756,12 @@ class RouteTab:
         return self.state in _LIVE_STATES
 
     def onAppClose(self, destroy: Callable[[], None]) -> None:
-        """The window's close button (spec 5.5 "Closing the app mid-run"). With no worker the window goes at once.
-        With one: `session.stop("window_close")`, "Stopping: releasing keys..." with nothing enabled, then a close
-        poll every 100 ms (`_pollClose`) until the worker has ended or 10 s have passed. A second press while it waits
-        does nothing, so there is one poll loop."""
+        """The window's close button (spec 5.5 "Closing the app mid-run", H79). With no worker the window goes at once.
+        With one: `session.stop("window_close")`, a status line that says what the window waits for (`CLOSING_TEXT`)
+        with nothing enabled, then a close poll every 100 ms (`_pollClose`) that destroys the window the moment the
+        worker has ended, however long that takes. A press while it waits is `_closePressedAgain`."""
         if self._closing is not None:
+            self._closePressedAgain()
             return
         if self.worker is None:
             self._closeWindow(destroy)
@@ -764,25 +769,44 @@ class RouteTab:
         self._closing = (destroy, self._clock())
         if self.session is not None:
             self.session.stop("window_close")  # first call wins: after Stop or an end it changes nothing
+        text = CLOSING_CONNECT_TEXT if self.state == "connecting" else CLOSING_TEXT
         self.state = "stopping"
-        self.status_var.set(STOPPING_TEXT)
+        self.status_var.set(text)
         self.stop_button.configure(state="disabled")
         self._gui.gui.after(POLL_MS, self._pollClose)
 
-    def _pollClose(self) -> None:
-        """One close poll: the worker gone (dead, or already cleared by a drain) → the window goes; still alive after
-        `CLOSE_WAIT_S` → one console line, and the window goes anyway (the worker is a daemon and dies with the
-        process, so automatic garbage collection stays off); else the next poll in 100 ms."""
-        assert self._closing is not None  # only onAppClose schedules it
+    def _closePressedAgain(self) -> None:
+        """A press on the close button while the window already waits (H79): within `CLOSE_WAIT_S` of the first press, or
+        once the worker has ended (the poll closes the window within 100 ms), it does nothing, so there is one poll
+        loop and one stop. Later it asks "Close anyway?" through `MapleGUI.askCloseAnyway`: Yes destroys the window
+        now (the worker is a daemon and dies with the process, so automatic garbage collection stays off and frozen);
+        No changes nothing, and the next press asks again."""
+        assert self._closing is not None
         destroy, pressed = self._closing
+        if self._clock() - pressed < CLOSE_WAIT_S or not self._workerAlive():
+            return
+        self._asking = True
+        try:
+            close_anyway = self._gui.askCloseAnyway()
+        finally:
+            self._asking = False
+        if close_anyway:
+            self._closeWindow(destroy)
+
+    def _workerAlive(self) -> bool:
         worker = self.worker
-        if worker is not None and worker.is_alive():
-            if self._clock() - pressed < CLOSE_WAIT_S:
-                self._gui.gui.after(POLL_MS, self._pollClose)
-                return
-            print(CLOSE_GAVE_UP_TEXT)
-        else:
-            self._clearWorker()
+        return worker is not None and worker.is_alive()
+
+    def _pollClose(self) -> None:
+        """One close poll: the worker gone (dead, or already cleared by a drain) → the window goes; else the next poll in
+        100 ms, with no time limit (H79). While the "Close anyway?" box is open the window is not destroyed under it:
+        the poll waits for the answer first (the box's own loop may run this poll; I did not check that it does)."""
+        assert self._closing is not None  # only onAppClose schedules it
+        destroy, _ = self._closing
+        if self._asking or self._workerAlive():
+            self._gui.gui.after(POLL_MS, self._pollClose)
+            return
+        self._clearWorker()
         self._closeWindow(destroy)
 
     def _closeWindow(self, destroy: Callable[[], None]) -> None:

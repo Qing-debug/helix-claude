@@ -20,6 +20,11 @@ MINIMAP_NOT_FOUND_LABEL = ("Minimap not found yet. Waiting for the game's minima
                            "monitor; it appears here as soon as it is found.")
 MINIMAP_NOT_FOUND_MESSAGE = "Minimap not found yet: make the game's minimap visible on the captured monitor, then try again."
 
+# The box the Route tab asks on a second press of the close button, 10 s into a cleanup that has not ended (spec 5.5,
+# H79). The question is Hong's mockup (QB182).
+CLOSE_ANYWAY_TITLE = "Helix"
+CLOSE_ANYWAY_MESSAGE = "The run is still cleaning up. Close anyway?"
+
 # The character icon the buttons look for on the minimap (the route walker's finder, decision H20).
 _CHARACTER_ASSETS = Path(__file__).resolve().parent.parent.parent / "assets" / "chr"
 CHARACTER_ICON_PATH = _CHARACTER_ASSETS / "chr.png"
@@ -171,6 +176,12 @@ class MapleGUI:
                        self.delete_node_button, self.get_path_button):
             button.configure(state=state)
         self.character_picker.configure(state="disabled" if locked else "readonly")
+
+    def askCloseAnyway(self) -> bool:
+        """The Route tab's "Close anyway?" box (spec 5.5, H79): a Yes/No question on the main window, No the default
+        button, so Enter keeps waiting. True for Yes. It lives here and not in `route_tab.py` because the tab's source
+        holds no dialog name (spec 5.12 rule 2; its test scans it); this one box is the rule's single exception."""
+        return messagebox.askyesno(CLOSE_ANYWAY_TITLE, CLOSE_ANYWAY_MESSAGE, default=messagebox.NO, parent=self.gui)
 
     def _onClose(self):
         """WM_DELETE_WINDOW: the Route tab decides when the window may go (it waits for a live run's cleanup)."""

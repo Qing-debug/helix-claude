@@ -18,6 +18,10 @@ clickable during a run (5.1). Three choices made to carry them out waited for a 
 Hong, RDO110-D3 is A by orchestrator ruling (orch 110; Hong may still overturn it), and RDO110-D1 is answered A by Hong
 (QA112-1, H78, 2026-11-02).*
 
+*Amended 2026-11-02 (unit RDO110-5) for Hong's answer to RT-8a-D1, H79 (section 2, row 24): closing the app mid-run waits
+for the run's cleanup with a "Closing - ..." status line and, on a second press 10 s or more later, asks "Close
+anyway?" (5.5); the box is the one exception to rule 2 of 5.12.*
+
 ## 1. Summary
 
 Today a walk starts from the command line (`python -m src.route.walk --supervised`) and `--view` opens the route view
@@ -67,6 +71,7 @@ text and the test changes.
 | 21 | A replay that fails to open says so in one console line; the status line stays as it is | "Print one line in the console: "Replay not opened: <the reason>". The status line stays as it is." (QA108-1, option A) | H72 |
 | 22 | A press on Stop during a walk shows the click text | "Accept it: the click text shows for a Stop press during a walk. The spec and your hands-on check expectations are updated to say so." (QA108-6, option A) | H73 |
 | 23 | During a run the Setup tab stays clickable; its buttons are greyed out | "The tab stays clickable; its buttons are greyed out." (QA108-7, option A) | H74 |
+| 24 | Closing the app while a run's cleanup is going: the window stays open until the cleanup ends, the status line says what it waits for, and a second press on the close button 10 s or more after the first asks "Close anyway?" (Yes/No) | "Wait, + 'Close anyway?' (Recommended)" (2026-11-01, question q-20261101-135803-3136-D1; on the page, QA108-3, option Other: "keep the window open until the cleanup finishes, with the status line saying what it is waiting for, and let a second click on the close button after 10 seconds ask "Close anyway?""); confirmed 2026-11-02 after his mockup (QB182) | H79 |
 
 Still in force from the route-view spec: H51 (4x default, 2x/3x/4x buttons), H52 (every run saves `minimap.png` at its
 start), H53 (observer argument, route preview, `src/route_view` package), H54 (window-only tools may run with
@@ -176,7 +181,7 @@ States of the top area:
 | Connecting | "Connecting to the board..." | Stop |
 | Countdown | "Click the game now. Starting in 5 ... 4 ... 3 ... 2 ... 1. F12 stops." | Stop |
 | Running | "Running. F12 or Stop ends the run. Clicking this app also stops it." (section 9) | Stop |
-| Stopping | "Stopping: releasing keys..."; if Stop was pressed while connecting, "Stopping: waiting for the board connection attempt to end (up to 30 s)..." (5.6) | none |
+| Stopping | "Stopping: releasing keys..."; if Stop was pressed while connecting, "Stopping: waiting for the board connection attempt to end (up to 30 s)..." (5.6); if the window's close button was pressed, the "Closing - ..." text of 5.5 instead (H79) | none |
 | Ended | "Ended: <reason in words>" (texts in 5.5, including a worker that ended without saying so); no replay opens (H68) | settings, Start, saved runs, "Back to live minimap" while the run's view is kept (below) |
 
 At the end of a run no replay opens (H68): Hong opens one himself from Saved runs (5.11). Error texts per exit code
@@ -303,18 +308,27 @@ exception besides the step observer). The worker never touches Tk: it puts each 
 the 100 ms drain writes into the box before the run events. One method of the tab writes every line, with a flag for
 errors, so errors can be coloured later; there are no colours now (H71). A replay that fails to open would print
 "Replay not opened: <the reason>" there with the status line unchanged (H72), but no load path is silent any more:
-the end-of-run load is gone (H68) and Open puts its load error on the status line (5.11). The one line printed when a
-close gives up waiting (below) stays as it is (RT-8a-D1 is open).
+the end-of-run load is gone (H68) and Open puts its load error on the status line (5.11). Closing the app prints no
+line at all (below, H79).
 
 The cleanup is `walk`'s, in its order (timer, release_all, recorder, `stop.json`, step log `end`, leg log,
 `link.close`, stop control close; `walk.py:473-507`), now inside `RunSession` (5.6) so the CLI and the tab share it.
 
-Closing the app mid-run: the close handler (`WM_DELETE_WINDOW`) calls `session.stop("window_close")`, shows
-"Stopping: releasing keys..." and polls the worker with `after` until it has finished its cleanup, then destroys the
-window. If the cleanup has not finished after 10 s it destroys anyway and prints one line to the console; every run
-thread is a daemon and dies with the process. `release_all` is the second cleanup step, so keys are released first.
-Whether the board releases held keys when the BLE link drops was not checked (RVT92 [fyi]); the plan adds no test for
-it.
+Closing the app mid-run (H79; Hong's decision, 2026-11-01 and confirmed 2026-11-02): the close handler
+(`WM_DELETE_WINDOW`) calls `session.stop("window_close")`, shows "Closing - waiting for the run to finish cleaning
+up..." on the status line (while the run is still connecting, "Closing - waiting for the board connection attempt to end
+(up to 30 s)..." instead, as for Stop above) and polls the worker with `after` every 100 ms until it has finished its
+cleanup. Then the window closes by itself. There is no time limit: the window stays open as long as the cleanup runs,
+and the status line holds the closing text until it goes. A second press on the close button within 10 s of the first
+does nothing new. A second press 10 s or more after the first asks, in a Yes/No box on the main window with No as the
+default button, "The run is still cleaning up. Close anyway?": Yes destroys the window now (every run thread is a
+daemon and dies with the process; nothing is printed), No keeps waiting, and every later press asks again. If the
+cleanup ends while the box is open, the window goes as soon as the box is answered (the poll never destroys the window
+under an open box). A press that finds the cleanup already ended asks nothing. `release_all` is the second cleanup
+step, so keys are released first. The box is the one exception to rule 2 of 5.12 ("no message box"): it opens only on
+the user's own second press on this app's close button, never from anything the run does, and its code lives in
+`gui.py`, so the Route tab's source still names no dialog. Whether the board releases held keys when the BLE link
+drops was not checked (RVT92 [fyi]); the plan adds no test for it.
 
 ### 5.6 The run driver: `src/route/session.py`
 
@@ -567,7 +581,8 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
    Hong kept this rule (RVT94-2 A, H65); its reason is in section 2 (some of these reach Tk's own
    `GetForegroundWindow` call on an already-shown window; `-topmost` and the icon calls do not, and are banned
    anyway so the rule stays one plain line; a new window can take the keyboard). Errors and warnings go to the Route
-   tab's status line. This is why the map editor and Load Map are disabled during a run, and why the Route tab never
+   tab's status line. One exception, by Hong's decision (H79): the "Close anyway?" box of 5.5, asked only on a second
+   press of the close button 10 s or more into a cleanup that has not ended. This is why the map editor and Load Map are disabled during a run, and why the Route tab never
    uses a dialog even outside a run (the game is usually open then too).
 3. During a run the app never calls `focus_force`, `focus_set`, `lift`, `tkraise` or `grab_set` (they move or take
    focus; the existing `test_10` ban list in `tests/route_view/test_view_window.py:555` carries over to the tab).
@@ -775,7 +790,7 @@ New:
   run/replay (the old `RouteViewWindow` destroyed); at the end of a run the run's view kept, frozen, with no replay and
   the "Back to live minimap" button (H68, H69); the idle live minimap shown when idle and from Start until Running
   (H70); error details written into the console box, none on the terminal (H71); the close handler calls `stop("window_close")` and destroys
-  only after the worker ends or 10 s; no message box, Toplevel, `wm` style or icon call and no focus call during a
+  only after the worker ends (a second press 10 s or more on asks "Close anyway?", H79); no message box, Toplevel, `wm` style or icon call and no focus call during a
   run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called); the focus
   binding of section 9 (a generated `<FocusIn>` on the withdrawn root after the app had lost the keyboard calls
   `session.stop("app_focus")` once during the countdown and while walking, and not before Start or after the end;
