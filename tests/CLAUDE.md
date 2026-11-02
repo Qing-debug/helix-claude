@@ -2,7 +2,7 @@
 
 ## Layout
 
-- Mirrors `src/`: `tests/controller`, `tests/input`, `tests/route`, `tests/route_view`, plus `tests/test_smoke.py` and `tests/test_anti_cheat_names.py` (the name scan over `src` and `tools`, root CLAUDE.md, Safety rules); shared data in `tests/fixtures/` (`fossil_foundry_2.csv`, `ff2_terrain.json`).
+- Mirrors `src/`: `tests/controller`, `tests/input`, `tests/route`, `tests/route_view`, `tests/vision` (`test_frame_wait.py`, skipped off Windows), plus `tests/test_smoke.py` and `tests/test_anti_cheat_names.py` (the name scan over `src` and `tools`, root CLAUDE.md, Safety rules); shared data in `tests/fixtures/` (`fossil_foundry_2.csv`, `ff2_terrain.json`).
 - The Route tab's tests: `tests/controller/test_route_tab.py` (the tab, with fakes for the session, the clock and the view), `test_gui_notebook.py` (the Setup and Route tabs, the run lock), `test_live_minimap.py` and `tk_bans.py` (a flat helper: the source scan for the Tk calls the app may not make during a run, spec 5.12); `tests/route/test_session.py` (`RunSession`), `test_route_tab_sim.py` (`tools/route_tab_sim.py`, with no window) and `test_recording_rate.py` (`tools/recording_rate.py`).
 - No `__init__.py` and no `conftest.py` anywhere under `tests/`. pytest puts each test file's directory on `sys.path`, so basenames must be unique across `tests/` (plan hard rule 8) and helpers are imported flat (`from input_fakes import ...`; the fakes are described in `src/input/CLAUDE.md`).
 

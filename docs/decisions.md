@@ -2457,3 +2457,39 @@ Cost if wrong: a few keyword lines to drop from `walker.py` and its call sites.
 Undo: remove the `log` keyword from `RouteWalker` and the argument `RunSession` passes to it; restore the two prints.
 
 Pointer: `.superpowers/sdd/2026-10-31-route-tab/progress.md` (RDO110-4b2 entry, "ruling orch 111"); commits 66eceb2 and 9715a11.
+
+## H77 (2026-11-02): The minimap capture waits in Windows for a new frame instead of a fixed sleep (QA116-1; ruling QA116-PACE-D1 = C)
+
+Question: when the capture's "Minimap" window went (H67), its key wait became a plain 10 ms sleep, so the loop paused about 21 ms a frame instead of about 32 ms (RT-11-R I1): not "exactly as now". Keep the faster pace, or slow it back? Options: A keep the faster pace; B sleep about 16 ms to match the old pace.
+
+Ruling [Hong]: option Other. His answer, verbatim (Q&A page, 2026-11-02): "Pick the number that balannces time used to draw minimap + ttime for other processes to run. No point asking repeatedly in quic ksuccession if most of it reesults in a failed grab, that also takes away time from other processes to run. Hence, pick the number that results in the most non-failed grabs while still keeping latency low but also giving time for other processes as much time as possible to run. Essentially, only wait as lonng as it neeeds to wait for thee grab to get someething new, not too early, not too late"
+
+Ruling [orchestrator, orch 121; carrying out his answer]: QA116-PACE-D1 = C. A failed grab is Windows' desktop duplication saying "no new desktop image yet", and bettercam 1.0.0 asks with a time-out of 0, so any fixed sleep is too early (failed grabs asked in quick succession) or too late (a stale frame) depending on the game's frame rate. Instead each grab waits inside Windows for the next new image (`AcquireNextFrame` with a 100 ms time-out, `src/vision/frame_wait.py`), `cameraGrab` uses it, the `FRAME_DELAY_MS` sleep goes, and the 10 ms `THREAD_SLEEP_DURATION_S` sleep stays as a floor between frames (it binds only above about 90 frames a second). bettercam stays pinned at 1.0.0, with a test, because the helper reuses its private grab path. The options weighed (`notes/QA116-PACE.md` section 3): A one measured constant sleep; B an adaptive sleep that predicts the next frame; C this; D a 1 ms poll between failed grabs.
+
+Reason: it does what his answer asks with no number to tune: no failed grab is asked in quick succession (each wait sleeps in the OS), a new image reaches the loop about 2.6 ms after Windows presents it, and on the idle desktop the capture used 4.1% of a core against 70.3% for the old loop (measured, `notes/QA116-PACE.md`; the game's own frame rate is for Hong's live check, spec 12.5).
+
+Scope: this replaces H67's "The capture keeps working exactly as now" for the capture's pace only; H67's window removal stands. H58 still holds: the same Windows desktop duplication, the same monitor and the same pixels, and nothing names, opens or queries the game; only the wait's time-out changes.
+
+Affects: `src/vision/frame_wait.py` (new), `vision_helper_lib.cameraGrab`, `vision.py` (the sleep and `FRAME_DELAY_MS` gone), `tests/vision/test_frame_wait.py` (new), `test_capture_loop_keeps_its_pause` in `tests/test_anti_cheat_names.py`; the tab spec 5.12-5 and section 12; `src/vision/CLAUDE.md`; the root `CLAUDE.md` Vision paragraph. Built in commit 87ceab1.
+
+Cost if wrong: one module and its tests; the old sleep is two lines.
+
+Undo: `git revert 87ceab1` (the sleep, the constant and bettercam's own grab come back), or Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA116.json` (QA116-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/QA116-PACE.md`; `.superpowers/orchestrator/2026-10-21-phase1/briefs/QA116-PACE-F-implementer.md`.
+
+## H78 (2026-11-02): From Start until the run walks, the Route tab keeps showing the idle live minimap (QA112-1; confirms RDO110-D1)
+
+Question: between pressing Start and the run actually walking (connecting to the board, then the countdown), what should the view area show? The live run view is built only once the run walks, so that its "no new steps for 10 s" hint does not fire during a long countdown; a run that ends before it walks has no run view to keep. Options: A keep showing the idle live minimap through connecting and the countdown, the run view replacing it when the run walks; B show the run view from Start.
+
+Ruling [Hong]: option A. His pick, verbatim: "Keep showing the idle live minimap (4x, the loaded map's rotation, the character) through connecting and the countdown. The run view replaces it when the run is walking. A run that ends before it walks leaves the idle live minimap showing, with no Back button."
+
+Reason: the set's text for A: nothing is frozen or greyed out in that stretch, because the minimap has no controls, and the area never sits blank.
+
+Affects: answers RDO110-D1, which RT-8c built as A provisionally (H70's Design paragraph, "open: RDO110-D1"); no code changes. The places marked `(waits for Hong: RDO110-D1)` (the tab spec's 2026-11-01 amendment note and 5.2; the plan's RDO110-D1 section and Task RT-8c; `src/gui/CLAUDE.md`, the Route tab bullet) now read as answered A by this decision.
+
+Cost if wrong: none now; B would be a small change (the run view's no-step clock started at walking, two tests).
+
+Undo: Hong says so.
+
+Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA112.json` (QA112-1); his answer `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/inbox/20261102-000509-600624-answers-QA112.json`; `.superpowers/orchestrator/2026-10-21-phase1/briefs/RDO110-implementer.md`.

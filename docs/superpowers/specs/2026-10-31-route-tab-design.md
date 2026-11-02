@@ -588,10 +588,13 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
    `runtime.py:278-282`), so it exists during every run: clicking it sends the bot's keys there, and closing it makes
    the next `imshow` create and show a new window mid-run (OpenCV 4.13.0 `modules/highgui/src/window_w32.cpp`:
    `ShowWindow(..., SW_SHOW)` :1071, `SetFocus` on `WM_ACTIVATE` :1618-1621, `WM_DESTROY` :1543-1545). The window is
-   removed: the pair becomes `time.sleep(FRAME_DELAY_MS / 1000)`, which keeps the same pause in the loop (the comment
-   at :84 says the longer delay lowers how often `camera.grab()` returns None). The capture itself (H58) is unchanged
-   and the minimap stays visible on the Setup tab. The name scan of rule 4 also bans `imshow`, `namedWindow` and
-   `waitKey`, with the same scope; today they appear only at `vision.py:83-84` (grep of `src` and `tools`).
+   removed. Its key wait first became `time.sleep(FRAME_DELAY_MS / 1000)` (RT-11), which did not keep the same pause
+   (about 21 ms a frame instead of about 32 ms, RT-11-R I1). Then, by Hong's QA116-1 answer (H77), the grab waits
+   inside Windows for the next new desktop image (`src/vision/frame_wait.py`, a 100 ms time-out), so that sleep and
+   `FRAME_DELAY_MS` are gone and the loop keeps only its 10 ms `THREAD_SLEEP_DURATION_S` floor. The capture itself
+   (H58: same API, same monitor, same pixels) is otherwise unchanged and the minimap stays visible on the Setup tab.
+   The name scan of rule 4 also bans `imshow`, `namedWindow` and `waitKey`, with the same scope; today they appear
+   only at `vision.py:83-84` (grep of `src` and `tools`).
 
 Tk at first show, for Hong's information (corrected after RVT94; section 2): Tk makes no `GetForegroundWindow` call
 when the app's main window or the map editor is first shown, nor when an icon is set or a window is made always on
@@ -930,6 +933,7 @@ plan's own message. Hashes are in build order within a task.
 | RT-11 | `662c56d`, `3330a45`, `7e3e676` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56); the pin test for all 15 banned names (`7e3e676`, RT-11-R m1) |
 | RT-12 | `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
 | RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
+| QA116-PACE-F | `87ceab1` | the capture's grab waits in Windows for a new frame; the `FRAME_DELAY_MS` sleep is gone (H77) |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
 
@@ -979,6 +983,14 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   ruling orch 111; `src/route/CLAUDE.md`, Traps).
 - **RT-13 part A.** `tools/recording_rate.py` ends a bad index line in one `error:` line and exit 2 (ruling RT-13-D1 = A;
   RT-13-R M1, M3), as the repo's other CLIs do.
+- **The capture's pace (H77, `87ceab1`).** Sections 5.9 (the capture loop row) and 6.3 (`src/vision/CLAUDE.md`) still
+  describe RT-11's `time.sleep(FRAME_DELAY_MS / 1000)`. By Hong's QA116-1 answer (wait only as long as a new frame
+  needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows for the next new desktop image
+  (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100 ms instead of 0), skips an
+  update that moved only the mouse pointer, and the loop keeps only its 10 ms floor sleep; 5.12-5 says so. Measured on
+  the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1% of a core against 70.3% for the old loop, no
+  busy asks, and an image reaches Python about 2.6 ms after Windows presents it. With the game drawing it is not yet
+  measured (12.5).
 
 ### 12.4 Test counts
 
@@ -990,5 +1002,10 @@ At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14
 - RT-13 part B: the measured recording rate needs Hong's 10-minute recording (H-1 in the plan's "Hong's hands"). Until
   then `START_FREE_BYTES` (2 GB), `RECORD_FLOOR_BYTES` (1 GB) and `RECORD_GB_PER_HOUR` (0.5) in
   `src/route/session.py:85-87` are the provisional numbers of sections 5.2, 5.4 and 5.6.
+- Hong's hands, the capture's pace (H77): a ~35 s live check with the game open, its minimap on the captured monitor
+  and no run; it reads monitor pixels only and sends no key:
+  `C:\Users\Qing_programming\Desktop\helix-rt\.venv\Scripts\python.exe C:\Users\Qing_programming\Desktop\helix-claude-clone\.superpowers\orchestrator\2026-10-21-phase1\notes\QA116-PACE-scratch\measure_dup.py`.
+  Pass: the new loop's CPU at or below the old loop's (its SUMMARY prints both), and the median image gap is the game's
+  frame interval (under about 11 ms the 10 ms floor sets the pace, which is fine). It can share H-1's sitting.
 - Hong's hands: H-2 (`python tools/route_tab_sim.py manual`, clicks on the app) and H-3 (an in-app 1-lap walk with the
   game and the board). No agent runs either.
