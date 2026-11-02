@@ -72,7 +72,7 @@ _DATA = _REPO / "data"
 _BORDERS = _REPO / "assets" / "brds"
 _CHR = _REPO / "assets" / "chr"
 
-# The corner order and the match threshold of src/vision/vision.py:25 and :15.
+# The corner order and the match threshold of src/vision/vision.py:24 and :14.
 _CORNERS = ["left_top", "right_top", "right_bot", "left_bot"]
 _BORDER_CONFIDENCE = 0.95
 
@@ -101,7 +101,7 @@ class _Match(NamedTuple):
 
 @cache
 def _corner_templates() -> Result[dict[str, tuple[np.ndarray, np.ndarray]], str]:
-    """The grayscale border and its mask of each corner, as vision.py:38-40 reads them."""
+    """The grayscale border and its mask of each corner, as vision.py:37-39 reads them."""
     templates = {}
     for corner in _CORNERS:
         border = cv2.imread(str(_BORDERS / f"{corner}_grayscale.png"), cv2.IMREAD_GRAYSCALE)
@@ -113,7 +113,7 @@ def _corner_templates() -> Result[dict[str, tuple[np.ndarray, np.ndarray]], str]
 
 
 def crop_minimap(full_bgr: np.ndarray) -> Result[np.ndarray, str]:
-    """The minimap region of a full-screen BGR frame, as BGR: the steps of vision.py:46-74, via `vision_helper_lib`.
+    """The minimap region of a full-screen BGR frame, as BGR: the steps of vision.py:45-73, via `vision_helper_lib`.
 
     Masked `TM_CCORR_NORMED` of each corner border over the whole frame (inf, nan and scores above 1 scrubbed), the
     validity check of `isMatchedTemplateLocValid`, the region from the left-top and right-bottom corner centres, and the
@@ -134,7 +134,7 @@ def crop_minimap(full_bgr: np.ndarray) -> Result[np.ndarray, str]:
         if height < border.shape[0] or width < border.shape[1]:
             return Failure(f"bad frame: {width} x {height} is smaller than the {corner} border")
         scores = cv2.matchTemplate(gray, border, cv2.TM_CCORR_NORMED, mask=mask)
-        scores[~np.isfinite(scores) | (scores > 1.0)] = -1.0  # as vision.py:55
+        scores[~np.isfinite(scores) | (scores > 1.0)] = -1.0  # as vision.py:54
         _, best, _, (x, y) = cv2.minMaxLoc(scores)
         matches[corner] = _Match(x, y, best)
     seen = ", ".join(f"{corner} {match.conf_score:.4f}" for corner, match in matches.items())

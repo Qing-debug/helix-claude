@@ -356,7 +356,7 @@ def test_4_a_rejected_leg_or_no_plan_changes_no_handler_state(tmp_path):
     assert live.why == whole.why and live._leg_idx == whole._leg_idx and live._legs == whole._legs
 
 
-# 5---------------------------------------------------------------------------------------------------------------
+# 5 ---------------------------------------------------------------------------------------------------------------
 
 
 def test_5_a_changed_map_warns_and_still_draws(tmp_path):

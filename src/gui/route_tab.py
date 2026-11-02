@@ -800,7 +800,7 @@ class RouteTab:
     def _pollClose(self) -> None:
         """One close poll: the worker gone (dead, or already cleared by a drain) → the window goes; else the next poll in
         100 ms, with no time limit (H79). While the "Close anyway?" box is open the window is not destroyed under it:
-        the poll waits for the answer first (the box's own loop may run this poll; I did not check that it does)."""
+        the poll waits for the answer first (the box's loop runs it: Tk timers run inside `askyesno`, RDO110-5-R)."""
         assert self._closing is not None  # only onAppClose schedules it
         destroy, _ = self._closing
         if self._asking or self._workerAlive():

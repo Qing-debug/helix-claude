@@ -216,7 +216,7 @@ def _full_screen(seed: int = 0, fill: int | None = None) -> tuple[np.ndarray, tu
     """A 400 x 300 BGR frame with the four minimap corner borders pasted in, and the region crop_minimap should return.
 
     The templates are pasted with +-2 of noise: an exact copy can score 1.0000001 in float32, which vision.py scrubs.
-    The region runs from the left-top corner's centre to the right-bottom corner's centre (vision.py:66-67).
+    The region runs from the left-top corner's centre to the right-bottom corner's centre (vision.py:65-66).
     """
     rng = np.random.default_rng(seed)
     if fill is None:

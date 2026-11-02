@@ -1554,8 +1554,8 @@ def test_a_second_click_asks_nothing_once_the_cleanup_has_ended(make_rig):
 
 
 def test_the_cleanup_ending_under_the_box_closes_the_window_after_it(make_rig):
-    """The close poll may run while the box is open (Tk's timers go on in the box's own loop; not run here, so
-    inferred): the window must not be destroyed under a box that is still showing."""
+    """The close poll runs while the box is open (Tk's timers go on in the box's own loop on Windows: RDO110-5-R's
+    probe, 18 ticks of a 100 ms `after` in 2 s): the window must not be destroyed under a box that is still showing."""
     rig, now, made, thread = _close_rig(make_rig)
     tab = rig.tab
     destroyed = []
