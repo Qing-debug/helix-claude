@@ -502,7 +502,8 @@ class RunModel:
                                                               # t_ns is None or k is the last step
 
 def load_folder(folder: Path, *, repo_root: Path, current_git_head: str | None) -> Result[RunModel, str]
-    # read_run (V1) + read_frame_index + RunModel.open + extend + add_frames; Failure only when read_run fails
+    # read_run (V1) + read_frame_index + RunModel.open + extend + add_frames; Failure when read_run fails, or when
+    # extend raises on a value the model cannot show (RT-final-R-ADJ-D1 = A, RT-ADJ-2-D1 = A)
 def read_frame_index(data: bytes) -> tuple[list[tuple[int, str]], int]
     # complete lines only (up to the last b"\n"); "\r\n" accepted (record_minimap.py:78 opens the index in text mode,
     # so on Windows its lines end "\r\n"); returns (frames, bad_lines)

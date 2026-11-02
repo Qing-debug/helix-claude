@@ -2470,11 +2470,11 @@ Reason: it does what his answer asks with no number to tune: no failed grab is a
 
 Scope: this replaces H67's "The capture keeps working exactly as now" for the capture's pace only; H67's window removal stands. H58 still holds: the same Windows desktop duplication, the same monitor and the same pixels, and nothing names, opens or queries the game; only the wait's time-out changes, and an update that moved only the mouse pointer gives no frame.
 
-Affects: `src/vision/frame_wait.py` (new), `vision_helper_lib.cameraGrab`, `vision.py` (the sleep and `FRAME_DELAY_MS` gone), `tests/vision/test_frame_wait.py` (new), `test_capture_loop_keeps_its_pause` in `tests/test_anti_cheat_names.py`; the tab spec 5.12-5 and section 12; `src/vision/CLAUDE.md`; the root `CLAUDE.md` Vision paragraph. Built in commit 87ceab1.
+Affects: `src/vision/frame_wait.py` (new), `vision_helper_lib.cameraGrab`, `vision.py` (the sleep and `FRAME_DELAY_MS` gone), `tests/vision/test_frame_wait.py` (new), `test_capture_loop_keeps_its_pause` in `tests/test_anti_cheat_names.py`; the tab spec 5.9, 5.12-5, 6.3 and section 12; `src/vision/CLAUDE.md`; the root `CLAUDE.md` Vision paragraph; `tests/CLAUDE.md`; the `PUMP_PERIOD_S` comment in `tools/route_tab_sim.py`. Built in commit 87ceab1 (the docs in d5638fe and 3c61477; bettercam's licence notice at `frame_wait.py`'s copied code in 36b37a9).
 
 Cost if wrong: one module and its tests; the old sleep is two lines.
 
-Undo: `git revert 87ceab1` (the sleep, the constant and bettercam's own grab come back), or Hong says so.
+Undo: `git revert 36b37a9 87ceab1` (the sleep, the constant and bettercam's own grab come back; the revert stops on one conflict, the `PUMP_PERIOD_S` comment in `tools/route_tab_sim.py`, which 3c61477 also edited: keep the two-line comment from before 87ceab1), or Hong says so.
 
 Pointer: Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA116.json` (QA116-1); `.superpowers/orchestrator/2026-10-21-phase1/notes/QA116-PACE.md`; `.superpowers/orchestrator/2026-10-21-phase1/briefs/QA116-PACE-F-implementer.md`.
 

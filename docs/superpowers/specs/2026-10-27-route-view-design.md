@@ -84,7 +84,7 @@ The supervised walk CLI (`python -m src.route.walk`) is one process. Its threads
 | Thread | What it does | Evidence |
 |---|---|---|
 | main | parses args, builds everything, then sits in `walker.run()` for the whole run | `src/route/walk.py:206`, `:317` |
-| `minimap-capture` | the vision loop; publishes each minimap frame into `SharedFrame` | `src/route/runtime.py:278-284`, `src/vision/vision.py:80-81` |
+| `minimap-capture` | the vision loop; publishes each minimap frame into `SharedFrame` | `src/route/runtime.py:278-284`, `src/vision/vision.py:79-80` |
 | `stop-hook` | the F12 low-level keyboard hook | `src/route/runtime.py:184-213` |
 | `stop-control` | waits for a trigger and calls `walker.stop_now` | `src/route/runtime.py:77-78`, `:108-113` |
 | `record` (with `--record`) | saves minimap frames at 10 fps into `frames/` | `src/route/walk.py:75`, `:198-201`, `:303-307` |
@@ -187,7 +187,7 @@ Hence a new per-step log, `steps.jsonl` (section 5.2), plus one minimap snapshot
 - The map editor's redraw loop resizes the frame and builds the `PhotoImage` while it holds `minimap_frame_lock`
   (`map_editor.py:1069-1087`), every 10 ms (`:1088`). `src/gui/CLAUDE.md:9` says to take the frame under the lock and
   release it before any Tk call. The route view must not copy the editor's loop.
-- The vision thread publishes a new array for every frame and never changes one it published (`vision.py:80-81`;
+- The vision thread publishes a new array for every frame and never changes one it published (`vision.py:79-80`;
   `position.py:12-13`; `record_minimap.py:116-126` relies on it), so a reader may take the reference under the lock and
   use it after releasing the lock without copying.
 - The simulator's position source draws from its random generator on every `read` (`sim/link.py:129-130`): an

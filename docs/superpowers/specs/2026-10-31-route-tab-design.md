@@ -556,7 +556,7 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
 - Picking a run: the "Saved runs" list in the Route tab is a `tk.Listbox` with a scrollbar (no file dialog and no
   Combobox drop-down, both of which are new windows, 5.12). It shows the folders under `data/route` that hold
   `steps.jsonl` or `legs.jsonl`, newest first, as "<local start time> <map file name> <laps done> <size>".
-  "Refresh" re-reads the folder; "Open" loads the selected run with `load_folder` (`model.py:690`) into the view as a
+  "Refresh" re-reads the folder; "Open" loads the selected run with `load_folder` (`model.py:711`) into the view as a
   replay, in place of the idle live minimap or a kept run view (5.2); a load that fails puts its error on the status
   line and leaves the view as it was. The list, Open and Refresh are disabled while a run is live.
 - Sizes: a long run holds tens of thousands of frame files (10 per second is 36 000 per hour), so summing them on the
@@ -578,12 +578,12 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
 2. During a run (from Start until the cleanup has finished) the app opens no new window (no message box, file dialog,
    Toplevel or OpenCV window), and calls no `wm` command that changes a window's style or icon (`overrideredirect`,
    `resizable`, `transient`, `attributes` with `-toolwindow`, `-topmost` or `-fullscreen`, `iconbitmap`, `iconphoto`).
-   Hong kept this rule (RVT94-2 A, H65); its reason is in section 2 (some of these reach Tk's own
-   `GetForegroundWindow` call on an already-shown window; `-topmost` and the icon calls do not, and are banned
-   anyway so the rule stays one plain line; a new window can take the keyboard). Errors and warnings go to the Route
-   tab's status line. One exception, by Hong's decision (H79): the "Close anyway?" box of 5.5, asked only on a second
-   press of the close button 10 s or more into a cleanup that has not ended. This is why the map editor and Load Map are disabled during a run, and why the Route tab never
-   uses a dialog even outside a run (the game is usually open then too).
+   Hong kept this rule (RVT94-2 A, H65); its reason is in section 2 (some of these reach Tk's own `GetForegroundWindow`
+   call on an already-shown window; `-topmost` and the icon calls do not, and are banned anyway so the rule stays one
+   plain line; a new window can take the keyboard). Errors and warnings go to the Route tab's status line. One
+   exception, by Hong's decision (H79): the "Close anyway?" box of 5.5, asked only on a second press of the close button
+   10 s or more into a cleanup that has not ended. This is why the map editor and Load Map are disabled during a run,
+   and why the Route tab uses no other dialog, even outside a run (the game is usually open then too).
 3. During a run the app never calls `focus_force`, `focus_set`, `lift`, `tkraise` or `grab_set` (they move or take
    focus; the existing `test_10` ban list in `tests/route_view/test_view_window.py:555` carries over to the tab).
 4. A test enforces rule 1 by name (section 8). Scope: every `src/**/*.py` and `tools/**/*.py` file, except those under
@@ -728,9 +728,9 @@ CLAUDE.md H15 bullet for how an agent answers)". `firmware/CLAUDE.md:5`: replace
 MapleStory check" with "answer the tools' 'Is MapleStory closed?' question `y` only if Hong said in that same session
 that MapleStory is closed, otherwise ask him first (root CLAUDE.md H15 bullet, decision H66)". `tests/CLAUDE.md:15`:
 "patches `soak._process_names`" becomes "patches `soak._read_answer`". `src/vision/CLAUDE.md:9-10`: the
-`cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line says each grab waits inside Windows for a new desktop image
-(`frame_wait.py`) with the 10 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77, 5.12-5); a
-bullet names `frame_wait.py`'s copy of bettercam 1.0.0's grab and its pin test.
+`cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line says each grab waits inside Windows for a new
+desktop image (`frame_wait.py`) with the 10 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77,
+5.12-5); a bullet names `frame_wait.py`'s copy of bettercam 1.0.0's grab and its pin test.
 
 `src/route/CLAUDE.md`: drop the N1 tool lines (:36, :49-55) with the tool; add `session.py` to the seams and the
 `RunSession` traps (Tk never touched from the worker; `sigint=False` off the main thread). `src/gui/CLAUDE.md`: add the
@@ -789,9 +789,10 @@ New:
   keeps an exception from `run()` off the thread (no traceback escapes, controls back); a view rebuilt per
   run/replay (the old `RouteViewWindow` destroyed); at the end of a run the run's view kept, frozen, with no replay and
   the "Back to live minimap" button (H68, H69); the idle live minimap shown when idle and from Start until Running
-  (H70); error details written into the console box, none on the terminal (H71); the close handler calls `stop("window_close")` and destroys
-  only after the worker ends (a second press 10 s or more on asks "Close anyway?", H79); no message box, Toplevel, `wm` style or icon call and no focus call during a
-  run (patch `tkinter.messagebox`, `tk.Toplevel` and the `wm`/focus methods and assert none was called); the focus
+  (H70); error details written into the console box, none on the terminal (H71); the close handler calls
+  `stop("window_close")` and destroys only after the worker ends (a second press 10 s or more on asks "Close anyway?",
+  H79); no message box, Toplevel, `wm` style or icon call and no focus call during a run (patch `tkinter.messagebox`,
+  `tk.Toplevel` and the `wm`/focus methods and assert none was called); the focus
   binding of section 9 (a generated `<FocusIn>` on the withdrawn root after the app had lost the keyboard calls
   `session.stop("app_focus")` once during the countdown and while walking, and not before Start or after the end;
   the `may_walk` the tab passes reads the tab's "app has the keyboard" flag and touches no Tk).
@@ -918,12 +919,14 @@ Start (F12, Stop and a click on the app) and a replay; agents never press Start.
 
 ## 12. As built (RT-14, written 2026-11-01)
 
-This section says what the code at `415dbf0` (the tip of `p1-route-tab` before this section), plus RT-14b's one change to
-`tools/route_tab_sim.py` (`9bb3146`), does where that is not what sections 1-11 say. Where this section and an earlier one disagree, this section is right. The build is not
-finished: section 12.5 lists what is still open. `python tools/check.py --full` at `415dbf0`: ruff, basedpyright,
-lint-imports and pytest all pass (2277 passed, 10 skipped).
+This section says what the code at `415dbf0` (the tip of `p1-route-tab` before this section), plus RT-14b's one change
+to `tools/route_tab_sim.py` (`9bb3146`), does where that is not what sections 1-11 say. Where this section and an
+earlier one disagree, this section is right. The build is not finished: section 12.5 lists what is still open.
+`python tools/check.py --full` at `415dbf0`: ruff, basedpyright, lint-imports and pytest all pass (2277 passed, 10
+skipped); at `23c803c`, the tip after the commits of 12.1 from the route_view load-failure row on, they pass too (2310
+passed, 10 skipped).
 
-### 12.1 Commits (RT-1 to RT-13 part A)
+### 12.1 Commits
 
 A task with two commits was built in two pieces: the implementer's "piece 1 of 2" commit, then the commit with the
 plan's own message. Hashes are in build order within a task.
@@ -949,8 +952,10 @@ plan's own message. Hashes are in build order within a task.
 | RT-11 | `662c56d`, `3330a45`, `7e3e676` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56); the pin test for all 15 banned names (`7e3e676`, RT-11-R m1) |
 | RT-12 | `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
 | RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
-| QA116-PACE-F | `87ceab1` | the capture's grab waits in Windows for a new frame; the `FRAME_DELAY_MS` sleep is gone (H77) |
-| RDO110-5 | `9226245` | piece 5, Hong's answer to RT-8a-D1 (H79): closing the app waits for the run's cleanup; a second press after 10 s asks "Close anyway?" (5.5, 5.12) |
+| route_view load failure | `66f6b3f`, `8555516`, `9f5566f`, `1bbcd1a`, `8ce3670`, `0793d2b`, `13c53b9` | a run the view cannot show fails to load with its reason (`load_folder` returns a `Failure` naming the folder and the exception; RT-final-R-ADJ-D1 = A, RT-ADJ-2-D1 = A); an event whose handler raises is not added, so the model stays in step; the standalone viewer prints the reason and exits 2; review fixes (RT-ADJ-R m1-m3) |
+| QA116-PACE-F | `87ceab1`, `d5638fe` | the capture's grab waits in Windows for a new frame; the `FRAME_DELAY_MS` sleep is gone (H77); the docs for it and Hong's QA112-1 answer (H78) |
+| QA116-PACE-F2 | `36b37a9`, `3c61477` | bettercam's MIT copyright and permission notice at `frame_wait.py`'s copied code; the capture-pace wording in 5.9, 5.12-5, 6.3 and 12.3, the stale RDO110-D1 markers (H78) and the pointer-only sentence in H77's Scope |
+| RDO110-5 | `9226245`, `23c803c` | piece 5, Hong's answer to RT-8a-D1 (H79): closing the app waits for the run's cleanup; a second press after 10 s asks "Close anyway?" (5.5, 5.12); the second commit is this table's row for it |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
 
@@ -1000,18 +1005,19 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   ruling orch 111; `src/route/CLAUDE.md`, Traps).
 - **RT-13 part A.** `tools/recording_rate.py` ends a bad index line in one `error:` line and exit 2 (ruling RT-13-D1 = A;
   RT-13-R M1, M3), as the repo's other CLIs do.
-- **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1 answer (wait only as long as a new frame
-  needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows for the next new desktop image
-  (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100 ms instead of 0), skips an
-  update that moved only the mouse pointer, and the loop keeps only its 10 ms floor sleep; 5.12-5 says so. Measured on
-  the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1% of a core against 70.3% for the old loop, no
-  busy asks, and an image reaches Python about 2.6 ms after Windows presents it. With the game drawing it is not yet
-  measured (12.5).
+- **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1
+  answer (wait only as long as a new frame needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows
+  for the next new desktop image (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100
+  ms instead of 0), skips an update that moved only the mouse pointer, and the loop keeps only its 10 ms floor sleep;
+  5.12-5 says so. Measured on the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1% of a core against
+  70.3% for the old loop, no busy asks, and an image reaches Python about 2.6 ms after Windows presents it. With the
+  game drawing it is not yet measured (12.5).
 
 ### 12.4 Test counts
 
 At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14 in `tests/route`, 7 in
-`tests/route_view`), 10 skipped. The new test files are listed in `tests/CLAUDE.md`.
+`tests/route_view`), 10 skipped. At `23c803c` it has 2320 tests: the same 63 `slow` (the same split), 10 skipped, 2310
+passed. The new test files are listed in `tests/CLAUDE.md`.
 
 ### 12.5 Still open
 
