@@ -1717,7 +1717,7 @@ def test_end_freezes_the_live_view(make_rig, tmp_path, end_line):
 @pytest.mark.parametrize("case", ["stop_connecting", "kept_view", "legs_only"])
 def test_end_without_a_live_view(make_rig, tmp_path, case):
     """A run that ends before `running` has no run view to keep: the idle minimap Start showed stays, with no Back
-    button, and nothing is loaded, even with a leg log in the folder (H68; waits for Hong: RDO110-D1)."""
+    button, and nothing is loaded, even with a leg log in the folder (H68; RDO110-D1 = A, H78)."""
     rig = _hosting_rig(make_rig, tmp_path)
     tab = rig.tab
     if case == "kept_view":
@@ -1870,7 +1870,7 @@ def test_minimap_not_drawn_while_the_setup_tab_is_shown(make_rig):
 def test_start_leaves_a_kept_view(make_rig, tmp_path):
     """Spec 5.2 (H69, H70): Start, once its checks pass, drops the last run's kept view and its Back button; the idle
     live minimap shows, and is drawn, through Connecting and the countdown; at `running` the run's live view replaces
-    it (waits for Hong: RDO110-D1; answer A is built). A refused Start drops nothing."""
+    it (H78: Hong's answer A to RDO110-D1). A refused Start drops nothing."""
     rig = _hosting_rig(make_rig, tmp_path, make_minimap=FakeMinimap)
     tab = rig.tab
     minimap = tab.live_minimap

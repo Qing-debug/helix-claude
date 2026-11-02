@@ -660,7 +660,7 @@ class RouteTab:
     def _onRunning(self) -> None:
         """Called once per drained `running`, after the state and the status line are set: the run's live view (spec
         5.2 Hosting, 5.8). Any view shown so far goes first, its controller stopped, and the idle live minimap Start
-        showed is hidden (waits for Hong: RDO110-D1; answer A is built); then a new view is built in `view_frame` on
+        showed is hidden (H78: Hong's answer A to RDO110-D1); then a new view is built in `view_frame` on
         the run folder, with a `LiveController` whose first poll runs now and which then polls every 100 ms (its error
         lines go to the console box). Built
         here and not at the countdown: the steps start now, and a view built earlier would say it has had no step for
@@ -693,8 +693,8 @@ class RouteTab:
         has read yet (`update()`), then its controller stops. The view stays live, so it shows no replay bar and keeps
         its last live picture, panel and why lines; its title's mode reads `ended: <reason>` once its `end` line was
         read (`follow.py`), else `ended`. Then "Back to live minimap" shows. A run that ended before `running` has no
-        run view, so the idle minimap Start showed stays, with no button (waits for Hong: RDO110-D1; answer A is
-        built). While the window waits to close nothing changes: the close takes the view down (RT-8a fix round)."""
+        run view, so the idle minimap Start showed stays, with no button (H78: Hong's answer A to
+        RDO110-D1). While the window waits to close nothing changes: the close takes the view down (RT-8a fix round)."""
         live, view = self.live, self.view
         if self._closing is not None or live is None or view is None:
             return

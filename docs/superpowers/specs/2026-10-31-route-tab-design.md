@@ -15,8 +15,8 @@ replay at the end of a run, and the run's last live picture and why lines stay f
 button (5.2); the live minimap in the view area whenever the tab is idle (5.2); error details in the app's console box,
 not the terminal (5.5); the click text for a Stop press during a walk (5.5, section 9); and the Setup tab staying
 clickable during a run (5.1). Three choices made to carry them out waited for a ruling: RDO110-D2 is answered A by
-Hong, RDO110-D3 is A by orchestrator ruling (orch 110; Hong may still overturn it), and RDO110-D1 still waits for Hong,
-marked `(waits for Hong: RDO110-D1)`.*
+Hong, RDO110-D3 is A by orchestrator ruling (orch 110; Hong may still overturn it), and RDO110-D1 is answered A by Hong
+(QA112-1, H78, 2026-11-02).*
 
 ## 1. Summary
 
@@ -198,7 +198,7 @@ What the view area shows (H68, H69, H70):
   the idle live minimap shows through Connecting and the countdown, and at Running the run's live view replaces it.
   The run view is built at Running, not at Start: a view built earlier would say "no new steps for 10 s" during a
   countdown of up to 60 s (plan RT-8b). Nothing in the view area needs greying out then: the minimap has no controls.
-  (waits for Hong: RDO110-D1) A run that ends before Running has no run view to keep, so the minimap stays.
+  (Hong answered RDO110-D1 = A, H78.) A run that ends before Running has no run view to keep, so the minimap stays.
 - At the end of a run its live view stays in place, frozen (H69): it reads the lines no poll has read yet and stops
   following; the last live picture, the panel and the why lines stay as last drawn, with no replay bar, and the
   title's mode part reads `ended: <reason>` (as a replay's title does), or `ended` when no `end` line was read. A
@@ -500,7 +500,7 @@ file lag. The step lines lag the walk by up to about 0.1-0.3 s (the poll), as be
 | Route tab | `src/gui/route_tab.py` (new; camelCase methods, as `src/gui`) | settings, Start/Stop, countdown text, saved-run list, event queue, hosts `RouteViewWindow`, the idle live minimap and the "Back to live minimap" button; writes the console box (5.5) |
 | Idle live minimap | `src/gui/live_minimap.py` (new; camelCase methods, as `src/gui`) | the light canvas of 5.2 (H70) |
 | Notebook | `src/gui/gui.py` | `ttk.Notebook` with Setup and Route; close handler (5.5); the focus binding of section 9 |
-| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) becomes one `time.sleep(FRAME_DELAY_MS / 1000)`; nothing else (H67, 5.12) |
+| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) goes (H67, 5.12); each grab waits inside Windows for the next new desktop image (`src/vision/frame_wait.py`, 100 ms time-out) and the loop keeps only its 10 ms `THREAD_SLEEP_DURATION_S` floor (H77) |
 | Standalone replay | `src/route_view/__main__.py` | `python -m src.route_view --follow <folder>` always opens a replay; `--ready` and the live path removed |
 
 Contracts (`pyproject.toml`):
@@ -593,8 +593,8 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
    inside Windows for the next new desktop image (`src/vision/frame_wait.py`, a 100 ms time-out), so that sleep and
    `FRAME_DELAY_MS` are gone and the loop keeps only its 10 ms `THREAD_SLEEP_DURATION_S` floor. The capture itself
    (H58: same API, same monitor, same pixels) is otherwise unchanged and the minimap stays visible on the Setup tab.
-   The name scan of rule 4 also bans `imshow`, `namedWindow` and `waitKey`, with the same scope; today they appear
-   only at `vision.py:83-84` (grep of `src` and `tools`).
+   The name scan of rule 4 also bans `imshow`, `namedWindow` and `waitKey`, with the same scope; since RT-11
+   they appear nowhere in `src` or `tools`, and `tests/test_anti_cheat_names.py` keeps them out.
 
 Tk at first show, for Hong's information (corrected after RVT94; section 2): Tk makes no `GetForegroundWindow` call
 when the app's main window or the map editor is first shown, nor when an icon is set or a window is made always on
@@ -713,8 +713,9 @@ CLAUDE.md H15 bullet for how an agent answers)". `firmware/CLAUDE.md:5`: replace
 MapleStory check" with "answer the tools' 'Is MapleStory closed?' question `y` only if Hong said in that same session
 that MapleStory is closed, otherwise ask him first (root CLAUDE.md H15 bullet, decision H66)". `tests/CLAUDE.md:15`:
 "patches `soak._process_names`" becomes "patches `soak._read_answer`". `src/vision/CLAUDE.md:9-10`: the
-`cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line names `time.sleep(FRAME_DELAY_MS / 1000)` in
-place of `cv2.waitKey` (H67, 5.12-5).
+`cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line says each grab waits inside Windows for a new desktop image
+(`frame_wait.py`) with the 10 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77, 5.12-5); a
+bullet names `frame_wait.py`'s copy of bettercam 1.0.0's grab and its pin test.
 
 `src/route/CLAUDE.md`: drop the N1 tool lines (:36, :49-55) with the tool; add `session.py` to the seams and the
 `RunSession` traps (Tk never touched from the worker; `sigint=False` off the main thread). `src/gui/CLAUDE.md`: add the
@@ -983,8 +984,7 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   ruling orch 111; `src/route/CLAUDE.md`, Traps).
 - **RT-13 part A.** `tools/recording_rate.py` ends a bad index line in one `error:` line and exit 2 (ruling RT-13-D1 = A;
   RT-13-R M1, M3), as the repo's other CLIs do.
-- **The capture's pace (H77, `87ceab1`).** Sections 5.9 (the capture loop row) and 6.3 (`src/vision/CLAUDE.md`) still
-  describe RT-11's `time.sleep(FRAME_DELAY_MS / 1000)`. By Hong's QA116-1 answer (wait only as long as a new frame
+- **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1 answer (wait only as long as a new frame
   needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows for the next new desktop image
   (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100 ms instead of 0), skips an
   update that moved only the mouse pointer, and the loop keeps only its 10 ms floor sleep; 5.12-5 says so. Measured on

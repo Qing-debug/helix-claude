@@ -2468,7 +2468,7 @@ Ruling [orchestrator, orch 121; carrying out his answer]: QA116-PACE-D1 = C. A f
 
 Reason: it does what his answer asks with no number to tune: no failed grab is asked in quick succession (each wait sleeps in the OS), a new image reaches the loop about 2.6 ms after Windows presents it, and on the idle desktop the capture used 4.1% of a core against 70.3% for the old loop (measured, `notes/QA116-PACE.md`; the game's own frame rate is for Hong's live check, spec 12.5).
 
-Scope: this replaces H67's "The capture keeps working exactly as now" for the capture's pace only; H67's window removal stands. H58 still holds: the same Windows desktop duplication, the same monitor and the same pixels, and nothing names, opens or queries the game; only the wait's time-out changes.
+Scope: this replaces H67's "The capture keeps working exactly as now" for the capture's pace only; H67's window removal stands. H58 still holds: the same Windows desktop duplication, the same monitor and the same pixels, and nothing names, opens or queries the game; only the wait's time-out changes, and an update that moved only the mouse pointer gives no frame.
 
 Affects: `src/vision/frame_wait.py` (new), `vision_helper_lib.cameraGrab`, `vision.py` (the sleep and `FRAME_DELAY_MS` gone), `tests/vision/test_frame_wait.py` (new), `test_capture_loop_keeps_its_pause` in `tests/test_anti_cheat_names.py`; the tab spec 5.12-5 and section 12; `src/vision/CLAUDE.md`; the root `CLAUDE.md` Vision paragraph. Built in commit 87ceab1.
 
