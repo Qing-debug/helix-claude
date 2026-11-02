@@ -950,6 +950,7 @@ plan's own message. Hashes are in build order within a task.
 | RT-12 | `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
 | RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
 | QA116-PACE-F | `87ceab1` | the capture's grab waits in Windows for a new frame; the `FRAME_DELAY_MS` sleep is gone (H77) |
+| RDO110-5 | `9226245` | piece 5, Hong's answer to RT-8a-D1 (H79): closing the app waits for the run's cleanup; a second press after 10 s asks "Close anyway?" (5.5, 5.12) |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
 
