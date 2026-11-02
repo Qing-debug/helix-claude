@@ -968,10 +968,10 @@ Recommendation: A — exact for every source, and the sketch's times are illustr
 Paused meanwhile: nothing (RV-6 builds A) · Continued: RV-6..RV-8 in full.
 ```
 
-Still open: waits for Hong (it is what he reads on every line). Option A is what RV-6 builds; B or C changes only
-`_clock_text` (C's header anchor is now recorded by every walk, RV4-D2 A below, so C needs no format change, and a
-walk logged before Hong answers can still show time of day; RV-6's golden why-lines carry the time prefix and would
-be rewritten).
+Answered: Hong chose time of day, option C (QB117, "show time of day, not since run starteed", H55 in
+docs/decisions.md, and the route tab spec 5.10). Option A is what RV-6 built; C changes only `_clock_text` (C's header
+anchor is now recorded by every walk, RV4-D2 A below, so C needs no format change; RV-6's golden why-lines carry the
+time prefix and would be rewritten).
 
 ```
 DECISION NEEDED: RV3-D7   (made provisionally in RV-10's CLICKS and H-1 · undo: RV-10's CLICKS tuple, RV-7's set_live)
