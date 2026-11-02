@@ -7,7 +7,6 @@ import time
 from collections import namedtuple
 # Constants
 MINIMAP_POSITION_RECALC_INTERVAL = 1000
-FRAME_DELAY_MS = 10 # main determinant in while loop execution speed
 THREAD_SLEEP_DURATION_S = 0.01
 FOREGROUND_CHECK_SLEEP_S = 5
 MINIMAP_DETECTION_RETRY_DELAY_S = 1
@@ -80,5 +79,4 @@ def capture_and_process_minimap(sharedInfo):
             with sharedInfo.minimap_frame_lock:
                 sharedInfo.minimap_frame = cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB)
             minimap_frame_counter += 1
-            time.sleep(FRAME_DELAY_MS / 1000)  # for some reason, longer delay time == lower occurrence of camera.grab() returning none regardless of the content
-            time.sleep(THREAD_SLEEP_DURATION_S)  # give time for other threads (like the pathfinding thread) to run.
+            time.sleep(THREAD_SLEEP_DURATION_S)  # floor between frames: time for other threads; cameraGrab itself waits in Windows for a new image (H77)

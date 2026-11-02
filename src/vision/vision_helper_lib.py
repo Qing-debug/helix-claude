@@ -49,14 +49,15 @@ def isMatchedTemplateLocValid(matched_templates: dict, corners: list[str], templ
         return False
     return True
 
-##only return valid frames
+##only return valid frames; each grab waits inside Windows for a new image (frame_wait.py, H77)
 def cameraGrab(camera ,minimap_detection_region_of_interest : (int, int, int, int) = None):
+    import src.vision.frame_wait as frame_wait  # not at module level: it loads bettercam, and detection_check imports this file without it
     frame = None
     while frame is None:
         if minimap_detection_region_of_interest is not None:
-            frame = camera.grab(minimap_detection_region_of_interest)
+            frame = frame_wait.grab_new_frame(camera, minimap_detection_region_of_interest)
         else:
-            frame = camera.grab() #captures entire screen
+            frame = frame_wait.grab_new_frame(camera) #captures entire screen
     return frame
 
 #checks if the proposed region to grab a frame is valid according to bettercamera's.grab() function. Screen dimensions are passed as separate width/height ints to prevent (H,W) vs (W,H) tuple-order mix-ups.
