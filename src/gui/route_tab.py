@@ -780,8 +780,12 @@ class RouteTab:
         once the worker has ended (the poll closes the window within 100 ms), it does nothing, so there is one poll
         loop and one stop. Later it asks "Close anyway?" through `MapleGUI.askCloseAnyway`: Yes destroys the window
         now (the worker is a daemon and dies with the process, so automatic garbage collection stays off and frozen);
-        No changes nothing, and the next press asks again."""
+        No changes nothing, and the next press asks again. While the box is open a press does nothing, so there is
+        never a nested box: a program that posts `WM_CLOSE` to the main window reaches here inside the box's own loop
+        (RDO110-5-R m1)."""
         assert self._closing is not None
+        if self._asking:
+            return
         destroy, pressed = self._closing
         if self._clock() - pressed < CLOSE_WAIT_S or not self._workerAlive():
             return

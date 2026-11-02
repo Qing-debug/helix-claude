@@ -1579,6 +1579,31 @@ def test_the_cleanup_ending_under_the_box_closes_the_window_after_it(make_rig):
     assert destroyed == [1] and rig.asks == [1]
 
 
+def test_a_close_posted_while_the_box_is_open_opens_no_second_box(make_rig):
+    """A `WM_CLOSE` posted to the main window while the box is up (a program such as `taskkill` without `/f`) reaches
+    `onAppClose` inside the box's own loop: it opens no nested box, `_asking` stays set until the open box is
+    answered, and Yes destroys the window once (RDO110-5-R m1)."""
+    rig, now, made, thread = _close_rig(make_rig)
+    tab = rig.tab
+    destroyed = []
+    inside = []
+
+    def ask():
+        rig.asks.append(1)
+        if len(rig.asks) == 1:  # a nested box would call this again; only the first level posts the close
+            tab.onAppClose(lambda: destroyed.append(2))
+            inside.append(tab._asking)  # the nested press must not have cleared it under the open box
+        return True
+
+    rig.gui.askCloseAnyway = ask
+    tab.onAppClose(lambda: destroyed.append(1))
+    now[0] = 110.0
+    tab.onAppClose(lambda: destroyed.append(3))
+
+    assert rig.asks == [1] and inside == [True]
+    assert destroyed == [1] and not tab._asking  # the first press's window, once
+
+
 def test_the_close_box_is_a_yes_no_question_on_the_main_window(make_gui, monkeypatch):
     gui, _, _ = make_gui()
     seen = []
