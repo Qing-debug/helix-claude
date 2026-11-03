@@ -924,12 +924,14 @@ to `tools/route_tab_sim.py` (`9bb3146`), does where that is not what sections 1-
 earlier one disagree, this section is right. The build is not finished: section 12.5 lists what is still open.
 `python tools/check.py --full` at `415dbf0`: ruff, basedpyright, lint-imports and pytest all pass (2277 passed, 10
 skipped); at `23c803c`, the tip after the commits of 12.1 from the route_view load-failure row on, they pass too (2310
-passed, 10 skipped).
+passed, 10 skipped); at `02adf2d`, the code tip (the one commit after it only edits this section), they pass too (2312
+passed, 10 skipped; basedpyright 0 errors, lint-imports 9 contracts kept).
 
 ### 12.1 Commits
 
 A task with two commits was built in two pieces: the implementer's "piece 1 of 2" commit, then the commit with the
-plan's own message. Hashes are in build order within a task.
+plan's own message. Hashes are in build order within a task. The commit that last edits this table is not listed in it
+(a commit cannot hold its own hash).
 
 | Task | Commits | What |
 |---|---|---|
@@ -951,11 +953,17 @@ plan's own message. Hashes are in build order within a task.
 | RT-10 | `d3d455c`, `2b4e470`, `feeb2cf`, `7fbb36c` | the saved-run list with sizes summed off the Tk thread (5.11) |
 | RT-11 | `662c56d`, `3330a45`, `7e3e676` | the capture loop's OpenCV window removed (H67); `tests/test_anti_cheat_names.py` (H56); the pin test for all 15 banned names (`7e3e676`, RT-11-R m1) |
 | RT-12 | `8839ac5`, `dac247f`, `40161ca`, `cac1570`, `80be964`, `80f46ff` | `tools/route_tab_sim.py` and the in-app timing measurement (5.7); the close-on-worker-gone fix (12.3); review fixes |
-| RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is open (12.5) |
+| RT-13 part A | `0d90429`, `fa27480`, `3f95da6`, `415dbf0` | `tools/recording_rate.py` and its review fixes; part B is the RT-13 part B row |
 | route_view load failure | `66f6b3f`, `8555516`, `9f5566f`, `1bbcd1a`, `8ce3670`, `0793d2b`, `13c53b9` | a run the view cannot show fails to load with its reason (`load_folder` returns a `Failure` naming the folder and the exception; RT-final-R-ADJ-D1 = A, RT-ADJ-2-D1 = A); an event whose handler raises is not added, so the model stays in step; the standalone viewer prints the reason and exits 2; review fixes (RT-ADJ-R m1-m3) |
 | QA116-PACE-F | `87ceab1`, `d5638fe` | the capture's grab waits in Windows for a new frame; the `FRAME_DELAY_MS` sleep is gone (H77); the docs for it and Hong's QA112-1 answer (H78) |
 | QA116-PACE-F2 | `36b37a9`, `3c61477` | bettercam's MIT copyright and permission notice at `frame_wait.py`'s copied code; the capture-pace wording in 5.9, 5.12-5, 6.3 and 12.3, the stale RDO110-D1 markers (H78) and the pointer-only sentence in H77's Scope |
 | RDO110-5 | `9226245`, `23c803c` | piece 5, Hong's answer to RT-8a-D1 (H79): closing the app waits for the run's cleanup; a second press after 10 s asks "Close anyway?" (5.5, 5.12); the second commit is this table's row for it |
+| RT-delta minors | `1ede19e`, `dc60eac` | the delta final review's doc and comment minors (RT-delta-minors) |
+| RT-delta-m1 | `5db01f8` | a close posted while the "Close anyway?" box is open opens no second box (RDO110-5-R m1; 5.5, 5.12) |
+| route-view marker | `43782f4` | the route-view plan's RV3-D6 marker cites Hong's answer (QB117, H55) |
+| RT-13 part B | `914c179` | the free-space numbers from H-1's recording: 0.6 GB per hour, Start refuses below 2.5 GB, the recorder stops below 1.5 GB (12.3) |
+| H35-ANA-D1 | `120ef31` | the capture's floor between frames is 20 ms, Hong's pick (H80; 12.3) |
+| RT-13B minors | `02adf2d` | doc minors N2-N4 and P2-m4: the stale RV3-D6 markers, two line cites (route-view plan, spec 5.10), the `extend` cite |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
 
@@ -1005,29 +1013,37 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   ruling orch 111; `src/route/CLAUDE.md`, Traps).
 - **RT-13 part A.** `tools/recording_rate.py` ends a bad index line in one `error:` line and exit 2 (ruling RT-13-D1 = A;
   RT-13-R M1, M3), as the repo's other CLIs do.
+- **RT-13 part B (`914c179`).** H-1's recording (`data/recordings/rate-2026-11`: 10 minutes, 5910 frames, 99,712,410
+  bytes over 599.5 s) gives 571.0 MB per hour and 0.56 GB per hour (0.5577 before rounding). By choice 15, from the
+  one-decimal rate: `RECORD_GB_PER_HOUR` 0.6, Start's refusal `START_FREE_BYTES` 2.5 GB (4 h is 2.4 GB, up to the next
+  0.5 GB) and the recorder's floor `RECORD_FLOOR_BYTES` 1.5 GB (2 h is 1.2 GB, up to the next 0.5 GB), at
+  `src/route/session.py:85-87`. Where sections 5.2, 5.4, 5.6 and 5.11 say 0.5 GB per hour, 2 GB and 1 GB, those are the
+  provisional figures. The tab's texts follow the constants ("about 0.6 GB per hour", "Less than 2.5 GB free on C:",
+  "less than 1.5 GB free on C:"). At 0.6 GB per hour 2.5 GB lasts about 4 h.
+  `test_recorder_numbers_follow_the_measured_rate` pins choice 15's rule.
 - **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1
   answer (wait only as long as a new frame needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows
   for the next new desktop image (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100
-  ms instead of 0), skips an update that moved only the mouse pointer, and the loop keeps only its 20 ms floor sleep (H80, was 10 ms);
-  5.12-5 says so. Measured on the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1% of a core against
-  70.3% for the old loop, no busy asks, and an image reaches Python about 2.6 ms after Windows presents it. With the
-  game drawing it is not yet measured (12.5).
+  ms instead of 0), skips an update that moved only the mouse pointer, and the loop keeps only its 20 ms floor sleep
+  (H80, was 10 ms); 5.12-5 says so. Measured on the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1%
+  of a core against 70.3% for the old loop, no busy asks, and an image reaches Python about 2.6 ms after Windows
+  presents it. With the game drawing, a later measurement on Hong's 240 Hz screen (H80, `120ef31`; `notes/MD2-RUN.md` in
+  the workspace): the old loop ran 45.0 frames a second at 13.3% of one core, the 10 ms floor 82.0 at 23.8% and the 20
+  ms floor 45.7 at 12.5%; Hong chose 20 ms.
 
 ### 12.4 Test counts
 
 At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14 in `tests/route`, 7 in
 `tests/route_view`), 10 skipped. At `23c803c` it has 2320 tests: the same 63 `slow` (the same split), 10 skipped, 2310
-passed. The new test files are listed in `tests/CLAUDE.md`.
+passed. At `02adf2d` it has 2322 tests: the same 63 `slow` (the same split), 10 skipped, 2312 passed (RT-13 part B added
+`test_recorder_numbers_follow_the_measured_rate`). The new test files are listed in `tests/CLAUDE.md`.
 
 ### 12.5 Still open
 
-- RT-13 part B: the measured recording rate needs Hong's 10-minute recording (H-1 in the plan's "Hong's hands"). Until
-  then `START_FREE_BYTES` (2 GB), `RECORD_FLOOR_BYTES` (1 GB) and `RECORD_GB_PER_HOUR` (0.5) in
-  `src/route/session.py:85-87` are the provisional numbers of sections 5.2, 5.4 and 5.6.
 - Hong's hands, the capture's pace (H77): a ~35 s live check with the game open, its minimap on the captured monitor
   and no run; it reads monitor pixels only and sends no key:
   `C:\Users\Qing_programming\Desktop\helix-rt\.venv\Scripts\python.exe C:\Users\Qing_programming\Desktop\helix-claude-clone\.superpowers\orchestrator\2026-10-21-phase1\notes\QA116-PACE-scratch\measure_dup.py`.
   Pass: the new loop's CPU at or below the old loop's (its SUMMARY prints both), and the median image gap is the game's
-  frame interval (under about 21 ms the 20 ms floor sets the pace, which is fine). It can share H-1's sitting.
+  frame interval (under about 21 ms the 20 ms floor sets the pace, which is fine).
 - Hong's hands: H-2 (`python tools/route_tab_sim.py manual`, clicks on the app) and H-3 (an in-app 1-lap walk with the
   game and the board). No agent runs either.
