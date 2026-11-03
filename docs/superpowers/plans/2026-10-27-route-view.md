@@ -14,7 +14,7 @@ RV-5 now depends on RV-6. Piece 4 (unit RV3d) wrote RV-9, RV-10, RV-11 and H-1..
 after `close()` (A2; RV-2 test 12), RV-3 refuses a used `--out` before touching it (A3; RV-3 test 9), RV-9 closes
 the step log at once and starts no viewer when step 1 fails (A1), and V1 counts a second `run` line as a bad line
 (RV-1 test 5; RV-8's `extra_headers` folded into `bad_lines`, test 7). RV3-D1, D2, D3 are marked decided; RV3-D6
-stays open for Hong (A built); RV3-D7 raised (which live widgets N1 clicks; provisional A). The split and each
+was answered C (H55; A built first); RV3-D7 raised (which live widgets N1 clicks; provisional A). The split and each
 piece's contract are in `.superpowers/orchestrator/2026-10-21-phase1/notes/RV3-plan.md`.
 The plan review (RV4, `notes/RV4.md`: approved with fixes) was applied by unit RV5, with the orchestrator's rulings
 (`notes/RV80-ADJ.md`): RV4-D1 A (`--replay` for a folder with no `end`), RV3-D7 A + title bar (decided), RV3-D8 B
@@ -574,8 +574,9 @@ def render_text(model: RunModel, view: StepView) -> str     # the golden-text fo
   null cost (plan choice 3); `reached` "reached <target label>"; `leg_end` "leg ended: <outcome> (<misses> misses,
   <off_graph> off-graph, <stalls> stalls)"; `end` "run ended: <reason or 'no reason'>" plus " (exit code <code>)"
   when code is not None.
-- *Times* (RV3-D6, provisional A): elapsed since the run's first event with a `t_ns`, as `mm:ss.mmm` (`h:mm:ss.mmm`
-  from one hour); an event with `t_ns None` (legs-only `settled`) repeats the previous event's time.
+- *Times* (RV3-D6, answered C: time of day, H55, as built; the form below is the fallback for a header with no clock
+  anchor): elapsed since the run's first event with a `t_ns`, as `mm:ss.mmm` (`h:mm:ss.mmm` from one hour); an event
+  with `t_ns None` (legs-only `settled`) repeats the previous event's time.
 - *State words* (title): leg "starting leg", planned "planned", sent "moving", settled "settled", read_failed "no
   character", no_plan "cannot plan", stall "stalled", reached "reached", leg_end "leg ended", end "ended".
 - *Frames*: the newest frame with `t_ns <=` the step's time (`bisect` on the index, which is in time order); an event
@@ -969,9 +970,9 @@ Paused meanwhile: nothing (RV-6 builds A) · Continued: RV-6..RV-8 in full.
 ```
 
 Answered: Hong chose time of day, option C (QB117, "show time of day, not since run starteed", H55 in
-docs/decisions.md, and the route tab spec 5.10). Option A is what RV-6 built; C changes only `_clock_text` (C's header
-anchor is now recorded by every walk, RV4-D2 A below, so C needs no format change; RV-6's golden why-lines carry the
-time prefix and would be rewritten).
+docs/decisions.md, and the route tab spec 5.10). Option A is what RV-6 built; C changes only the time text, now
+`RunModel._stamp` (`model.py:410`; C's header anchor is now recorded by every walk, RV4-D2 A below, so C needs no
+format change; RV-6's golden why-lines carry the time prefix and would be rewritten).
 
 ```
 DECISION NEEDED: RV3-D7   (made provisionally in RV-10's CLICKS and H-1 · undo: RV-10's CLICKS tuple, RV-7's set_live)
@@ -1073,8 +1074,8 @@ Recommendation: A.
 ```
 
 Decided (orchestrator ruling): **A**. Built in V1 (`RunHeader`), plan choice 5, V7 step 4, RV-1 tests 2 and 7,
-RV-3 (sim header), RV-9 test 2. The viewer does not read them (RV3-D6 A is built). Undo: drop the two fields and
-their test lines.
+RV-3 (sim header), RV-9 test 2. The viewer first did not read them (RV3-D6 A); since H55 (RV3-D6 answered C) it
+reads them for the why lines' time of day. Undo: drop the two fields and their test lines.
 
 RV80-ADJ-D1 (the 2x/3x/4x scale buttons sit in the replay bar, so they are hidden while live; spec 5.4 does not mark
 them "Replay only", spec:383-384) is open with Hong. The plan keeps them hidden while live, as built in RV-7; RV-11's
@@ -2470,8 +2471,8 @@ it (root `CLAUDE.md`, "Per-directory notes"); safety rules are repeated where an
   never starts one there, RV3-D2 A1); `--replay` opens a folder with no `end` (a crashed or killed walk) as a
   replay, never with `--ready`; never open a replay while a walk runs (a click activates it; RV4-D1 A, RV4 m5); the
   planned why line's route is `preview.path` while the panel's Route line is the hops' route, so they can differ
-  (RV4 m7, `model.py`'s docstring line); the why-line time format (RV3-D6, built A, open with Hong; the header's
-  `wall_ns`/`perf_ns` anchor is recorded and not yet read, RV4-D2 A); tests and the commands (`python -m pytest -q
+  (RV4 m7, `model.py`'s docstring line); the why-line time format (RV3-D6, answered C: time of day, H55; the header's
+  `wall_ns`/`perf_ns` anchor is recorded and read for it, RV4-D2 A); tests and the commands (`python -m pytest -q
   tests/route_view`); the N1 result (H-1) or "N1 pending".
 - [ ] Root `CLAUDE.md`: in "Architecture", one paragraph "**Route view** (`src/route_view/`)": what it shows, `walk
   --view` starts it as a child process by module name and waits for its window before the countdown, the walk and the
@@ -2484,7 +2485,7 @@ it (root `CLAUDE.md`, "Per-directory notes"); safety rules are repeated where an
 - [ ] `tests/CLAUDE.md`: "Layout" gains `tests/route_view`; "Speed": the `slow` count from `python -m pytest
   --collect-only -m slow -q` (it was 43), and the `tests/route_view` time.
 - [ ] The spec's "As built" section (new, last): the commits of RV-1..RV-10 (short sha, subject); the rulings built
-  (RV3-D1 A, RV3-D2 A with A1/A2, RV3-D3 A with A3, RV3-D4 A, RV3-D5 A2, RV3-D6 A provisional, RV3-D7 A + title
+  (RV3-D1 A, RV3-D2 A with A1/A2, RV3-D3 A with A3, RV3-D4 A, RV3-D5 A2, RV3-D6 C (H55; A first), RV3-D7 A + title
   bar, RV3-D8 B, RV4-D1 A, RV4-D2 A); these lines, each one sentence:
   - spec 5.7's "click the viewer's canvas, a button and the slider" was read as "the controls the live window has"
     (the map, the why log's text and scrollbar, the title bar), because the button and slider exist only in the

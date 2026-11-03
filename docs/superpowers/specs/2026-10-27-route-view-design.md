@@ -1088,8 +1088,9 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
 - **S3b: each hop equals `next_move` at its assumed landing, and the preview from hop k-1's landing gives `hops[k:]`
   (RV3-D5 A2).** `follows(path, hops)` (`tests/route/preview_checks.py:75`) is pinned to the nine FF2 pairs and only
   reported on the simulator runs.
-- **The why line's time is elapsed `mm:ss.mmm` (RV3-D6 A, provisional).** `h:mm:ss.mmm` from one hour (`model.py:404-409`).
-  Open with Hong. The header's clock anchor is recorded and not read (item 8 above).
+- **The why line's time is the local time of day (RV3-D6, answered C: H55, tab spec 5.10).** The first build showed
+  elapsed `mm:ss.mmm` (`h:mm:ss.mmm` from one hour), which is now the fallback for a header with no clock anchor
+  (`model.py:415-419`). The header's clock anchor (`wall_ns`, `perf_ns`) is recorded (item 8 above) and read for it.
 - **The no-key check clicks what the live window has, plus the title bar (RV3-D7 A).** Item 4 above.
 - **"Route changed" compares kind and direction (RV3-D8 B).** Item 5 above.
 - **`--replay` is refused with `--ready`, and a silent live view names `--replay` (RV4-D1 A).** Item 7 above.
