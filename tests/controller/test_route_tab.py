@@ -466,7 +466,7 @@ def test_the_disk_check_asks_about_the_run_root(make_rig):
 
     def disk_free(path):
         asked.append(path)
-        return START_FREE_BYTES  # exactly 2 GB passes: the text says "Less than"
+        return START_FREE_BYTES  # exactly the limit passes: the text says "Less than"
 
     rig = make_rig(disk_free=disk_free)
     rig.tab.startRun()

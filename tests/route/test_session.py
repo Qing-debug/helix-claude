@@ -5,6 +5,7 @@ Every run here uses the simulator's `SimPositionSource` and `SimLink`, a fake fi
 The small fakes are imported flat from test_walk_cli.py (RTB-PF m8)."""
 
 import inspect
+import math
 import shutil
 import subprocess
 import sys
@@ -628,6 +629,18 @@ def test_record_guarded_stops_below_the_floor(monkeypatch, tmp_path, capsys):
 
 def test_disk_check_constants():
     assert session.DISK_CHECK_FRAMES == 600 and session.RECORD_FPS == 10.0
+
+
+def test_recorder_numbers_follow_the_measured_rate():
+    """Choice 15 (RT-13-R): the refusal is max(2 GB, 4 h of recording) and the floor max(1 GB, 2 h), each rounded up to
+    0.5 GB, with the rate being the one-decimal constant the tab shows. The other recorder tests build their texts from
+    the constants, so only this one pins the numbers."""
+    rate = session.RECORD_GB_PER_HOUR
+    assert rate > 0 and round(rate, 1) == rate
+    refusal = math.ceil(max(2.0, 4 * rate) * 2) / 2
+    floor = math.ceil(max(1.0, 2 * rate) * 2) / 2
+    assert session.START_FREE_BYTES == refusal * 2**30
+    assert session.RECORD_FLOOR_BYTES == floor * 2**30
 
 
 def test_low_space_in_a_run(env, monkeypatch):
