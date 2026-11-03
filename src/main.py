@@ -18,7 +18,7 @@ def main():
     if elevation is runtime.Elevation.RELAUNCHED:
         print("Helix is starting again as administrator in a new window; this one has nothing more to do.")
         return
-    notice = runtime.NOT_ELEVATED_TEXT if elevation is runtime.Elevation.DECLINED else None
+    notice = None if elevation is runtime.Elevation.ELEVATED else runtime.NOT_ELEVATED_TEXT  # declined, or opted out
     if notice is not None:
         print(f"warning: {notice}", file=sys.stderr)
 

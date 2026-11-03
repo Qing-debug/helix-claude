@@ -10,12 +10,14 @@ Bluetooth (Windows drops a low-level hook that is slow to return). `close()` und
 Windows-only names (`ctypes.wintypes`, `ctypes.WinDLL`, `ctypes.WINFUNCTYPE`) and `src.vision` are imported inside
 functions only, so this module imports on Linux (plan hard rule 9).
 
-Elevation (RT-FIX-1, H82): MapleStory runs as administrator, and Windows (UIPI) does not show a program running without
-administrator rights the keys typed into an elevated window, so the F12 hook of a normal Helix never hears F12 with the
-game in front (proved by `F12CHK`). `ensure_elevated` is what `python -m src.main` and the walk CLI call first: an
+Elevation (RT-FIX-1, H82; RT-FIX-1b): MapleStory runs as administrator, and Windows (UIPI) does not show a program
+running without administrator rights the keys typed into an elevated window, so the F12 hook of a normal Helix never
+hears F12 with the game in front (proved by `F12CHK`). `ensure_elevated` is what `python -m src.main` calls first: an
 elevated process carries on; otherwise it starts the same command again with ShellExecute's "runas" verb (one Windows
-prompt) and the caller exits. If that is declined, or `HELIX_NO_ELEVATE` is set, the caller keeps running only for what
-sends no key; `NOT_ELEVATED_TEXT` is what it says.
+prompt) and the caller exits. If that is declined, or `HELIX_NO_ELEVATE` is set, the app keeps running only for what
+sends no key; `NOT_ELEVATED_TEXT` is what it says. The two live command-line tools (`walk.py` and
+`harness/measure_moves.py`) never relaunch (RT-FIX-1-R-D1): after their usage checks they test `is_elevated` and, if it is
+false, exit 11 with `NOT_ELEVATED_CLI_TEXT`.
 
 Where the plan is silent:
 - `close()` joins the worker and the hook thread for at most `_JOIN_S` each and writes a line through `log` if one
@@ -53,10 +55,23 @@ _FRAME_POLL_S = 0.05   # wait_first_frame's polling period
 _NOT_INSTALLED = object()  # "start() did not install a SIGINT handler", kept apart from a previous handler of None
 ELEVATE_OPT_OUT_ENV = "HELIX_NO_ELEVATE"  # set (not empty, not "0") by tests and agent runs that send no key: no relaunch
 NOT_ELEVATED_TEXT = ("F12 cannot stop a walk while MapleStory is in front, because Helix is not running as "
-                     "administrator. Close Helix and start it again, and answer Yes when Windows asks.")
+                     "administrator. Close Helix and start it again and answer Yes if Windows asks, or start it from "
+                     "an administrator terminal.")
+NOT_ELEVATED_CLI_TEXT = ("Helix must run as administrator so F12 can stop the walk with MapleStory in front; start it "
+                         "from an administrator terminal.")
 _SHELL_EXECUTE_OK = 32     # ShellExecuteW returns a value above this on success, an error code up to it otherwise
 _SE_ERR_ACCESSDENIED = 5   # ... and this one when the Windows prompt is declined
 _SW_SHOWNORMAL = 1
+# What the elevated copy runs instead of `-m <module>` (RT-FIX-1b, I1). Windows starts a "runas" child through the AppInfo
+# service, and whether it gets the folder ShellExecute was given (or the parent's environment) is not documented, so the
+# child must not depend on either to find `src`. argv: <repo root> <module> <the module's arguments>. It changes to the
+# repo root, puts it first on sys.path, and runs the module as `__main__` as `-m` would; an uncaught exception prints its
+# traceback and waits for Enter, so the new console window does not vanish with it.
+_ELEVATED_BOOTSTRAP = (
+    "import os,runpy,sys;"
+    "sys.excepthook=lambda*a:(sys.__excepthook__(*a),input('Press Enter to close this window.'));"
+    "r,m=sys.argv[1:3];os.chdir(r);sys.path.insert(0,r);sys.argv=['']+sys.argv[3:];"
+    "runpy.run_module(m,run_name='__main__',alter_sys=True)")
 
 
 def _print_error(text: str) -> None:
@@ -290,14 +305,31 @@ def _shell_execute_runas(file: str, params: str, directory: str) -> int:
     return int(shell32.ShellExecuteW(None, "runas", file, params, directory, _SW_SHOWNORMAL) or 0)
 
 
+def _split_module_command() -> tuple[list[str], str, list[str]] | None:
+    """`sys.orig_argv[1:]` as (interpreter options, module, the module's arguments) when this process was started as
+    `python [options] -m module [args]`, else None (a script, `-c`, the elevated copy's own bootstrap, or no argv)."""
+    argv = sys.orig_argv[1:]
+    if "-m" not in argv:
+        return None
+    at = argv.index("-m")
+    if at + 1 >= len(argv):
+        return None
+    return argv[:at], argv[at + 1], argv[at + 2:]
+
+
 def relaunch_elevated() -> Result[None, str]:
-    """Start this same command again elevated: the same interpreter (`sys.executable`), the same arguments
-    (`sys.orig_argv[1:]`, so `-m src.main` and any `-u` or `-X` flag survive) and the same working directory. Success
-    means Windows started it (the caller then exits); a Failure says why not."""
-    if not sys.executable or not sys.orig_argv:
-        return Failure("the command that started this process is not known")
+    """Start this same command again elevated: the same interpreter (`sys.executable`), the same options and module
+    arguments (from `sys.orig_argv`, so a `-u` or `-X` flag survives), run through `_ELEVATED_BOOTSTRAP` from the repo
+    root instead of `-m`, so it finds `src` whatever folder Windows gives the elevated child (RT-FIX-1b, I1). Success
+    means Windows started it (the caller then exits); a Failure says why not. The elevated copy's own command line is
+    the bootstrap's (no `-m`), so a copy that somehow is not elevated gets a Failure here and cannot start another."""
+    command = _split_module_command() if sys.executable else None
+    if command is None:
+        return Failure("the command that started this process is not known (it was not started as python -m <module>)")
+    options, module, args = command
     # list2cmdline is undocumented but is the quoting subprocess itself uses on Windows
-    code = _shell_execute_runas(sys.executable, subprocess.list2cmdline(sys.orig_argv[1:]), os.getcwd())
+    params = subprocess.list2cmdline([*options, "-c", _ELEVATED_BOOTSTRAP, str(_REPO), module, *args])
+    code = _shell_execute_runas(sys.executable, params, str(_REPO))
     if code > _SHELL_EXECUTE_OK:
         return Success(None)
     if code == _SE_ERR_ACCESSDENIED:
@@ -306,7 +338,7 @@ def relaunch_elevated() -> Result[None, str]:
 
 
 def ensure_elevated(*, log: Callable[[str], None] = _print_error) -> Elevation:
-    """The start-up check of the app and the walk CLI: elevated → `ELEVATED`; `HELIX_NO_ELEVATE` set → `OPTED_OUT`
+    """The start-up check of the app: elevated → `ELEVATED`; `HELIX_NO_ELEVATE` set → `OPTED_OUT`
     (nothing is launched); else `relaunch_elevated`, giving `RELAUNCHED` or, with its reason through `log`, `DECLINED`."""
     if is_elevated():
         return Elevation.ELEVATED

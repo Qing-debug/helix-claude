@@ -23,7 +23,8 @@ went down during a move · 2 usage (no --supervised, a bad --reps, an --out that
 measure.jsonl or summary.json, an --out that cannot be created) · 3 no first frame or no character found · 4 connect
 failed · 5 the character icon failed to load · 6 a move failed otherwise · 7 the procedure raised an exception · 9 the
 stop control failed to start · 10 the character was lost: no settled position at the start of a phase or after a
-skipped move.
+skipped move · 11 Helix is not running as administrator, so F12 could not stop the run with MapleStory in front (RT-FIX-1b,
+H82; like the walk CLI it does not relaunch itself, and the check comes after the usage checks).
 
 Where the plan is silent:
 - `MoveSample.kind` is a `MoveKind` value (`"teleport"`, `"walk"`, `"drop"`); `direction` is the `Key` name
@@ -192,6 +193,10 @@ def _make_clock() -> Clock:
 
 def _make_stop_control(on_stop: Callable[[], None]):
     return runtime.StopControl(on_stop)
+
+
+def _is_elevated() -> bool:
+    return runtime.is_elevated()
 
 
 def _read_line() -> str:
@@ -508,6 +513,9 @@ def main(argv: list[str] | None = None) -> int:
     if not is_successful(checked):
         print(f"error: {checked.failure()}", file=sys.stderr)
         return 2
+    if not _is_elevated():  # F12 is the only in-game stop and an unelevated hook never hears it (RT-FIX-1b, H82)
+        print(f"error: {runtime.NOT_ELEVATED_CLI_TEXT}", file=sys.stderr)
+        return 11
     return _run_supervised(args, out)
 
 

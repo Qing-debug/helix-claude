@@ -18,7 +18,7 @@ from returns.result import Failure, Result, Success
 from src.classes.classes import Kanna
 from src.input.link import InputError, SendReport
 from src.input.protocol import Done, DoneStatus, Key
-from src.route import session
+from src.route import runtime, session
 from src.route.harness import measure_moves
 from src.route.harness.measure_moves import MEASURE_FILE, MoveSample, append_sample, main, summarize
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
@@ -165,6 +165,7 @@ def ran(monkeypatch):
         return 0
 
     monkeypatch.setattr(measure_moves, "_run_supervised", fake_run)
+    monkeypatch.setattr(measure_moves, "_is_elevated", lambda: True)  # never asks Windows; unelevated it exits 11
     return calls
 
 
@@ -218,6 +219,61 @@ def test_out_holding_summary_json_is_refused(tmp_path, ran, capsys):
     assert main(["--supervised", "--out", str(tmp_path)]) == 2
     assert "summary.json already exists" in capsys.readouterr().err
     assert ran == []
+
+
+# ---- the elevation check (RT-FIX-1b, H82) -----------------------------------------------------------------------------------
+
+@pytest.fixture
+def no_relaunch(monkeypatch):
+    """Anything that would start a relaunch fails the test (on top of the suite-wide guard on the Windows call)."""
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("measure_moves must not relaunch itself")
+
+    monkeypatch.setattr(runtime, "ensure_elevated", refuse)
+    monkeypatch.setattr(runtime, "relaunch_elevated", refuse)
+
+
+@pytest.mark.parametrize("opt_out", [None, "1"])
+def test_not_elevated_returns_11_and_starts_nothing(tmp_path, ran, monkeypatch, capsys, no_relaunch, opt_out):
+    monkeypatch.setattr(measure_moves, "_is_elevated", lambda: False)
+    if opt_out is not None:
+        monkeypatch.setenv(runtime.ELEVATE_OPT_OUT_ENV, opt_out)  # the opt-out never lets a live run past the check
+    out = tmp_path / "m"
+
+    assert main(["--supervised", "--out", str(out)]) == 11
+
+    assert capsys.readouterr().err == f"error: {runtime.NOT_ELEVATED_CLI_TEXT}\n"
+    assert ran == [] and not out.exists()
+
+
+def test_elevated_starts_the_procedure(tmp_path, ran, monkeypatch):
+    asked = []
+    monkeypatch.setattr(measure_moves, "_is_elevated", lambda: asked.append(1) or True)
+    assert main(["--supervised", "--out", str(tmp_path / "m")]) == 0
+    assert asked == [1] and len(ran) == 1
+
+
+def test_usage_errors_come_before_the_elevation_check(tmp_path, ran, monkeypatch):
+    asked = []
+    monkeypatch.setattr(measure_moves, "_is_elevated", lambda: asked.append(1) or False)
+    (tmp_path / MEASURE_FILE).write_text("", encoding="utf-8")
+
+    assert main(["--out", str(tmp_path / "m")]) == 2                                   # no --supervised
+    assert main(["--supervised", "--out", str(tmp_path / "m"), "--reps", "1"]) == 2     # a bad --reps
+    assert main(["--supervised", "--out", str(tmp_path)]) == 2                          # an --out already in use
+    assert asked == [] and ran == []
+
+
+def test_the_default_elevation_check_asks_runtime(monkeypatch):
+    monkeypatch.setattr(runtime, "is_elevated", lambda: True)
+    assert measure_moves._is_elevated() is True  # noqa: SLF001
+    monkeypatch.setattr(runtime, "is_elevated", lambda: False)
+    assert measure_moves._is_elevated() is False  # noqa: SLF001
+
+
+def test_exit_11_is_documented():
+    assert "11 Helix is not running as administrator" in (measure_moves.__doc__ or "")
 
 
 # ---- the procedure (piece 2), over fakes ------------------------------------------------------------------------------
@@ -348,6 +404,7 @@ def rig(monkeypatch, tmp_path):
             env.on_prompt(env.prompts)
         return ""
 
+    monkeypatch.setattr(measure_moves, "_is_elevated", lambda: True)
     monkeypatch.setattr(measure_moves, "_start_capture", lambda shared: None)
     monkeypatch.setattr(measure_moves, "_wait_first_frame", lambda shared, timeout_s: env.first_frame)
     monkeypatch.setattr(measure_moves, "_make_positions", lambda shared: env.positions)
