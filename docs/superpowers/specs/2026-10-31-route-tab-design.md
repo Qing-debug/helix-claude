@@ -935,14 +935,16 @@ to `tools/route_tab_sim.py` (`9bb3146`), does where that is not what sections 1-
 earlier one disagree, this section is right. The build is not finished: section 12.5 lists what is still open.
 `python tools/check.py --full` at `415dbf0`: ruff, basedpyright, lint-imports and pytest all pass (2277 passed, 10
 skipped); at `23c803c`, the tip after the commits of 12.1 from the route_view load-failure row on, they pass too (2310
-passed, 10 skipped); at `02adf2d`, the code tip (the one commit after it only edits this section), they pass too (2312
-passed, 10 skipped; basedpyright 0 errors, lint-imports 9 contracts kept).
+passed, 10 skipped); at `02adf2d` they pass too (2312 passed, 10 skipped; basedpyright 0 errors, lint-imports 9 contracts kept); at `9327fc7`,
+the tip after RT-FIX-1, WALKSPD-FIX and RT-FIX-2 (12.1, 12.3), they pass too (2411 passed, 10 skipped, 12.4).
 
 ### 12.1 Commits
 
 A task with two commits was built in two pieces: the implementer's "piece 1 of 2" commit, then the commit with the
 plan's own message. Hashes are in build order within a task. The commit that last edits this table is not listed in it
-(a commit cannot hold its own hash).
+(a commit cannot hold its own hash). The table lists the build's task commits only. Two later fixes are not in it: the elevated-relaunch fix (RT-FIX-1,
+`2119536`, `15a0a57`, H82: Start refuses when Helix is not elevated, `runtime.is_elevated`) and the walk-speed change (WALKSPD,
+`b4de208`, `68aaeef`, `74bd544`, H81: 12.5 px/s in `src/route`).
 
 | Task | Commits | What |
 |---|---|---|
@@ -1054,7 +1056,8 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
 At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14 in `tests/route`, 7 in
 `tests/route_view`), 10 skipped. At `23c803c` it has 2320 tests: the same 63 `slow` (the same split), 10 skipped, 2310
 passed. At `02adf2d` it has 2322 tests: the same 63 `slow` (the same split), 10 skipped, 2312 passed (two new tests since `23c803c`: RT-13 part B's
-`test_recorder_numbers_follow_the_measured_rate` and `5db01f8`'s "Close anyway?" box test). The new test files are listed in `tests/CLAUDE.md`.
+`test_recorder_numbers_follow_the_measured_rate` and `5db01f8`'s "Close anyway?" box test). At `9327fc7` (RT-FIX-2's docs
+commit, the same code as `f91e21f`) it has 2421 tests, 10 skipped, 2411 passed. The new test files are listed in `tests/CLAUDE.md`.
 
 ### 12.5 Still open
 
