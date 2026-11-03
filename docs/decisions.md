@@ -2460,6 +2460,8 @@ Pointer: `.superpowers/sdd/2026-10-31-route-tab/progress.md` (RDO110-4b2 entry, 
 
 ## H77 (2026-11-02): The minimap capture waits in Windows for a new frame instead of a fixed sleep (QA116-1; ruling QA116-PACE-D1 = C)
 
+Status: refined by H80 (Hong, 2026-11-03, H35-ANA-D1): the floor between frames is 20 ms, not the 10 ms named below; the wait in Windows stays.
+
 Question: when the capture's "Minimap" window went (H67), its key wait became a plain 10 ms sleep, so the loop paused about 21 ms a frame instead of about 32 ms (RT-11-R I1): not "exactly as now". Keep the faster pace, or slow it back? Options: A keep the faster pace; B sleep about 16 ms to match the old pace.
 
 Ruling [Hong]: option Other. His answer, verbatim (Q&A page, 2026-11-02): "Pick the number that balannces time used to draw minimap + ttime for other processes to run. No point asking repeatedly in quic ksuccession if most of it reesults in a failed grab, that also takes away time from other processes to run. Hence, pick the number that results in the most non-failed grabs while still keeping latency low but also giving time for other processes as much time as possible to run. Essentially, only wait as lonng as it neeeds to wait for thee grab to get someething new, not too early, not too late"
@@ -2509,3 +2511,21 @@ Cost if wrong: small; the 10 s give-up is a few lines of `_pollClose` (git histo
 Undo: Hong says so.
 
 Pointer: question bank QB138, QB151, QB182; `.superpowers/orchestrator/2026-10-21-phase1/briefs/RDO110-5-implementer.md`; Q&A set `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/QA108.json` (QA108-3).
+
+## H80 (2026-11-03): The minimap capture's floor between frames is 20 ms (H35-ANA-D1; refines H77)
+
+Question: H77 made each grab wait in Windows for a new frame and kept `THREAD_SLEEP_DURATION_S`, a 10 ms sleep, as a floor between frames. A live measurement on his 240 Hz screen (the game open, the capture only, 3 rounds of 5 s per mode) found the 10 ms floor does bind there: it ran at about 82 frames a second and about 24% of one core, where the old loop ran 45.0 frames a second at 13.3%. What floor between frames? Options: A every 10 ms (82.0 frames a second, 23.8% of one core, pictures at most about 13 ms old); B every 20 ms (recommended: 45.7 frames a second, 12.5% of one core, about 23 ms old); C every 33 ms (an estimate, not run: about 29 frames a second, about 7.9% of one core, about 36 ms old, a choppier display).
+
+Ruling [Hong]: "Every 20 ms (Recommended)". The recommendation.
+
+Reason: not given beyond the pick. The measurement behind the options: the per-frame cost is the same in every mode (process cycles per frame: old 10.30 M, 10 ms 10.10 M, 20 ms 9.53 M), so the CPU difference is the pace only; the 20 ms floor costs what the old loop cost, without the old loop's failed grabs, and the route reads the position every 50 ms (`poll_s`, `src/route/params.py:24`), so it still sees about two fresh pictures per read.
+
+Scope: the floor only. H77's wait in Windows for the next new image, its 100 ms time-out and bettercam's pin are unchanged, and so is H58. The re-detection of the minimap every `MINIMAP_POSITION_RECALC_INTERVAL` (1000) frames now comes about every 22 s instead of about every 12 s.
+
+Affects: `THREAD_SLEEP_DURATION_S` in `src/vision/vision.py:10` (0.01 to 0.02); `src/vision/CLAUDE.md`; the root `CLAUDE.md` Vision paragraph; the tab spec's lines that name the floor (the 5.9 table, 5.12-5, 6.3, 12.3 and 12.5); `test_capture_loop_keeps_its_pause`'s docstring in `tests/test_anti_cheat_names.py`; the `PUMP_PERIOD_S` comment in `tools/route_tab_sim.py` (its value, 20 ms, is unchanged). No test pins the number.
+
+Cost if wrong: one constant.
+
+Undo: `git revert` the commit titled `fix(vision): capture floor 20 ms (Hong, H35-ANA-D1)`, or Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-RUN.md` (the table and the options in plain words) and `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-run-output.txt` (the tool's output, verbatim).

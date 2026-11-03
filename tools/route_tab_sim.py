@@ -76,8 +76,8 @@ MODES = ("cli", "app")
 
 FRAME_SHAPE = (82, 162, 3)   # FF2's minimap, `# minimap_size=162,82` (tests/fixtures/fossil_foundry_2.csv:1)
 PUMP_PERIOD_S = 0.020        # the capture loop's pace: a 10 ms key wait plus its 10 ms sleep before RT-11; since H77
-                             # the wait in Windows for the game's next frame plus a 10 ms floor (src/vision/vision.py);
-                             # 20 ms is kept as a stand-in
+                             # the wait in Windows for the game's next frame plus a 20 ms floor (src/vision/vision.py);
+                             # 20 ms is about that pace (measured gap 21.7 ms, H80)
 START_AFTER_MS = 500         # measure: Start is pressed this long after the window starts
 APP_COUNTDOWN_S = 1
 WATCH_MS = 200               # measure: how often the tool looks for the tab's end

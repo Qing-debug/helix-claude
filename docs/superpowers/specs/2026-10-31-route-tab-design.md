@@ -514,7 +514,7 @@ file lag. The step lines lag the walk by up to about 0.1-0.3 s (the poll), as be
 | Route tab | `src/gui/route_tab.py` (new; camelCase methods, as `src/gui`) | settings, Start/Stop, countdown text, saved-run list, event queue, hosts `RouteViewWindow`, the idle live minimap and the "Back to live minimap" button; writes the console box (5.5) |
 | Idle live minimap | `src/gui/live_minimap.py` (new; camelCase methods, as `src/gui`) | the light canvas of 5.2 (H70) |
 | Notebook | `src/gui/gui.py` | `ttk.Notebook` with Setup and Route; close handler (5.5); the focus binding of section 9 |
-| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) goes (H67, 5.12); each grab waits inside Windows for the next new desktop image (`src/vision/frame_wait.py`, 100 ms time-out) and the loop keeps only its 10 ms `THREAD_SLEEP_DURATION_S` floor (H77) |
+| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) goes (H67, 5.12); each grab waits inside Windows for the next new desktop image (`src/vision/frame_wait.py`, 100 ms time-out) and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H77, H80) |
 | Standalone replay | `src/route_view/__main__.py` | `python -m src.route_view --follow <folder>` always opens a replay; `--ready` and the live path removed |
 
 Contracts (`pyproject.toml`):
@@ -606,7 +606,7 @@ today's elapsed form (`model.py:404-409`). No format change to `steps.jsonl`.
    removed. Its key wait first became `time.sleep(FRAME_DELAY_MS / 1000)` (RT-11), which did not keep the same pause
    (about 21 ms a frame instead of about 32 ms, RT-11-R I1). Then, by Hong's QA116-1 answer (H77), the grab waits
    inside Windows for the next new desktop image (`src/vision/frame_wait.py`, a 100 ms time-out), so that sleep and
-   `FRAME_DELAY_MS` are gone and the loop keeps only its 10 ms `THREAD_SLEEP_DURATION_S` floor. The capture itself
+   `FRAME_DELAY_MS` are gone and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H80). The capture itself
    (H58: same API, same monitor, same pixels) is otherwise unchanged and the minimap stays visible on the Setup tab.
    The name scan of rule 4 also bans `imshow`, `namedWindow` and `waitKey`, with the same scope; since RT-11
    they appear nowhere in `src` or `tools`, and `tests/test_anti_cheat_names.py` keeps them out.
@@ -729,7 +729,7 @@ MapleStory check" with "answer the tools' 'Is MapleStory closed?' question `y` o
 that MapleStory is closed, otherwise ask him first (root CLAUDE.md H15 bullet, decision H66)". `tests/CLAUDE.md:15`:
 "patches `soak._process_names`" becomes "patches `soak._read_answer`". `src/vision/CLAUDE.md:9-10`: the
 `cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line says each grab waits inside Windows for a new
-desktop image (`frame_wait.py`) with the 10 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77,
+desktop image (`frame_wait.py`) with the 20 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77,
 5.12-5); a bullet names `frame_wait.py`'s copy of bettercam 1.0.0's grab and its pin test.
 
 `src/route/CLAUDE.md`: drop the N1 tool lines (:36, :49-55) with the tool; add `session.py` to the seams and the
@@ -1008,7 +1008,7 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
 - **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1
   answer (wait only as long as a new frame needs) and ruling QA116-PACE-D1 = C (orch 121), the grab waits inside Windows
   for the next new desktop image (`src/vision/frame_wait.py`: bettercam 1.0.0's grab with `AcquireNextFrame` given 100
-  ms instead of 0), skips an update that moved only the mouse pointer, and the loop keeps only its 10 ms floor sleep;
+  ms instead of 0), skips an update that moved only the mouse pointer, and the loop keeps only its 20 ms floor sleep (H80, was 10 ms);
   5.12-5 says so. Measured on the idle desktop, no game (`notes/QA116-PACE.md` in the workspace): 4.1% of a core against
   70.3% for the old loop, no busy asks, and an image reaches Python about 2.6 ms after Windows presents it. With the
   game drawing it is not yet measured (12.5).
@@ -1028,6 +1028,6 @@ passed. The new test files are listed in `tests/CLAUDE.md`.
   and no run; it reads monitor pixels only and sends no key:
   `C:\Users\Qing_programming\Desktop\helix-rt\.venv\Scripts\python.exe C:\Users\Qing_programming\Desktop\helix-claude-clone\.superpowers\orchestrator\2026-10-21-phase1\notes\QA116-PACE-scratch\measure_dup.py`.
   Pass: the new loop's CPU at or below the old loop's (its SUMMARY prints both), and the median image gap is the game's
-  frame interval (under about 11 ms the 10 ms floor sets the pace, which is fine). It can share H-1's sitting.
+  frame interval (under about 21 ms the 20 ms floor sets the pace, which is fine). It can share H-1's sitting.
 - Hong's hands: H-2 (`python tools/route_tab_sim.py manual`, clicks on the app) and H-3 (an in-app 1-lap walk with the
   game and the board). No agent runs either.
