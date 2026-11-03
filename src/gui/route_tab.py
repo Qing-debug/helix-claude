@@ -10,7 +10,7 @@ hosted route view: the run's live view (RT-8b), kept in place and frozen at the 
 H70). Every line a run in the app prints (the worker's traceback, the session's lines, the live view's and the idle
 minimap's errors) goes to the Setup tab's console box, not the terminal, through `_toConsole` (H71; RDO110-D3 A). The
 app-focus flag and its stop (RT-9), and the saved-run list (spec 5.11, RT-10): its rows (`savedRuns`, `formatSize`),
-filled by `startPolling` and Refresh, with each folder's size summed off the Tk thread (`folderSize`, the
+filled by `startPolling`, Refresh and the end of every run (H83), with each folder's size summed off the Tk thread (`folderSize`, the
 `saved-run-sizes` thread) and drained like the run's events, and Open, which hosts the selected run's replay in place of
 the idle minimap or a kept run view.
 """
@@ -144,16 +144,27 @@ def endedText(code: int | None, text: str, folder: Path | None) -> str:
         return f"Ended: the walker failed; see {folder.name}."
     if code in _CODE_TEXTS:
         return _CODE_TEXTS[code]
-    reason, _, source = text.partition("/")
+    reason = text.partition("/")[0]
     if code == 0:
         if reason == "max_laps":
             return _ALL_LAPS_DONE  # whatever the source: the laps were done
-        known = {"stopped": _STOPPED_TEXTS, "cancelled": _CANCELLED_TEXTS}.get(reason)
-        if known is not None and source in known:
-            return known[source]
+        known = stopText(code, text)
+        if known is not None:
+            return known
     if code != 0:
         return f"Ended (exit {code}, {text})."  # a code no producer sends (walk.py:6-9); the code is the useful fact
     return f"Ended ({text})."  # a pair no producer sends; nothing raises
+
+
+def stopText(code: int | None, text: str) -> str | None:
+    """The status line of a clean end by a stop or a stop before the walk (spec 5.5's `_STOPPED_TEXTS` and
+    `_CANCELLED_TEXTS` rows; "" when the app is closing), or None for any other end. `code` and `text` are the `ended`
+    event's, as for `endedText`. These are the texts the tab also writes to the console box (RT-FIX-2, H83)."""
+    if code != 0:
+        return None
+    reason, _, source = text.partition("/")
+    known = {"stopped": _STOPPED_TEXTS, "cancelled": _CANCELLED_TEXTS}.get(reason)
+    return None if known is None else known.get(source)
 
 
 def _unexpectedEndText(folder: Path | None) -> str:
@@ -400,7 +411,7 @@ class RouteTab:
         self.app_has_keyboard = threading.Event()  # spec 9: set and cleared by rereadFocus on the Tk thread only
         self.status_var = tk.StringVar(master=parent)
         self.map_class_var = tk.StringVar(master=parent)
-        self.laps_var = tk.StringVar(master=parent, value="")  # empty: until stopped
+        self.laps_var = tk.StringVar(master=parent, value="1")  # one lap (H83); empty: until stopped
         self.minutes_var = tk.StringVar(master=parent, value="")  # empty: no limit
         self.countdown_var = tk.StringVar(master=parent, value="5")
         self._build(parent)
@@ -544,7 +555,8 @@ class RouteTab:
         The watchdog (spec 5.5): a worker found dead is read as ended only after one more drain of the queue finds no
         `ended`, so an `ended` put between the first drain and `is_alive()` is still read as itself. A dead worker is
         cleared (automatic garbage collection comes back on) and gives the controls back, whether its run ended with
-        an `ended` event or not, except while the window waits to close: then nothing comes back (RT-8a m1). While the
+        an `ended` event or not, except while the window waits to close: then nothing comes back (RT-8a m1). The same
+        step re-reads the saved-run list (`refreshSavedRuns`): the run just ended shows with no press (H83). While the
         worker lives, every `GC_EVERY_POLLS`-th step collects garbage here, on the Tk thread (RT-8a I1)."""
         try:
             self._drainLines()
@@ -561,6 +573,7 @@ class RouteTab:
                     self._clearWorker()
                     if self._closing is None:
                         self._lockControls(False)
+                        self.refreshSavedRuns()  # the run's folder is complete and no thread writes it now (H83)
             elif worker is not None:
                 self._polls_alive += 1
                 if self._polls_alive % GC_EVERY_POLLS == 0:
@@ -638,7 +651,8 @@ class RouteTab:
 
     def _showEvent(self, event: RunEvent) -> None:
         """One event to spec 5.2's state and status line. A `warning` is appended after one space in any state
-        (choice 5). `ended` sets the state, calls `_onEnded` (the run's view is kept, frozen), then writes `endedText`.
+        (choice 5). `ended` sets the state, calls `_onEnded` (the run's view is kept, frozen), then writes `endedText`;
+        for a stop or a stop before the walk (`stopText`) the same words also go to the console box (QB186, H83).
         While Stopping its text stays until the end: an earlier `status` or `countdown` read late changes nothing,
         and a `running` still reaches `_onRunning` (the walk did start). While the window waits to close no event
         writes the status line (`_say`)."""
@@ -649,6 +663,9 @@ class RouteTab:
             self.state = "ended"
             self._onEnded(event.code, event.text)
             self._say(endedText(event.code, event.text, self._out))
+            stopped = stopText(event.code, event.text)
+            if stopped:
+                self._toConsole(stopped, False)  # Hong looks in the console first (QB186, H83)
         elif self.state == "stopping":
             if event.kind == "running":
                 self._onRunning()
@@ -979,7 +996,7 @@ class RouteTab:
     # -- saved runs (spec 5.11, RT-10) ----------------------------------------------------------------------------------
 
     def refreshSavedRuns(self) -> None:
-        """Refresh, and the first fill from `startPolling` (spec 5.11): list the run folders again (`savedRuns`, on
+        """Refresh, the first fill from `startPolling` and the refill when a run ends (spec 5.11, H83): list the run folders again (`savedRuns`, on
         the Tk thread: one directory listing and two small reads per run), every row ending "size ...", and start a
         `saved-run-sizes` daemon thread that sums their sizes off the Tk thread. Each fill is a new generation: what an
         older size thread still posts is dropped (`_drainSizes`), and that thread stops before its next folder. The

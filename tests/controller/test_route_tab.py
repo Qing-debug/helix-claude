@@ -371,7 +371,7 @@ def test_constructor_creates_every_c5_attribute_and_touches_nothing_outside_tk(m
     for button in (tab.start_button, tab.stop_button, tab.open_button, tab.refresh_button):
         assert isinstance(button, tk.Button)
     assert isinstance(tab.runs_list, tk.Listbox) and isinstance(tab.view_frame, tk.Frame)
-    assert (tab.laps_var.get(), tab.minutes_var.get(), tab.countdown_var.get()) == ("", "", "5")
+    assert (tab.laps_var.get(), tab.minutes_var.get(), tab.countdown_var.get()) == ("1", "", "5")  # Laps starts at 1 (H83)
     assert (tab.view, tab.live, tab.session, tab.worker, tab.size_thread) == (None, None, None, None, None)
     assert isinstance(tab.app_has_keyboard, threading.Event) and not tab.app_has_keyboard.is_set()
     assert str(tab.stop_button.cget("state")) == "disabled"
@@ -600,7 +600,7 @@ def test_minutes_and_countdown_reach_the_session(make_rig):
     rig.tab.countdown_var.set("60")
     rig.tab.startRun()
     settings = rig.sessions[0].settings
-    assert (settings.laps, settings.minutes, settings.countdown_s) == (None, 1.5, 60)
+    assert (settings.laps, settings.minutes, settings.countdown_s) == (1, 1.5, 60)  # Laps starts at 1 (H83)
 
 
 def test_may_walk_reads_only_the_flag(make_rig, monkeypatch):
@@ -2878,6 +2878,7 @@ def test_open_never_loads_while_a_worker_exists(make_rig, tmp_path):
     assert rig.loads == [] and tab.view is None
     thread.finish()
     tab.drainEvents()
+    tab.runs_list.selection_set(0)  # the list was read again when the run ended (H83), which clears the selection
     tab.openSavedRun()
     assert rig.loads == [folder] and tab.view is rig.views[0] and not tab.view.live
 
@@ -2955,3 +2956,159 @@ def test_open_with_no_row_selected_says_so_in_the_console(make_rig, tmp_path):
     tab.open_button.invoke()
     assert tab.console[console:] == [(NO_ROW_SELECTED, True)]
     assert rig.loads == [] and tab.view is None and tab.status_var.get() == status
+
+
+# ---- RT-FIX-2: Hong's three live-check items (H83) ----------------------------------------------------------------
+
+@pytest.mark.parametrize("laps_text, expected", [(None, 1), ("", None), ("4", 4)])
+def test_laps_start_at_one_and_empty_still_means_until_stopped(make_rig, laps_text, expected):
+    """H83 (Hong: "set the number of laps to 1 by default"): the field reads 1 until it is changed; emptied it is still
+    "until stopped" (None), as the label next to it says."""
+    rig = make_rig()
+    tab = rig.tab
+    assert tab.laps_var.get() == "1"
+    if laps_text is not None:
+        tab.laps_var.set(laps_text)
+    tab.startRun()
+    assert rig.sessions[0].settings.laps == expected
+
+
+STOP_TEXTS = [  # spec 5.5: every end by a stop, and every stop before the walk
+    ("stopped/timer", "Ended: the time limit was reached."),
+    ("stopped/hotkey", "Ended: you pressed F12."),
+    ("stopped/button", "Ended: you pressed Stop."),
+    ("stopped/app_focus", "Stopped: you clicked the app. Press Start to run again."),
+    ("cancelled/hotkey", "Ended: cancelled before the walk (you pressed F12)."),
+    ("cancelled/button", "Ended: cancelled before the walk (you pressed Stop)."),
+    ("cancelled/app_focus", "Stopped: you clicked the app. Press Start to run again."),
+    ("cancelled/countdown_focus",
+     "Not started: click the game first. Press Start, then click the game before the countdown ends."),
+]
+
+
+@pytest.mark.parametrize("text, expected", STOP_TEXTS)
+def test_stop_texts_are_also_written_to_the_console_box(make_rig, text, expected):
+    """H83 (Hong, QB186: "Status line and console"): the words the status line shows for a stop or a stop before the
+    walk are also one console-box line, written after the `ended` is shown, as a normal (not error) line."""
+    rig = make_rig(cls=ConsoleSpyTab)
+    tab = rig.tab
+    made, thread = _start(rig)
+    made.on_event(_event("ended", text, code=0))
+    thread.finish()
+    before = _console(rig.gui)
+    tab.order.clear()
+
+    tab.drainEvents()
+
+    assert tab.status_var.get() == expected
+    assert tab.order == [("event", "ended"), ("console", expected, False)]
+    assert _console(rig.gui) == before.removesuffix("\n") + expected + "\n\n"
+
+
+@pytest.mark.parametrize("code, text", [
+    (0, "max_laps/"), (0, "max_laps/hotkey"), (0, "stopped/window_close"), (0, "cancelled/window_close"),
+    (0, "stopped/never_sent"), (0, "none/"), (1, "stopped/hotkey"), (4, "none/"), (6, "error/"), (10, "stopped/"),
+])
+def test_other_ends_add_no_console_line(make_rig, code, text):
+    """Only a stop or a stop before the walk gets the extra console line: a finished run, a closing window (its text is
+    empty), a pair no producer sends and the failures (whose details the session already printed) get none."""
+    rig = make_rig(cls=ConsoleSpyTab)
+    tab = rig.tab
+    made, thread = _start(rig)
+    made.on_event(_event("ended", text, code=code))
+    thread.finish()
+    tab.order.clear()
+
+    tab.drainEvents()
+
+    assert tab.order == [("event", "ended")]
+
+
+def test_stop_text_is_the_status_text_of_a_clean_stop_only():
+    assert route_tab_module.stopText(0, "stopped/button") == "Ended: you pressed Stop."
+    assert route_tab_module.stopText(0, "cancelled/countdown_focus") == STOP_TEXTS[-1][1]
+    assert route_tab_module.stopText(0, "stopped/window_close") == ""  # known, nothing to show
+    for code, text in [(0, "max_laps/"), (0, "stopped/other"), (0, "other/button"), (0, ""), (3, "stopped/button"),
+                       (None, "stopped/button")]:
+        assert route_tab_module.stopText(code, text) is None
+    for text, expected in STOP_TEXTS:  # and endedText says the same words
+        assert endedText(0, text, None) == route_tab_module.stopText(0, text) == expected
+
+
+def _run_folder_with_session(rig):
+    """The folder the fake run would have written: a saved run under the rig's run root, named as `rig.out`."""
+    return _saved_folder(rig.run_root, rig.out.name, session=_session("2026-10-31T14:02:31+00:00", "a.csv"), laps=2)
+
+
+def test_saved_runs_refresh_when_a_run_ends(make_rig, monkeypatch):
+    """H83 (Hong: "the latest saved runs should always show after a run is done"): no Refresh press. The list is read
+    again once the worker is dead, not when `ended` is first shown (the worker may still be writing)."""
+    monkeypatch.setattr(route_tab_module, "folderSize", lambda folder: 0)
+    rig = make_rig()
+    tab = rig.tab
+    tab.refreshSavedRuns()
+    assert _rows(tab) == ()
+    made, thread = _start(rig)
+    folder = _run_folder_with_session(rig)
+    made.on_event(_event("ended", "stopped/button", code=0))
+
+    tab.drainEvents()  # `ended` read, the worker still returning
+
+    assert _rows(tab) == () and tab.worker is thread
+
+    thread.finish()
+    tab.drainEvents()
+
+    assert [run.folder for run in tab._saved] == [folder]
+    tab.size_thread.join()
+    tab.drainEvents()
+    assert _rows(tab) == (f"{_local('2026-10-31T14:02:31+00:00')}  a  2 laps  0 MB",)
+    assert _state(tab.runs_list) == "normal"  # the list was refilled after the controls came back
+
+
+def test_saved_runs_refresh_after_a_run_with_a_view(make_rig, monkeypatch):
+    """The same for a run that reached `running` (it has a live view, so `_onEnded` has work to do)."""
+    monkeypatch.setattr(route_tab_module, "folderSize", lambda folder: 0)
+    rig = make_rig()
+    tab = rig.tab
+    made, thread = _start(rig)
+    _to_state(rig, made, "running")
+    folder = _run_folder_with_session(rig)
+    made.on_event(_event("ended", "stopped/hotkey", code=0))
+    thread.finish()
+
+    tab.drainEvents()
+
+    assert [run.folder for run in tab._saved] == [folder]
+
+
+def test_saved_runs_refresh_when_the_worker_ends_with_no_ended(make_rig, monkeypatch):
+    """The watchdog's end (a worker that died with no `ended`) re-reads the list too."""
+    monkeypatch.setattr(route_tab_module, "folderSize", lambda folder: 0)
+    rig = make_rig()
+    tab = rig.tab
+    _, thread = _start(rig)
+    folder = _run_folder_with_session(rig)
+    thread.finish()  # the fake session posted nothing
+
+    tab.drainEvents()
+
+    assert tab.status_var.get() == UNEXPECTED_AND.format(rig.out.name)
+    assert [run.folder for run in tab._saved] == [folder]
+
+
+def test_saved_runs_are_not_read_again_while_the_window_closes(make_rig, monkeypatch):
+    """With the window waiting to close (`_closing`) nothing comes back after the worker's end: no controls, and no
+    refresh either."""
+    rig = make_rig()
+    tab = rig.tab
+    made, thread = _start(rig)
+    tab.onAppClose(lambda: None)
+    refreshes = []
+    monkeypatch.setattr(tab, "refreshSavedRuns", lambda: refreshes.append(1))
+    made.on_event(_event("ended", "stopped/window_close", code=0))
+    thread.finish()
+
+    tab.drainEvents()
+
+    assert tab.worker is None and refreshes == []
