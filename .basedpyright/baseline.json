@@ -1180,8 +1180,8 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 36,
-                    "endColumn": 39,
+                    "startColumn": 49,
+                    "endColumn": 52,
                     "lineCount": 1
                 }
             }

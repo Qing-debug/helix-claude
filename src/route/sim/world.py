@@ -6,7 +6,10 @@ top-left origin (y grows downward). Each move updates `pos` at once and appends 
 replays the last effect over time (start until the schedule ends, then a linear settle to the end).
 
 Where the plan is silent: a move with no landing surface stays put (a teleport or a drop keeps its kind and its
-settle time), and an invalid direction is `nothing` with no draw.
+settle time), and an invalid direction is `nothing` with no draw. A knockback (a mob shoves the character after a
+move, OFFP141) replaces the move's settle curve: the character shows at the move's end at once and is shoved from
+there, so one effect is live at a time and `position_at` (it reads only `effects[-1]`) and `SimWorld.pos` never
+disagree. Its curve moves x as well as y over the whole settle, so a shove along level ground is airborne.
 """
 
 import bisect
@@ -120,6 +123,9 @@ class SimParams:
     drop_settle_s: float = 0.25
     fall_px_per_s: float = 60.0
     link_latency_s: float = 0.03
+    dot_above_foot_px: int = 0           # the position source reads the dot's centre this many px above the foot
+    side_teleport_extra_px: float = 0.0  # a sideways teleport goes this much farther than the character's reach
+    knockback_air_s: float = 0.3         # how long a mob's shove keeps the character in the air
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,8 @@ class NoiseConfig:
     landing_px: tuple[int, int] = (1, 2)
     miss_p: float = 0.01
     node_offset_px: int = 0      # B14 shifts each map node's y by U{-k..k} before planning; the terrain stays
+    knockback_p: float = 0.0     # a mob shoves the character after a move; 0 draws nothing
+    knockback_px: tuple[int, int] = (3, 8)
 
     @staticmethod
     def off() -> "NoiseConfig":
@@ -142,11 +150,12 @@ class InjectedError(StrEnum):
     NO_OP = "no_op"
     OVERSHOOT = "overshoot"
     LANDING = "landing"
+    KNOCKBACK = "knockback"
 
 
 @dataclass(frozen=True)
 class MoveEffect:
-    kind: str                                  # "teleport" | "walk" | "drop" | "none"
+    kind: str                                  # "teleport" | "walk" | "drop" | "knockback" | "none"
     start: tuple[float, float]
     end: tuple[float, float]
     t_end_ns: int
@@ -216,7 +225,27 @@ class SimWorld:
     def _no_op_effect(self, now_ns: int) -> MoveEffect:
         return self._record("none", self.pos, now_ns, 0.0, (InjectedError.NO_OP,))
 
+    def _shoved(self, move: MoveEffect) -> MoveEffect:
+        """`move`, after a mob's shove if one is drawn: no draw at all with `knockback_p == 0`, else one
+        `rng.random()` for the hit, one for the sign and one `rng.integers` for the size."""
+        if self.noise.knockback_p > 0 and self.rng.random() < self.noise.knockback_p:
+            lo, hi = self.noise.knockback_px
+            sign = 1 if self.rng.random() < 0.5 else -1
+            self.knockback(sign * int(self.rng.integers(lo, hi + 1)), move.t_end_ns)
+        return move
+
     # --- moves ----------------------------------------------------------------------------------------------
+
+    def knockback(self, dx_px: float, now_ns: int) -> MoveEffect:
+        """A mob shoves the character `dx_px` sideways from where it stands, starting at `now_ns`: it lands on the
+        first surface at or below its y minus the side teleport's rise, or stays put with none there."""
+        x, y = self.pos
+        settle_s = self.params.knockback_air_s
+        landing = self.terrain.surface_below(x + dx_px, y - _SIDE_TELEPORT_RISE_PX)
+        if landing is None:
+            return self._record("knockback", self.pos, now_ns, settle_s, (InjectedError.KNOCKBACK,))
+        settle_s += max(0.0, landing[1] - y) / self.params.fall_px_per_s
+        return self._record("knockback", (x + dx_px, landing[1]), now_ns, settle_s, (InjectedError.KNOCKBACK,))
 
     def teleport(self, direction: Key, now_ns: int) -> MoveEffect:
         if direction not in (Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN):
@@ -230,7 +259,7 @@ class SimWorld:
         fall_px = self.params.fall_px_per_s
         if sideways:
             sign = 1 if direction == Key.RIGHT else -1
-            x_new = x + sign * (self.reach_h + draw.overshoot_px) + draw.landing_px
+            x_new = x + sign * (self.reach_h + self.params.side_teleport_extra_px + draw.overshoot_px) + draw.landing_px
             y_from = y - _SIDE_TELEPORT_RISE_PX
         elif direction == Key.UP:
             x_new = x + draw.landing_px
@@ -240,14 +269,14 @@ class SimWorld:
             y_from = y + 1
         landing = self.terrain.surface_below(x_new, y_from)
         if landing is None:
-            return self._record("teleport", self.pos, now_ns, self.params.teleport_settle_s, injected)
+            return self._shoved(self._record("teleport", self.pos, now_ns, self.params.teleport_settle_s, injected))
         y_land = landing[1]
         if direction == Key.DOWN:
             fall = max(0.0, (y_land - y) - self.reach_v)
         else:
             fall = max(0.0, y_land - y)
-        return self._record("teleport", (x_new, y_land), now_ns, self.params.teleport_settle_s + fall / fall_px,
-                            injected)
+        return self._shoved(self._record("teleport", (x_new, y_land), now_ns,
+                                         self.params.teleport_settle_s + fall / fall_px, injected))
 
     def walk(self, direction: Key, held_ms: float, now_ns: int) -> MoveEffect:
         if direction not in (Key.LEFT, Key.RIGHT):
@@ -272,7 +301,7 @@ class SimWorld:
         else:
             end = (x_new, platform.surface_y(x_new))
         settle_s = max(0.0, end[1] - y) / self.params.fall_px_per_s
-        return self._record("walk", end, now_ns, settle_s, injected)
+        return self._shoved(self._record("walk", end, now_ns, settle_s, injected))
 
     def drop(self, now_ns: int) -> MoveEffect:
         if self._no_op():
@@ -286,10 +315,10 @@ class SimWorld:
         x_new = x + draw.landing_px
         landing = self.terrain.surface_below(x_new, y + 1)
         if landing is None:  # no surface below (cannot happen on FF2): stay, like a teleport with no landing
-            return self._record("drop", self.pos, now_ns, self.params.drop_settle_s, injected)
+            return self._shoved(self._record("drop", self.pos, now_ns, self.params.drop_settle_s, injected))
         y_land = landing[1]
         settle_s = self.params.drop_settle_s + (y_land - y) / self.params.fall_px_per_s
-        return self._record("drop", (x_new, y_land), now_ns, settle_s, injected)
+        return self._shoved(self._record("drop", (x_new, y_land), now_ns, settle_s, injected))
 
     def nothing(self, now_ns: int) -> MoveEffect:
         """A schedule that moves nothing: no draw, no move."""
@@ -306,4 +335,7 @@ class SimWorld:
         if elapsed >= settle_ns:
             return last.end
         frac = elapsed / settle_ns
-        return (last.end[0], last.start[1] + (last.end[1] - last.start[1]) * frac)
+        y = last.start[1] + (last.end[1] - last.start[1]) * frac
+        if last.kind == "knockback":  # a shove is in the air the whole settle: x moves too
+            return (last.start[0] + (last.end[0] - last.start[0]) * frac, y)
+        return (last.end[0], y)

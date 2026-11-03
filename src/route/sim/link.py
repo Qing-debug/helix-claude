@@ -2,11 +2,13 @@
 
 `SimLink` duck-types `BleLink` for a real `InputLayer` (DC7): it decodes each key schedule into one `SimWorld` move
 and advances a virtual `SimClock` by the link latency plus the schedule's total. `SimPositionSource` reads the
-world's position at the clock's time, rounded to minimap pixels, and misses with a set probability.
+world's position at the clock's time, rounded to minimap pixels, and misses with a set probability. The y it reads
+is the dot's centre: `SimParams.dot_above_foot_px` above the foot the world tracks (OFFP141).
 
 Where the plan is silent: a play that fails from `fail_next` advances no time and uses no seq; `play` and
 `release_all` share one seq counter (as `BleLink` does); a read draws one `rng.random()` every call, even with
-`miss_p = 0`; a read rounds with Python's `round()`, so a half goes to the even integer (42.5 reads as 42); two keys
+`miss_p = 0`; a read rounds with Python's `round()`, so a half goes to the even integer (42.5 reads as 42), and
+subtracts the dot offset after rounding, so that adding it back gives exactly the plain rounded y; two keys
 that go down at the same tick are ordered by their step order, as the board applies them; a key never released counts
 as released at the schedule's end.
 """
@@ -130,4 +132,4 @@ class SimPositionSource:
         if self.rng.random() < self.miss_p:
             return Failure("miss")
         x, y = self.world.position_at(self.clock.now_ns())
-        return Success((round(x), round(y)))
+        return Success((round(x), round(y) - self.world.params.dot_above_foot_px))
