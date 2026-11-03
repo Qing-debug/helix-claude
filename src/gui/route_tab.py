@@ -34,7 +34,7 @@ from returns.pipeline import is_successful
 from returns.result import Result
 
 from src.gui.live_minimap import LiveMinimap
-from src.route import session
+from src.route import runtime, session
 from src.route.leg_log import LAPS_FILE, LEGS_FILE
 from src.route.session import FrameHolder, RunEvent, RunSession, RunSettings
 from src.route.step_log import STEPS_FILE
@@ -274,6 +274,8 @@ NO_MINIMAP_TEXT = ("The minimap has not been found yet. Show the game with its m
 NO_CHARACTER_TEXT = ("The character was not found on the minimap. Check that the character is on the minimap, then "
                      "press Start again.")
 RUN_FOLDER_EXISTS_TEXT = "A run folder for this second already exists. Press Start again."
+# RT-FIX-1 (H82): a walk that sends keys is refused while Helix is not elevated, because F12 would not stop it
+NOT_ELEVATED_START_TEXT = f"Not started: {runtime.NOT_ELEVATED_TEXT}"
 NONE_TEXT = "(none)"  # the Map and Class line before a map is loaded or a character is chosen
 RECORDING_TEXT = f"Recording: on (about {session.RECORD_GB_PER_HOUR:.1f} GB per hour)"  # spec 5.2; information only
 # spec 5.2's run states. Connecting's text is also the session's own `status` event (C1).
@@ -355,7 +357,8 @@ class RouteTab:
                  load_run: Callable[..., Result[RunModel, str]] = load_folder,
                  git_head: Callable[[], str | None] = session._git_head,
                  make_minimap: Callable[..., LiveMinimap] = LiveMinimap,
-                 frame_checks: bool = True) -> None:
+                 frame_checks: bool = True, sends_keys: bool = True,
+                 elevated: Callable[[], bool] = runtime.is_elevated) -> None:
         self._gui = gui
         self._make_session = make_session
         self._run_root = run_root
@@ -369,6 +372,8 @@ class RouteTab:
         self._git_head = git_head
         self._make_minimap = make_minimap  # RT-8c: the idle live minimap (H70)
         self._frame_checks = frame_checks
+        self._sends_keys = sends_keys  # False only for the sim tool, whose SimLink sends no key (RT-FIX-1)
+        self._elevated = elevated  # RT-FIX-1: `runtime.is_elevated`; a fake in the tests
         self._head: str | None = None  # git's HEAD, read once by startPolling and handed to every live view and replay
         self._events: queue.Queue[RunEvent] = queue.Queue()  # the session's on_event (the worker's put), drained here
         # Lines for the console box from other threads (the worker's traceback, the session's `log`), drained here
@@ -836,8 +841,16 @@ class RouteTab:
         worker is cleared (RT-8a I1). A worker that cannot be built or started ends the run on the tab at once, with
         the watchdog's text and the controls back, and the error goes on to Tk's callback handler (RT-8a m2). Once
         every check has passed, the view shown before Start (the last run's kept view) goes with its Back button and
-        the idle live minimap shows until `running` (spec 5.2, H69, H70)."""
+        the idle live minimap shows until `running` (spec 5.2, H69, H70).
+
+        A walk that sends keys is refused first of all while Helix is not running as administrator (RT-FIX-1, H82): its
+        F12 stop would not hear F12 with MapleStory in front. The refusal goes to the status line and to the console
+        box, and changes nothing else (`sends_keys=False`, the sim tool, skips it)."""
         if self.worker is not None or self._closing is not None:
+            return
+        if self._sends_keys and not self._elevated():
+            self.status_var.set(NOT_ELEVATED_START_TEXT)
+            self._errorToConsole(NOT_ELEVATED_START_TEXT)
             return
         settings, error = validateSettings(self.laps_var.get(), self.minutes_var.get(), self.countdown_var.get())
         if settings is None:

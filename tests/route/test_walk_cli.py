@@ -563,6 +563,7 @@ def sim(monkeypatch, tmp_path):
     monkeypatch.setattr(walk, "_make_link", make_link)
     monkeypatch.setattr(walk, "_make_clock", lambda: clock)
     monkeypatch.setattr(walk, "_make_stop_control", make_stop)
+    monkeypatch.setattr(walk, "_ensure_elevated", lambda: runtime.Elevation.ELEVATED)  # never a real Windows prompt
     monkeypatch.setattr(walk, "_countdown_s", 0)
     monkeypatch.setattr(input_layer, "_clock", clock.now_ns)
     monkeypatch.setattr(input_layer, "_sleep", clock.sleep)

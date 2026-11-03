@@ -228,7 +228,7 @@ def build_app(holder: FrameHolder, setup: SimSetup, *, run_root: Path, new_out: 
 
     def make_tab(parent, gui) -> RouteTab:
         return RouteTab(parent, gui, make_session=sim_factory(setup, app_focus=app_focus), run_root=run_root,
-                        new_out=new_out, frame_checks=False)
+                        new_out=new_out, frame_checks=False, sends_keys=False)
 
     return Success(MapleGUI(controller, holder, route_tab_factory=make_tab))
 

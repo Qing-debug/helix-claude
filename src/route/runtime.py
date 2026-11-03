@@ -10,6 +10,13 @@ Bluetooth (Windows drops a low-level hook that is slow to return). `close()` und
 Windows-only names (`ctypes.wintypes`, `ctypes.WinDLL`, `ctypes.WINFUNCTYPE`) and `src.vision` are imported inside
 functions only, so this module imports on Linux (plan hard rule 9).
 
+Elevation (RT-FIX-1, H82): MapleStory runs as administrator, and Windows (UIPI) does not show a program running without
+administrator rights the keys typed into an elevated window, so the F12 hook of a normal Helix never hears F12 with the
+game in front (proved by `F12CHK`). `ensure_elevated` is what `python -m src.main` and the walk CLI call first: an
+elevated process carries on; otherwise it starts the same command again with ShellExecute's "runas" verb (one Windows
+prompt) and the caller exits. If that is declined, or `HELIX_NO_ELEVATE` is set, the caller keeps running only for what
+sends no key; `NOT_ELEVATED_TEXT` is what it says.
+
 Where the plan is silent:
 - `close()` joins the worker and the hook thread for at most `_JOIN_S` each and writes a line through `log` if one
   is still alive, as Feature A's listener does (`src/input/harness/listener.py:384-387`); it never waits for ever.
@@ -20,7 +27,10 @@ Where the plan is silent:
   are the ones kept; either way the stop happens once.
 """
 
+import enum
+import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -41,6 +51,12 @@ _JOIN_S = 5.0          # how long close() waits for the worker and the hook thre
 _HOOK_READY_S = 5.0    # how long _install_hook waits for the hook thread to install the hook
 _FRAME_POLL_S = 0.05   # wait_first_frame's polling period
 _NOT_INSTALLED = object()  # "start() did not install a SIGINT handler", kept apart from a previous handler of None
+ELEVATE_OPT_OUT_ENV = "HELIX_NO_ELEVATE"  # set (not empty, not "0") by tests and agent runs that send no key: no relaunch
+NOT_ELEVATED_TEXT = ("F12 cannot stop a walk while MapleStory is in front, because Helix is not running as "
+                     "administrator. Close Helix and start it again, and answer Yes when Windows asks.")
+_SHELL_EXECUTE_OK = 32     # ShellExecuteW returns a value above this on success, an error code up to it otherwise
+_SE_ERR_ACCESSDENIED = 5   # ... and this one when the Windows prompt is declined
+_SW_SHOWNORMAL = 1
 
 
 def _print_error(text: str) -> None:
@@ -234,6 +250,73 @@ def _install_keyboard_hook(vk: int, on_key: Callable[[], None], *,
         remove()
         raise OSError(error)
     return remove
+
+
+# ---- elevation (RT-FIX-1, H82) ----------------------------------------------------------------------------------------
+
+class Elevation(enum.Enum):
+    """How `ensure_elevated` left the process."""
+    ELEVATED = "elevated"      # already running as administrator: carry on
+    RELAUNCHED = "relaunched"  # an elevated copy of this command was started: this process must exit
+    OPTED_OUT = "opted_out"    # not elevated, and `HELIX_NO_ELEVATE` says not to relaunch (tests, runs that send no key)
+    DECLINED = "declined"      # not elevated and the relaunch was declined or failed
+
+
+def is_elevated() -> bool:
+    """True when this process runs elevated (as administrator). `IsUserAnAdmin` (shell32) reads the process's own token;
+    it returns false for a normal process of an administrator account and true for the same account elevated, as
+    the F12 check saw on this PC (H82). Microsoft marks the function "may be
+    altered or unavailable in subsequent versions" and recommends `CheckTokenMembership`, which needs a SID built by
+    hand; a failed call reads as not elevated."""
+    import ctypes
+
+    try:
+        return bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _shell_execute_runas(file: str, params: str, directory: str) -> int:
+    """`ShellExecuteW(NULL, "runas", file, params, directory, SW_SHOWNORMAL)`: Windows asks the user for consent and
+    starts `file` elevated. Returns ShellExecuteW's value: above 32 on success, else an error code (5 when the prompt
+    is declined). The only line that raises a real Windows prompt; tests replace it."""
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                      wintypes.LPCWSTR, ctypes.c_int]
+    shell32.ShellExecuteW.restype = ctypes.c_void_p  # an HINSTANCE that is really a small code; never a pointer
+    return int(shell32.ShellExecuteW(None, "runas", file, params, directory, _SW_SHOWNORMAL) or 0)
+
+
+def relaunch_elevated() -> Result[None, str]:
+    """Start this same command again elevated: the same interpreter (`sys.executable`), the same arguments
+    (`sys.orig_argv[1:]`, so `-m src.main` and any `-u` or `-X` flag survive) and the same working directory. Success
+    means Windows started it (the caller then exits); a Failure says why not."""
+    if not sys.executable or not sys.orig_argv:
+        return Failure("the command that started this process is not known")
+    # list2cmdline is undocumented but is the quoting subprocess itself uses on Windows
+    code = _shell_execute_runas(sys.executable, subprocess.list2cmdline(sys.orig_argv[1:]), os.getcwd())
+    if code > _SHELL_EXECUTE_OK:
+        return Success(None)
+    if code == _SE_ERR_ACCESSDENIED:
+        return Failure("the Windows prompt was declined (ShellExecuteW returned 5)")
+    return Failure(f"Windows did not start it (ShellExecuteW returned {code})")
+
+
+def ensure_elevated(*, log: Callable[[str], None] = _print_error) -> Elevation:
+    """The start-up check of the app and the walk CLI: elevated → `ELEVATED`; `HELIX_NO_ELEVATE` set → `OPTED_OUT`
+    (nothing is launched); else `relaunch_elevated`, giving `RELAUNCHED` or, with its reason through `log`, `DECLINED`."""
+    if is_elevated():
+        return Elevation.ELEVATED
+    if os.environ.get(ELEVATE_OPT_OUT_ENV, "") not in ("", "0"):
+        return Elevation.OPTED_OUT
+    relaunched = relaunch_elevated()
+    if is_successful(relaunched):
+        return Elevation.RELAUNCHED
+    log(f"could not start Helix as administrator: {relaunched.failure()}")
+    return Elevation.DECLINED
 
 
 def check_out(out: Path, names: Iterable[str]) -> Result[None, str]:

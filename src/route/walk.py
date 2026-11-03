@@ -6,9 +6,12 @@
 Exit codes: 0 done · 1 run ended link_down · 2 usage (a --laps below 1, a bad --minutes or --seed), no --supervised, an --out that
 already holds a run (B19-D2), or a leg log that cannot be opened · 3 no first frame or no character found · 4 connect
 failed · 5 map, route graph or character icon failed to load · 6 run() returned a Failure · 7 run() raised an exception · 9 the stop control failed to start · 10 the character
-was lost: a leg timed out with no move (B19-D1). 8 is the live link check's own code, never `main`'s.
+was lost: a leg timed out with no move (B19-D1) · 11 Helix is not running as administrator, so F12 could not stop the
+walk with MapleStory in front (RT-FIX-1, H82). 8 is the live link check's own code, never `main`'s.
 
-`main` checks its arguments (exit 2 before anything starts), then runs `session.RunSession` (session.py) over the seams
+`main` checks its arguments (exit 2 before anything starts), then that the process is elevated (RT-FIX-1, H82: if it is
+not, it starts the same command again elevated, one Windows prompt, and returns 0 with the walk going on in the new
+window; if that is declined, or `HELIX_NO_ELEVATE` is set, it returns 11), then runs `session.RunSession` (session.py) over the seams
 below; the walk's body, its cleanup order and its rulings (B19-D1, B19-D2) are documented there. The seams are passed
 at call time, read from this module's globals when `main` runs, so a test's `setattr(walk, ...)` reaches the run.
 
@@ -66,6 +69,10 @@ def _make_stop_control(on_stop: Callable[[], None], *, log: Callable[[str], None
     return runtime.StopControl(on_stop, log=log)
 
 
+def _ensure_elevated() -> runtime.Elevation:
+    return runtime.ensure_elevated()
+
+
 # ---- main -------------------------------------------------------------------------------------------------------------
 
 def _parser() -> argparse.ArgumentParser:
@@ -110,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     if not is_successful(checked):
         print(f"error: {checked.failure()}", file=sys.stderr)
         return 2
+
+    elevation = _ensure_elevated()  # after every usage check: a typo never raises the Windows prompt
+    if elevation is runtime.Elevation.RELAUNCHED:
+        print("Helix is walking on in a new window, started as administrator; nothing more happens here.")
+        return 0
+    if elevation is not runtime.Elevation.ELEVATED:
+        print(f"error: {runtime.NOT_ELEVATED_TEXT}", file=sys.stderr)
+        return 11
 
     settings = session.RunSettings(map_csv=args.map, character=args.character, laps=args.laps, minutes=minutes,
                                    countdown_s=_countdown_s, seed=seed, out=out)

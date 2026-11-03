@@ -28,9 +28,9 @@ import test_gui_startup
 import tk_bans
 from src.classes.classes import Kanna
 from src.gui.live_minimap import LiveMinimap
-from src.gui.route_tab import (RouteTab, SavedRun, classKey, countdownText, defaultSession, endedText, folderSize,
+from src.gui.route_tab import (NOT_ELEVATED_START_TEXT, RouteTab, SavedRun, classKey, countdownText, defaultSession, endedText, folderSize,
                                formatSize, savedRuns, validateSettings)
-from src.route import session
+from src.route import runtime, session
 from src.route.session import RECORD_GB_PER_HOUR, START_FREE_BYTES, RunEvent, RunSession, RunSettings
 from src.route.step_log import SNAPSHOT, STEPS_FILE
 from src.route_view.follow import LiveController
@@ -255,7 +255,7 @@ class FakeThread:
 @pytest.fixture
 def make_rig(make_gui, monkeypatch, tmp_path):
     """`make(frame=True, drain=True, cls=RouteTab, **keywords)`: a real window with a `cls` tab on fakes (`keywords`
-    replace the defaults: `make_session`, `make_thread`, `run_root`, `disk_free`, `new_out`, `git_head`, ...), a map and
+    replace the defaults: `make_session`, `make_thread`, `run_root`, `disk_free`, `new_out`, `git_head`, `elevated`, ...), a map and
     a class chosen, the minimap area built (`frame=False`: no frame, so no minimap area) and the character found, after
     one drain. So the tab is Ready, and a test breaks one thing. `rig.sessions` records the `FakeSession`s the fake
     `make_session` built and `rig.threads` the `FakeThread`s; `rig.free` is what the default `disk_free` reports.
@@ -279,7 +279,8 @@ def make_rig(make_gui, monkeypatch, tmp_path):
                               csv=tmp_path / "fossil_foundry_2.csv", free=10 * START_FREE_BYTES, asks=[],
                               close_answer=False)
         options = dict(make_session=fake_session, make_thread=fake_thread, run_root=run_root,
-                       disk_free=lambda path: rig.free, new_out=lambda: rig.out, git_head=lambda: HEAD)
+                       disk_free=lambda path: rig.free, new_out=lambda: rig.out, git_head=lambda: HEAD,
+                       elevated=lambda: True)  # RT-FIX-1: the real check would ask Windows; tests of it pass their own
         options.update(keywords)
         built = []
 
@@ -459,6 +460,77 @@ def test_refusal_for_no_minimap(make_rig):
     rig.tab.startRun()
     assert rig.tab.status_var.get() == NO_MINIMAP
     assert rig.sessions == [] and _toplevels(rig.gui) == []
+
+
+# ---- RT-FIX-1 (H82): a walk that sends keys is refused while Helix is not elevated ---------------------------------------
+
+def test_the_not_elevated_text_says_what_the_brief_says():
+    assert "F12 cannot stop a walk while MapleStory is in front" in NOT_ELEVATED_START_TEXT
+    assert "not running as administrator" in NOT_ELEVATED_START_TEXT
+
+
+def test_start_is_refused_when_not_elevated(make_rig):
+    rig = make_rig(elevated=lambda: False)
+    tab = rig.tab
+    tab.startRun()
+
+    assert tab.status_var.get() == NOT_ELEVATED_START_TEXT
+    assert NOT_ELEVATED_START_TEXT in _console(rig.gui)  # and on the console box
+    assert rig.sessions == [] and rig.threads == [] and tab.worker is None  # no session, no worker, nothing started
+    assert tab.state == "ready" and str(tab.start_button.cget("state")) == "normal"  # nothing locked
+    assert _toplevels(rig.gui) == []
+
+
+def test_every_press_is_refused_and_the_text_survives_the_drain(make_rig):
+    rig = make_rig(elevated=lambda: False)
+    tab = rig.tab
+    tab.startRun()
+    tab.drainEvents()
+    tab.startRun()
+
+    assert tab.status_var.get() == NOT_ELEVATED_START_TEXT
+    assert _console(rig.gui).count(NOT_ELEVATED_START_TEXT) == 2
+    assert rig.sessions == []
+
+
+def test_the_elevation_check_comes_before_the_other_checks(make_rig):
+    rig = make_rig(elevated=lambda: False)
+    _break(rig, "no_disk")
+    _break(rig, "folder_exists")
+    rig.tab.startRun()
+    assert rig.tab.status_var.get() == NOT_ELEVATED_START_TEXT
+
+
+def test_start_runs_once_elevated(make_rig):
+    elevated = [False]
+    rig = make_rig(elevated=lambda: elevated[0])
+    rig.tab.startRun()
+    assert rig.sessions == []
+
+    elevated[0] = True
+    rig.tab.startRun()
+
+    assert len(rig.sessions) == 1 and rig.tab.worker is not None
+
+
+def test_a_tab_that_sends_no_key_starts_unelevated(make_rig):
+    asked = []
+    rig = make_rig(sends_keys=False, elevated=lambda: asked.append(1) or False)  # the sim tool's tab
+    rig.tab.startRun()
+
+    assert len(rig.sessions) == 1 and rig.tab.worker is not None
+    assert asked == []  # not even asked
+
+
+def test_the_tab_defaults_ask_windows_and_send_keys():
+    parameters = inspect.signature(RouteTab).parameters
+    assert parameters["elevated"].default is runtime.is_elevated
+    assert parameters["sends_keys"].default is True
+
+
+def test_the_sim_tool_builds_its_tab_without_keys():
+    source = (Path(__file__).resolve().parents[2] / "tools" / "route_tab_sim.py").read_text(encoding="utf-8")
+    assert "sends_keys=False" in source
 
 
 def test_the_disk_check_asks_about_the_run_root(make_rig):
@@ -721,6 +793,30 @@ def test_mapleGUI_start_starts_the_tabs_polling_before_the_mainloop(monkeypatch)
         gui.start()
 
         assert events == ["built", "startPolling", "mainloop"]
+    finally:
+        gui.gui.destroy()
+
+
+def test_mapleGUI_start_writes_the_startup_notice_first_in_the_console(monkeypatch):
+    gui = _open_window(_shared(), route_tab_factory=None)
+    try:
+        gui.gui.withdraw()
+        monkeypatch.setattr(gui.gui, "after", lambda ms, func: None)
+        monkeypatch.setattr(gui.gui, "mainloop", lambda: None)
+        gui.start(startup_notice="a warning for the console box")
+        assert _console(gui).splitlines()[0] == "a warning for the console box"
+    finally:
+        gui.gui.destroy()
+
+
+def test_mapleGUI_start_without_a_notice_leaves_the_console_empty(monkeypatch):
+    gui = _open_window(_shared(), route_tab_factory=None)
+    try:
+        gui.gui.withdraw()
+        monkeypatch.setattr(gui.gui, "after", lambda ms, func: None)
+        monkeypatch.setattr(gui.gui, "mainloop", lambda: None)
+        gui.start()
+        assert _console(gui).strip() == ""
     finally:
         gui.gui.destroy()
 

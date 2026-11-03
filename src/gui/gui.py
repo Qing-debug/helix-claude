@@ -68,8 +68,12 @@ class MapleGUI:
         self.zoom_step = 0.1
         self._base_font_sizes = {}
 
-    def start(self):
+    def start(self, startup_notice = None):
+        """Build the window and run it. `startup_notice`, when given, is the first line of the Setup tab's console box
+        (`src/main.py` passes the not-elevated warning, H82)."""
         self._setupGUI()
+        if startup_notice:
+            self._printToGUIConsole(startup_notice)
         if self.route_tab is not None:
             self.route_tab.startPolling()  # the tab's 100 ms drain; nothing else starts it (contract C5)
         self._updateCanvas()

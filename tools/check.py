@@ -18,6 +18,7 @@ baseline when a baselined error disappears, so commit the file with your change.
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -58,7 +59,9 @@ def _baseline_warning() -> str | None:
 def _run(cmd: list[str]) -> tuple[bool, str, float]:
     started = time.perf_counter()
     try:
-        done = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        # HELIX_NO_ELEVATE: no test may relaunch Helix as administrator (a real Windows prompt on Hong's screen; H82)
+        done = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env={**os.environ, "HELIX_NO_ELEVATE": "1"})
         ok, output = done.returncode == 0, (done.stdout or "") + (done.stderr or "")
     except OSError as error:
         ok, output = False, f"could not start {cmd[0]}: {error}\nRun `pip install -r requirements-dev.txt`."

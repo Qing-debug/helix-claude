@@ -2529,3 +2529,25 @@ Cost if wrong: one constant.
 Undo: `git revert` the commit titled `fix(vision): capture floor 20 ms (Hong, H35-ANA-D1)`, or Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-RUN.md` (the table and the options in plain words) and `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-run-output.txt` (the tool's output, verbatim).
+
+## H82 (2026-11-03): Helix runs as administrator so that F12 stops a walk with MapleStory in front; if it is not, a walk that sends keys is refused (QB189; ruling RT-FIX-1)
+
+Question: in the app, F12 did not stop a walk while MapleStory had focus (Stop and a click on the app did). Why, and what runs the app?
+
+What was found (confirmed, not inferred): a listener that uses the app's own F12 hook heard F12 only with Helix's window in front when it ran as a normal program (7 presses logged, all with Helix's window in front; Hong's one press with the game in front was not heard), and heard every F12, with MapleStory.exe in front too, when it ran as administrator (4 presses, 2 with MapleStory.exe in front, the app's hook and a second watcher agreeing each time). So MapleStory runs elevated, and Windows (UIPI) does not show a program that is not elevated the keys typed into an elevated window. The walk CLI has the same hook and the same flaw: F12 with MapleStory in front was never checked in a walk, only against the test sink window (H3-DBG section 1; the claim that the in-app and CLI F12 stop worked came from Feature B's check against that window).
+
+Ruling [Hong, QB189]: his pick "1-min admin check (Recommended)", whose stated outcome was "seen -> Helix runs as admin; not seen -> drop F12". F12 was seen with MapleStory in front when the listener was elevated, so Helix runs as administrator from now on and F12 works.
+
+Ruling [orchestrator, orch 136; not Hong's decision]: how it runs elevated. `python -m src.main` and `python -m src.route.walk` check at start whether the process is elevated (`runtime.ensure_elevated`); if not, they start the same command again (same interpreter, same arguments from `sys.orig_argv`, same working folder) with ShellExecute's "runas" verb, which shows one Windows prompt per start, and the first copy exits (the CLI returns 0 after printing that the walk goes on in a new window). If the relaunch is declined or fails, the app keeps running and says plainly, in the terminal and as the first line of the Setup tab's console box, that F12 cannot stop a walk while MapleStory is in front because Helix is not running as administrator. The Route tab then refuses to start a walk that sends keys, with that message on its status line and in the console box, and the walk CLI refuses likewise and exits 11. The simulator (its tab is built with `sends_keys=False`), replays, the map editor and everything that sends no key work unelevated. The opt-out for tests and agent runs that send no key is the environment variable `HELIX_NO_ELEVATE` (any value but empty or `0`): no relaunch and no prompt, while a walk that sends keys is still refused; `tools/check.py` sets it for its tools.
+
+Reason: a self-relaunch keeps his one-click start, and a live walk without a working stop control is unsafe (the guard thread releases the keys only once the stop fires). Nothing queries MapleStory's process or window (H56): the check reads Helix's own token (`IsUserAnAdmin`).
+
+Not done: `src/route/harness/measure_moves.py` has its own F12 stop and does not check for elevation (it runs in Hong's own console with his go); nothing warns when the game is elevated and Helix is not, because that needs a query of the game's process (H56).
+
+Affects: `src/route/runtime.py` (`Elevation`, `is_elevated`, `relaunch_elevated`, `ensure_elevated`, `NOT_ELEVATED_TEXT`, `ELEVATE_OPT_OUT_ENV`), `src/main.py` (`main`), `src/route/walk.py` (`_ensure_elevated`, exit code 11), `src/gui/route_tab.py` (`sends_keys`, `elevated`, `NOT_ELEVATED_START_TEXT`, the refusal first in `startRun`), `src/gui/gui.py` (`MapleGUI.start(startup_notice=...)`), `tools/route_tab_sim.py`, `tools/check.py`, spec 5.4, the root, `src/route`, `src/gui` and `tests` CLAUDE.md files; tests in `tests/route/test_elevation.py` and `tests/controller/test_route_tab.py`.
+
+Cost if wrong: a Windows prompt at each start of the app or the CLI.
+
+Undo: `git revert` the commit titled `fix(route): run elevated so F12 reaches Helix with MapleStory in front (RT-FIX-1)`, or Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/F12CHK.md` (the listener runs), `notes/H3-DBG.md` section 1 (the diagnosis), `notes/RT-FIX-1.md`; `.superpowers/sdd/2026-10-31-route-tab/progress.md` (`Ruling [summary]: F12 fix`, QB189).

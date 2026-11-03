@@ -1,7 +1,9 @@
+import sys
 import threading
 from src.vision.vision import capture_and_process_minimap #using to V2
 from src.gui.gui import MapleGUI
 from src.controller.controller import Controller
+from src.route import runtime
 
 
 class SharedInfo:
@@ -9,7 +11,16 @@ class SharedInfo:
         self.minimap_frame_lock = threading.Lock()
         self.minimap_frame = None #note: numpy array storing data in RGB format (vision converts BGR to RGB before storing it, src/vision/vision.py:80).
 
-if __name__ == "__main__":
+def main():
+    # MapleStory runs as administrator, so F12 only stops a walk if Helix does too (RT-FIX-1, H82): an unelevated start
+    # runs this command again elevated, one Windows prompt, and this copy ends.
+    elevation = runtime.ensure_elevated()
+    if elevation is runtime.Elevation.RELAUNCHED:
+        print("Helix is starting again as administrator in a new window; this one has nothing more to do.")
+        return
+    notice = runtime.NOT_ELEVATED_TEXT if elevation is runtime.Elevation.DECLINED else None
+    if notice is not None:
+        print(f"warning: {notice}", file=sys.stderr)
 
     sharedInfo = SharedInfo()
 
@@ -19,4 +30,8 @@ if __name__ == "__main__":
 
     controller = Controller(sharedInfo = sharedInfo, CSV = None, characterClass = None)
     gui = MapleGUI(controller = controller , sharedInfo=sharedInfo)
-    gui.start() #this starts another thread for the GUI, nothing after this line will run.
+    gui.start(startup_notice = notice) #this starts another thread for the GUI, nothing after this line will run.
+
+
+if __name__ == "__main__":
+    main()

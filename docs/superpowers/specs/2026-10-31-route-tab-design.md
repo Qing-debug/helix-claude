@@ -232,7 +232,10 @@ the class or its name (5.6).
 ### 5.4 Start: checks, then the worker
 
 On the Tk thread, Start runs these checks in order and stops at the first that fails, writing its text to the status
-line (never a message box, 5.12):
+line (never a message box, 5.12). Before check 1, a tab whose session sends keys (every tab but the simulator tool's)
+refuses while Helix is not running as administrator (RT-FIX-1, H82): "Not started: F12 cannot stop a walk while
+MapleStory is in front, because Helix is not running as administrator. Close Helix and start it again, and answer Yes
+when Windows asks." It goes to the status line and the console box, and nothing else changes.
 
 1. A map is loaded and a class is chosen ("Load a map on the Setup tab first." / "Choose a character on the Setup
    tab first.").
