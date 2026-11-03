@@ -52,6 +52,7 @@ PINNED_REPORT = dict(
     known_cases={}, single_error_legs=37, single_error_within_3=37, multi_error_legs=8, multi_error_within_bound=8,
     moves=355, no_ops=17, drops=25, teleport_downs=16,
     sim_seconds=pytest.approx(233.5318, rel=1e-9), mean_lap_s=pytest.approx(11.67659, rel=1e-9),
+    knockbacks=0,  # the field OFFP141 T3 added to the report; no knockback noise in these runs
 )
 # The same for NoiseConfig(node_offset_px=2): the shifted copy's draws must not move (moves 350 is the count RV-5 uses;
 # it was 356 at 8 px/s, with single_error_legs 42, multi_error_legs 4, no_ops 19, drops 23, teleport_downs 19,

@@ -6,8 +6,12 @@ real `InputLayer` on a `SimLink` into a `SimWorld`, all under one virtual `SimCl
 outcomes, the stalls, the named known-case legs, the recovery from injected errors and the moves. `judge` turns a
 report into six pass/fail checks, and `main` is the CLI:
 
-    python -m src.route.sim.run --laps N --seed S [--map CSV] [--terrain JSON] [--out DIR]
+    python -m src.route.sim.run --laps N --seed S [--map CSV] [--terrain JSON | --real-ground] [--out DIR]
         [--known-case X1,Y1:X2,Y2]... [--min-single-error-legs K] [--class kanna]
+
+`--real-ground` runs Fossil Foundry 2 on the ground the live runs showed (`REAL_GROUND_TERRAIN`), with the dot 3 px above
+the foot, the live teleport length and mob knockback (`REAL_GROUND_SIM`, `REAL_GROUND_NOISE`). It is for the FF2 map only:
+`--terrain` or another `--map` with it is a usage error (exit 2).
 
 With `out_dir` (`--out`) the run writes `legs.jsonl` and `laps.jsonl` (the leg log), `map.csv` and `steps.jsonl` (the
 step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end`
@@ -86,6 +90,14 @@ _MIN_NO_OP_SHARE = 0.05
 _REPO = Path(__file__).resolve().parents[3]
 _CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}
 
+# The `--real-ground` preset (off-graph fix plan, Task 3, OFFP141): Fossil Foundry 2 as the live runs showed it.
+REAL_GROUND_TERRAIN = _REPO / "tests" / "fixtures" / "ff2_real_ground.json"
+# The dot's centre is 6 px above the ground and the map's nodes sit 3 px above it (Hong's QB213), so the dot reads 3 px
+# above the node line. Live sideways teleports went a median of 20 px (`ff2_live_reads.json`), 1 px beyond the
+# character's reach: `test_preset_teleport_matches_the_recordings` pins the 1.0 against the recordings.
+REAL_GROUND_SIM = SimParams(dot_above_foot_px=3, side_teleport_extra_px=1.0)
+REAL_GROUND_NOISE = NoiseConfig(knockback_p=0.02)  # the other noise stays at its defaults
+
 
 @dataclass(frozen=True)
 class SimReport:
@@ -107,6 +119,7 @@ class SimReport:
     teleport_downs: int
     sim_seconds: float
     mean_lap_s: float
+    knockbacks: int = 0                      # world effects with a mob knockback (`--real-ground` turns them on)
 
 
 @dataclass(frozen=True)
@@ -416,6 +429,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         teleport_downs=sum(m.kind == MoveKind.TELEPORT and m.direction == Key.DOWN.name for m in entries),
         sim_seconds=sim_seconds,
         mean_lap_s=sum(lap_seconds) / len(lap_seconds) if lap_seconds else 0.0,
+        knockbacks=sum(InjectedError.KNOCKBACK in e.injected for e in world.effects),
     ))
 
 
@@ -474,8 +488,13 @@ def main(argv: list[str] | None = None) -> int:
                                      description="Walk the route in the simulated world and judge the run.")
     parser.add_argument("--laps", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--map", type=Path, default=fixtures / "fossil_foundry_2.csv")
-    parser.add_argument("--terrain", type=Path, default=fixtures / "ff2_terrain.json")
+    ff2_map = fixtures / "fossil_foundry_2.csv"
+    parser.add_argument("--map", type=Path, default=ff2_map)
+    parser.add_argument("--terrain", type=Path, default=None,
+                        help="terrain JSON (default: tests/fixtures/ff2_terrain.json)")
+    parser.add_argument("--real-ground", action="store_true",
+                        help="Fossil Foundry 2 on its real ground, with the dot offset, the live teleport length "
+                             "and mob knockback (FF2 only: not with --terrain or another --map)")
     parser.add_argument("--out", type=Path, default=None,
                         help="write legs.jsonl, laps.jsonl, steps.jsonl and map.csv here "
                              "(a folder that has steps.jsonl is refused)")
@@ -485,7 +504,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--class", dest="character", choices=sorted(_CLASSES), default="kanna")
     args = parser.parse_args(argv)
 
-    result = run_sim(args.map, args.terrain, args.laps, args.seed, out_dir=args.out,
+    if args.real_ground:
+        if args.terrain is not None:
+            parser.error("--real-ground brings its own terrain: do not give --terrain")
+        if args.map.resolve() != ff2_map.resolve():
+            parser.error("--real-ground is for Fossil Foundry 2 only: drop --map or name tests/fixtures/fossil_foundry_2.csv")
+        terrain, noise, sim_params = REAL_GROUND_TERRAIN, REAL_GROUND_NOISE, REAL_GROUND_SIM
+    else:
+        terrain = fixtures / "ff2_terrain.json" if args.terrain is None else args.terrain
+        noise, sim_params = NoiseConfig(), SimParams()
+    result = run_sim(args.map, terrain, args.laps, args.seed, noise=noise, sim_params=sim_params, out_dir=args.out,
                      known_cases=args.known_case or (), character=_CLASSES[args.character]())
     if not is_successful(result):
         print(f"error: {result.failure()}", file=sys.stderr)
