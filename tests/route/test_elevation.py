@@ -110,6 +110,8 @@ def test_shell_execute_runas_reads_a_none_result_as_zero(fake_shell32):
 
 
 def test_the_suite_wide_guard_refuses_the_real_prompt():
+    # without the guard (`--noconftest`, or tests/conftest.py moved) the call below would raise a real UAC prompt
+    assert runtime._shell_execute_runas is not _REAL_SHELL_EXECUTE_RUNAS, "tests/conftest.py's guard is not active"  # noqa: SLF001
     with pytest.raises(AssertionError, match="Windows administrator prompt"):
         runtime._shell_execute_runas("python.exe", "-m src.main", "C:\\")  # noqa: SLF001
 

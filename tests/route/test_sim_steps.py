@@ -44,9 +44,9 @@ TERRAIN = FIXTURES / "ff2_terrain.json"
 V2_METHODS = ("leg", "read_failed", "no_plan", "reached", "stall", "planned", "sent", "settled", "leg_end")
 OFFSETS = NoiseConfig(node_offset_px=2)
 BOTH_NOISES = pytest.mark.parametrize("noise", [NoiseConfig(), OFFSETS], ids=["plain", "node_offsets"])
-# The report of the 20-lap seed-1 run before this task. Pinned at the planner's 8 px/s and re-pinned at 12.5 px/s
-# (H81), run on 8290b04 with the two changed values; at 8 px/s it was moves 379, no_ops 22, single_error_legs 43,
-# multi_error_legs 9, sim_seconds 298.5323 and mean_lap_s 14.926615. The two floats are ns counts over 1e9.
+# The report of the 20-lap seed-1 run at the planner's 12.5 px/s (H81), re-pinned from a run on 8290b04 with the two
+# changed values. At 8 px/s it was moves 379, no_ops 22, single_error_legs 43, multi_error_legs 9, sim_seconds 298.5323
+# and mean_lap_s 14.926615. The two floats are ns counts over 1e9.
 PINNED_REPORT = dict(
     laps_requested=20, laps_completed=20, legs=141, legs_reached=141, stalls=0, timeouts=0, link_down=0,
     known_cases={}, single_error_legs=37, single_error_within_3=37, multi_error_legs=8, multi_error_within_bound=8,

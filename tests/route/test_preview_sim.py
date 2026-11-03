@@ -56,7 +56,8 @@ CSV = FIXTURES / "fossil_foundry_2.csv"
 TERRAIN = FIXTURES / "ff2_terrain.json"
 
 LAPS, SEED = 20, 1
-# The moves of each run (spec 7 for the plain run; RV-3's PINNED_OFFSET_REPORT for the offset run).
+# The moves of each run: the 20-lap seed-1 runs, re-pinned at 12.5 px/s (H81) (`PINNED_REPORT` and `PINNED_OFFSET_REPORT` in
+# test_sim_steps.py; spec 7 gave 379 and 356 at 8 px/s).
 MOVES = {"plain": 355, "offset": 350}
 
 Pos = tuple[int, int]

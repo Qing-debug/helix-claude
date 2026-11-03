@@ -199,7 +199,26 @@ CASES = [
         (TP_UP, (105, 42), (105, 42)),
         (walk(L, 640), (97, 43), (97, 43)),
     ])),
+    # D2: the hops leave `path`. The first hop walks to x 101 on the (101,42) piece, and the re-plan from there (4.51 s,
+    # against 4.69 s for the other start) goes down to (99,60) and along the bottom, where `path` (4.37 s) went via
+    # (101,24) and the upper route. Not a tie. The literals are the preview's at 12.5 px/s, each checked by S3b against
+    # `next_move`, not derived by hand (added for review finding WALKSPD-R m1).
+    ("D2", FF2, (105, 42), (58, 46), (4.37, [
+        (walk(L, 320), (101, 24), (101, 42)),
+        (COIN, (99, 60), (101, 60)),
+        (TP_L, (48, 45), (82, 60)),
+        (TP_L, (48, 45), (63, 60)),
+        (TP_L, (48, 45), (44, 61)),
+        (walk(R, 320), (48, 45), (48, 61)),
+        (TP_UP, (48, 45), (48, 45)),
+        (walk(R, 800), (58, 46), (58, 46)),
+    ])),
 ]
+# Where the hops leave `path` (RV3-D5 A2): S3b still holds, and `follows` is False.
+LEAVES_PATH = {"D2"}
+# Where two routes cost exactly the same, `rg.path` breaks the tie on its own and the hops may break it the other way, so
+# `follows` is not asserted for these; `test_d1_is_an_exact_cost_tie...` pins the tie instead.
+TIED = {"D1"}
 IDS = [case[0] for case in CASES]
 EXPECTED = {case[0]: case[4] for case in CASES}
 ROUTES = [case_id for case_id in IDS if isinstance(EXPECTED[case_id], tuple)]  # non-Failure, non-arrived
@@ -523,11 +542,29 @@ def test_s3b_every_later_hop_agrees_with_next_move(built, case_id):
     case = built[case_id]
     pv = _preview(case)
     assert s3b_problems(case.rg, pv, case.target) == []
-    # D1 was an exact cost tie at 8 px/s (3.475 s from (129,60) both via (99,60) and up at x 97, and via (105,42) and
-    # up at x 105), which `rg.path` broke one way from (129,60) and the other from (105,60), so `path` and the hops
-    # differed. At 12.5 px/s (H81) the tie is gone: `path` and the hops both go via (105,42) (2.62 s), so D1 follows
-    # like the other cases. The moves agree at every landing, which `s3b_problems` pins.
-    assert follows(pv.path, pv.hops)
+    if case_id not in TIED:
+        assert follows(pv.path, pv.hops) is (case_id not in LEAVES_PATH)
+
+
+def test_d1_is_an_exact_cost_tie_and_its_hops_follow_one_of_the_two_routes(built):
+    # D1 is an exact tie at 12.5 px/s (H81) as it was at 8 px/s: from (129,60) the routes via (99,60) and via (105,42) both
+    # cost 2.62 s (3.475 s at 8 px/s; the same two routes tie from (113,60) and (105,60) too). `rg.path` and the planner
+    # each break a tie on their own (WALKSPD-R found `rg.path` going via (99,60) from (113,60) and via (105,42) from the
+    # other two starts), so neither is asserted to match the other: the hops need only follow one of the two tied routes,
+    # which holds whichever way either side breaks it.
+    # The moves agree at every landing, which `s3b_problems` pins in the test above.
+    case = built["D1"]
+    rg, pv = case.rg, _preview(case)
+    start = pv.start
+    costs, routes = [], []
+    for mid in ((99, 60), (105, 42)):
+        mid_node = case.node(mid)
+        first, second = rg.path(start, mid_node).unwrap(), rg.path(mid_node, case.target).unwrap()
+        routes.append(first + second[1:])
+        costs.append(rg.cost_to(start, mid_node).unwrap() + rg.cost_to(mid_node, case.target).unwrap())
+    best = rg.cost_to(start, case.target).unwrap()
+    assert costs[0] == costs[1] == best, "D1 is no longer a tie: pick another tied case, or drop the TIED special case"
+    assert any(follows(route, pv.hops) for route in routes)
 
 
 def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray_path(built):
@@ -544,7 +581,8 @@ def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray
 
 # ---- 10. FF2 sweep ----
 
-# The set at 12.5 px/s (H81); at 8 px/s it held nine pairs, among them D1 (the tie) and the pairs to (66,28) and (42,28).
+# The set at 12.5 px/s (H81); at 8 px/s it held nine pairs, among them D1 (the tie: still a tie at 12.5, but `path` and the
+# hops now break it the same way from (129,60)) and the pairs to (66,28) and (42,28). D2 is the first pair below.
 NOT_FOLLOWING = {
     ((105, 42), (58, 46)),  # the first hop walks to x 101 on the (101,42) piece; the re-plan from there goes down to
     ((118, 43), (58, 46)),  # (99,60) and along the bottom, where `path` went via (101,24) and the upper route
