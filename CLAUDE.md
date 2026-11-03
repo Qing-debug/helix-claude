@@ -39,7 +39,7 @@ Checks, from the repo root (wall times measured on the dev PC when this text was
 python tools/check.py            # ruff, basedpyright, lint-imports, pytest -m "not slow": about 90 s
 python tools/check.py --full     # the same with the slow tests: about 160 s; run it before you commit
 python -m pytest tests/route -q  # about 41 s (about 25 s without the slow tests; tests/route_view about 18 s, tests/controller about 24 s)
-python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0   # sim smoke: 6/6 PASS, same output every run
+python -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0   # sim smoke: 6/6 PASS, same output every run (366 moves, 25 no-ops; seed 1 misses the 5% no-op bar since the 12.5 px/s walk speed, H81)
 ```
 
 `tools/check.py` uses the tools next to the running interpreter, so `.venv\Scripts\python.exe tools/check.py` works without activating the venv. basedpyright runs against `.basedpyright/baseline.json`; how to keep it right is in `tests/CLAUDE.md`. Every test passes except the 10 skipped wire-only rejects in `tests/input/test_protocol.py` (`tests/CLAUDE.md` says where they really run).

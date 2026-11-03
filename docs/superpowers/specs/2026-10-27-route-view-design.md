@@ -628,6 +628,13 @@ bytes, which end lines with CRLF on Windows, through a bash pipe (Git Bash, from
 RV2f with the venv's Python at f9dcf06 (same code as 5d1176a): the same hash. With the `\r` stripped the hash is
 `6574cac5...8d25` (RV2); PowerShell 5.1's `>` writes UTF-16 and gives neither, so do not hash a file written that way.
 
+Note (2026-11-03, H81): the baseline above is for the planner's old walk speed of 8.0 px/s. At 12.5 px/s (`src/route/params.py:16`, H81) the seed-1 smoke
+fails its noise check (17 of 355 moves are no-ops, 4.79%, and the bar is 5%; that is sampling noise, the 1000-lap share is 5.83%) and its stdout is no longer
+`d982184e...` (it is `5ba2994c41e5441c02635ef17184faef0e36bfa519d885ac0820100460cbbe21`). The smoke is now
+`python -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0`: 366 moves, 6/6 PASS, SHA-256
+`2414145da1e185dbac37622a9cd3731be6654ad7fba0f53d339445ab532db62b` taken the same way (ruling WALKSPD-D1, H81). The seed-1 plain run is 355 moves and the
+node-offset run 350 (`PINNED_REPORT` and `PINNED_OFFSET_REPORT` in `tests/route/test_sim_steps.py`). The results measured at 5d1176a stay as they were.
+
 Simulator-only checks (no game, no board; an agent runs them):
 
 - **S1 behaviour unchanged.** The sim smoke's stdout has the sha256 above; `python -m pytest tests/route -q` passes
@@ -1109,6 +1116,10 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
   the planned route at an assumed landing: 0 of 379 and 0 of 356. At the real landing the preview agrees with the
   earlier one in 204 of 239 pairs (plain) and 196 of 216 (offset); the view model's "route changed:" lines over the
   same two folders number 35 and 20, which is 239 - 204 and 216 - 196.
+- **Note (2026-11-03, H81):** S1, S3 and S3b above were measured at the planner's 8.0 px/s. At 12.5 px/s the seed-1 smoke's stdout is
+  `5ba2994c...` and it misses the noise bar, so the smoke is seed 2 (section 7, the note after the baseline paragraph); the seed-1 plain run is
+  355 moves and the node-offset run 350, so the counts of S3 and S3b above (379, 356, 705 and 645 hops, 204 of 239 and 196 of 216) are the 8.0 px/s
+  values. `tests/route/test_preview_sim.py` still passes at 12.5 with 0 mismatches.
 - **Test sizes** (2026-10-28, at `21040ce`): `python tools/check.py --full` 1921 passed, 10 skipped (pytest 112.8 s,
   120.1 s with the other three checks); `python tools/check.py` 1857 passed, 10 skipped, 64 deselected (pytest 52.4 s,
   59.7 s in all). `tests/route_view` is 136 tests and `tests/route` 890 (`tests/CLAUDE.md`, "Speed", has the times).
