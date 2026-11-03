@@ -143,7 +143,7 @@ PASS
 ### Reach and movement values (not measured on FF2)
 
 - **Reach** is 19 px horizontal and 23 px vertical (`src/classes/classes.py:47-48`), Hong's own measurement, not made on Fossil Foundry 2 (H3). It is used unchanged and stays a single value in that one place; no module under `src/route` writes 19 or 23 (`tests/route/test_import_rules.py`). Nothing in the build measured reach on FF2.
-- **Movement values are estimates, not measurements.** The planner's `MovementParams` (`src/route/params.py:16-19`): walk 8.0 px/s, teleport 0.55 s, drop base 0.35 s, fall 60 px/s. The simulator's `SimParams` (`src/route/sim/world.py:117-122`): walk 8.0 px/s, teleport settle 0.35 s, drop settle 0.25 s, fall 60 px/s, link latency 0.03 s. The tool that measures them (`measure_moves`, plan task B20) is built and tested offline but has not been run in the game.
+- **Movement values are estimates, not measurements.** The planner's `MovementParams` (`src/route/params.py:16-19`): walk 8.0 px/s, teleport 0.55 s, drop base 0.35 s, fall 60 px/s. The simulator's `SimParams` (`src/route/sim/world.py:117-122`): walk 8.0 px/s, teleport settle 0.35 s, drop settle 0.25 s, fall 60 px/s, link latency 0.03 s. The tool that measures them (`measure_moves`, plan task B20) is built and tested offline but has not been run in the game. (Note 2026-11-03, H81: the planner's walk speed is now 12.5 px/s (`src/route/params.py:16`), measured in Hong's live walks, and the simulator's `SimParams` has the same value (`src/route/sim/world.py:118`); the other values above are unchanged and still estimates.)
 
 ### What was built
 

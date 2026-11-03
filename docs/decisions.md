@@ -2516,7 +2516,7 @@ Pointer: question bank QB138, QB151, QB182; `.superpowers/orchestrator/2026-10-2
 
 Question: H77 made each grab wait in Windows for a new frame and kept `THREAD_SLEEP_DURATION_S`, a 10 ms sleep, as a floor between frames. A live measurement on his 240 Hz screen (the game open, the capture only, 3 rounds of 5 s per mode) found the 10 ms floor does bind there: it ran at about 82 frames a second and about 24% of one core, where the old loop ran 45.0 frames a second at 13.3%. What floor between frames? Options: A every 10 ms (82.0 frames a second, 23.8% of one core, pictures at most about 13 ms old); B every 20 ms (recommended: 45.7 frames a second, 12.5% of one core, about 23 ms old); C every 33 ms (an estimate, not run: about 29 frames a second, about 7.9% of one core, about 36 ms old, a choppier display).
 
-Ruling [Hong]: "Every 20 ms (Recommended)". The recommendation.
+Ruling [Hong] (chat, AskUserQuestion, orch 135, 2026-11-03): "Every 20 ms (Recommended)". The recommendation.
 
 Reason: not given beyond the pick. The measurement behind the options: the per-frame cost is the same in every mode (process cycles per frame: old 10.30 M, 10 ms 10.10 M, 20 ms 9.53 M), so the CPU difference is the pace only; the 20 ms floor costs what the old loop cost, without the old loop's failed grabs, and the route reads the position every 50 ms (`poll_s`, `src/route/params.py:24`), so it still sees about two fresh pictures per read.
 
@@ -2528,7 +2528,7 @@ Cost if wrong: one constant.
 
 Undo: `git revert` the commit titled `fix(vision): capture floor 20 ms (Hong, H35-ANA-D1)`, or Hong says so.
 
-Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-RUN.md` (the table and the options in plain words) and `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-run-output.txt` (the tool's output, verbatim).
+Pointer: question bank QB185; `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-RUN.md` (the table and the options in plain words) and `.superpowers/orchestrator/2026-10-21-phase1/notes/MD2-run-output.txt` (the tool's output, verbatim).
 
 ## H81 (2026-11-03): The planner's walk speed is 12.5 px/s, and the documented sim smoke is seed 2 (Hong's QB187; ruling WALKSPD-D1)
 
@@ -2602,3 +2602,23 @@ Cost if wrong: a Windows prompt at each start of the app.
 Undo: `git revert` the commit titled `fix(route): run elevated so F12 reaches Helix with MapleStory in front (RT-FIX-1)` and the later commit whose title ends `(RT-FIX-1b)`, or Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/F12CHK.md` (the listener runs), `notes/H3-DBG.md` section 1 (the diagnosis), `notes/RT-FIX-1.md`, `notes/RT-FIX-1-R.md` (the review) and `notes/RT-FIX-1b.md` (its fixes); `.superpowers/sdd/2026-10-31-route-tab/progress.md` (`Ruling [summary]: F12 fix`, QB189).
+
+## H83 (2026-11-03): The Route tab's Saved runs list refreshes itself when a run ends, the stop and not-started texts also go to the console, and Laps starts at 1 (Hong's QB186 and two chat answers; ruling RT-FIX-2)
+
+Question: three things Hong found in his live checks of the Route tab (H-2 with the simulator tool, H-3 with in-app 1-lap walks). (1) After a walk the Saved runs list showed the new run only after he pressed Refresh. (2) The texts "Stopped: you clicked the app" and "Not started: click the game first" appeared on the status line only; he looked in the console first. (3) The Laps field started empty ("until stopped"), so every walk he wanted to run once needed a number typed in.
+
+Ruling [Hong]: (1) "the lateest saved runs should always show after a run is done, that way i can see what is available to watch" (chat, orch 135, 2026-11-03). (2) QB186, "Status line and console (Recommended)" (AskUserQuestion, orch 135, 2026-11-03), for the question "the \"Stopped: you clicked the app\" / \"Not started: click the game first\" messages show only in the status line; write them to the console as well?". (3) "set the number of laps to1 by default" (chat, relayed by orch 135, 2026-11-03).
+
+Reason: as given: he wants to see what is available to watch once a run is done; he looks in the console first (QB186's text: "I was initialyl lookign in the console"); one lap is the usual first walk. Nothing more was asked.
+
+Ruling [orchestrator, RT-FIX-2; not Hong's decision]: how each reads in the code. (1) The tab reads the folder list again in the drain step that finds the run's worker dead (`drainEvents`, right after `_lockControls(False)`), so every ending counts, a run that ended with an `ended` event, one with a view, a run that ended before the walk and a worker found dead by the watchdog, and nothing is read while the window waits to close. The refill is the same call as the Refresh button, so it also clears the list's selection (a row Hong had selected during a run is deselected when the run ends). (2) `stopText(code, text)` is the status text of a clean stop or a stop before the walk, and `_showEvent` writes it to the console box after the status line, with `_toConsole(text, False)`. It covers every such text: the time limit, F12, Stop, a click on the app, and the countdown's "Not started: click the game first" (the window-close text is empty and prints nothing). It does not cover "Ended: all laps done." or the failures (codes 1 to 7 and the watchdog's text): the session already prints a failure's details as console lines. (3) `laps_var` starts at "1"; an empty field still means until stopped.
+
+Scope: the three behaviours only. The elevation and F12 code (H82), the walk speed (H81) and the simulator are not touched; no other message moves to the console.
+
+Affects: `src/gui/route_tab.py` (`laps_var`, `stopText`, `endedText`, `drainEvents`, `_showEvent`); `tests/controller/test_route_tab.py` (the section "RT-FIX-2": the laps default, the eight stop texts reaching the console, ten other ends adding no line, a `stopText` table, four refresh tests; the constructor test, `test_minutes_and_countdown_reach_the_session` and `test_open_never_loads_while_a_worker_exists` updated); the route-tab spec (5.2 and 5.3 for the Laps default, 5.5 for the console line, 5.11 for the refill, 12.1 and 12.3 for this unit) and its plan (rows H-1 to H-3); `src/gui/CLAUDE.md` (the Route tab bullet). The same docs commit carries the RT-13B-R minors: the H80 entry above got the channel and the bank id the review found missing (m1); the route-tab spec names 0.6 GB per hour, 2.5 GB and 1.5 GB where it still said 0.5, 2 and 1 and "provisional" (m2); its 12.5 closes the ~35 s capture check (m3, H80) and 12.4 says which of the two new tests is which (n1); and the p1b spec's "walk 8.0 px/s" bullet has a dated note (H81).
+
+Cost if wrong: one read of the run folder at the end of each run (the list is small and the sizes are summed off the Tk thread), one extra console line on a stop, and one field default.
+
+Undo: `git revert f91e21f` (the commit titled `feat(route-tab): saved runs refresh when a run ends, stop texts also in the console, Laps starts at 1 (RT-FIX-2)`) and the docs commit that follows it, or Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/H3-DBG.md` section 2 (the refresh), `notes/RT-FIX-2.md` and `notes/RT-FIX-2b.md`; question bank QB186 (`C:/Users/Qing_programming/.claude/orchestrator/question-bank.md`); `.superpowers/sdd/2026-10-31-route-tab/progress.md` (`Decision (Hong) ... QB186`, "the lateest saved runs", "set the number of laps to1 by default").

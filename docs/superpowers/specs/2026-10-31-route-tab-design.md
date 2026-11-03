@@ -145,8 +145,8 @@ greyed out.").
 | [ Setup ] [ Route ]                                                                              |
 +--------------------------------------------------------------------------------------------------+
 | Map: fossil_foundry_2.csv   Class: Kanna                                                         |
-| Laps [    ] (empty = until stopped)   Minutes [    ] (empty = no limit)   Countdown [ 5 ] s      |
-| [ Start ]  [ Stop ]                                    Recording: on (about 0.5 GB per hour)      |
+| Laps [ 1  ] (empty = until stopped)   Minutes [    ] (empty = no limit)   Countdown [ 5 ] s      |
+| [ Start ]  [ Stop ]                                    Recording: on (about 0.6 GB per hour)      |
 | Status: Ready. Press Start, then click the game.                                                  |
 +------------------------------------------------------+-------------------------------------------+
 |                                                      | Lap 2/5  leg 4/9  target 7                |
@@ -217,7 +217,7 @@ What the view area shows (H68, H69, H70):
 
 | Setting | Field | Default | Valid | Maps to |
 |---|---|---|---|---|
-| Laps | entry | empty (until stopped) | whole number >= 1 | `--laps` |
+| Laps | entry | 1 (Hong, H83); empty means until stopped | whole number >= 1 | `--laps` |
 | Minutes | entry | empty (no limit) | number > 0, at most `threading.TIMEOUT_MAX / 60` (as `walk.py:325-329`) | `--minutes` |
 | Countdown | spinbox | 5 | whole seconds 1-60 | H61 |
 | Seed | not shown | drawn from the OS per run, written to `session.json` | - | `--seed` |
@@ -243,8 +243,8 @@ if Windows asks, or start it from an administrator terminal." It goes to the sta
    editor's loop that holds the minimap lock while it scales (`src/gui/map_editor.py:1069-1087` (tree), RVT92 2e).
 3. The minimap has been found (`MapleGUI._minimapReady`, `gui.py:232`).
 4. The character is found on the current frame (`MapleGUI._findCharacter`, `gui.py:240`).
-5. At least 2 GB free on the drive that holds `data/route` (`shutil.disk_usage`), because every run records about
-   0.5 GB per hour (H62): "Less than 2 GB free on C:. Delete old runs in data/route, then press Start."
+5. At least 2.5 GB free on the drive that holds `data/route` (`shutil.disk_usage`), because every run records about
+   0.6 GB per hour (H62): "Less than 2.5 GB free on C:. Delete old runs in data/route, then press Start."
 6. A new run folder `data/route/<UTC stamp>` that does not exist yet (`runtime.check_out`, as `walk._check_out`). The
    stamp has 1 s resolution, so a second Start in the same second as a run that wrote its folder is refused: "A run
    folder for this second already exists. Press Start again."
@@ -313,6 +313,12 @@ errors, so errors can be coloured later; there are no colours now (H71). A repla
 "Replay not opened: <the reason>" there with the status line unchanged (H72), but no load path is silent any more:
 the end-of-run load is gone (H68) and Open puts its load error on the status line (5.11). Closing the app prints no
 line at all (below, H79).
+
+The stop texts also reach the console box (QB186, H83): when a run ends by a stop or by a stop before the walk
+(the table's rows for F12, Stop, the time limit, a click on the app and the countdown's "Not started: click the game
+first"), the status line's text is also written to the console box, once, after the status line, because Hong looks
+in the console first. The window close shows no text, and the other ends (all laps done, the character lost, the
+failure codes, the watchdog's text) add no line of their own: the session already prints a failure's details there.
 
 The cleanup is `walk`'s, in its order (timer, release_all, recorder, `stop.json`, step log `end`, leg log,
 `link.close`, stop control close; `walk.py:473-507`), now inside `RunSession` (5.6) so the CLI and the tab share it.
@@ -450,13 +456,13 @@ Class key: the tab holds a class instance (`controller.agent.characterClass`, `g
   `record_minimap.py:99-100`, on a full disk) as well as a `Failure` return, posts a `warning` event ("Recording
   stopped: <reason>. The walk goes on.") and ends; the walk goes on. The wrapper also stops recording when free space
   on the run folder's drive falls below a floor, checked with `shutil.disk_usage` every 600 frames (1 minute at 10 fps):
-  "Recording stopped: less than 1 GB free on C:. The walk goes on." `record` itself is unchanged
+  "Recording stopped: less than 1.5 GB free on C:. The walk goes on." `record` itself is unchanged
   (`record(frames, out_dir, seconds, fps, clock, sleep, stop)` loops until `stop` is set,
   `src/route/harness/record_minimap.py:63-111`): the wrapper passes it a `frames` callable that wraps
   `shared_frames(shared)`, counts its polls and calls `shutil.disk_usage` on every 600th; below the floor it sets the
   `stop` event it gave `record` and remembers why, so `record` returns `Success` and the wrapper then posts the
-  low-space warning. The floor (1 GB) and the Start refusal (2 GB, 5.4)
-  are provisional until the plan's measurement step (section 11) has the real MB per hour.
+  low-space warning. The floor (1.5 GB) and the Start refusal (2.5 GB, 5.4) come from the measured rate (H-1's
+  recording, RT-13 part B, 12.3).
 - `run()` never ends without telling the tab: it posts the `ended` event from a `finally` around its whole body, with
   the exit code, or with `code=None` and the exception text ("the run stopped unexpectedly: <type>: <message>") when an
   exception is leaving `run()`. `run()` still re-raises (the CLI keeps today's behaviour, including a held
@@ -548,12 +554,12 @@ today's elapsed form (`_stamp`'s fallback, `model.py:415-419`). No format change
   `session.json`, `stop.json`, `legs.jsonl`, `laps.jsonl`, `steps.jsonl`, `map.csv`, `minimap.png`, and the recorded
   frames in `frames/` (`frame_%06d.png` plus `index.jsonl`, 10 per second). This keeps H57's kept principle: every run
   can be replayed later with the log of why the bot chose each move.
-- Size: about 0.5 GB per hour (the route-view spec's estimate, not measured). Start refuses with less than 2 GB free
-  (5.4 step 5); at that rate 2 GB lasts about 4 h, and laps and minutes may both be empty ("until stopped"), so during
-  the run the recorder checks free space every 600 frames and stops recording below 1 GB free, with a warning on the
-  status line, while the walk goes on (5.6). A recorder error of any kind (e.g. a full disk) does the same. `data/route`
-  is under the repo, on C:, so this guards the system drive. Both numbers are provisional: the plan measures the real
-  MB per hour (section 11) and sets them from it.
+- Size: about 0.6 GB per hour (measured in H-1's 10-minute recording: 0.56 GB per hour, 12.3). Start refuses with
+  less than 2.5 GB free (5.4 step 5); at that rate 2.5 GB lasts about 4 h, and laps and minutes may both be empty
+  ("until stopped"), so during the run the recorder checks free space every 600 frames and stops recording below
+  1.5 GB free, with a warning on the status line, while the walk goes on (5.6). A recorder error of any kind (e.g. a
+  full disk) does the same. `data/route` is under the repo, on C:, so this guards the system drive. Both numbers
+  come from that recording (RT-13 part B, 12.3).
 - Old runs: kept until Hong deletes them by hand, as the RVT93-7 option he picked said ("you delete old runs by
   hand"). Nothing deletes runs automatically. The saved-run list shows each run's size so the big ones are easy to find.
 - Picking a run: the "Saved runs" list in the Route tab is a `tk.Listbox` with a scrollbar (no file dialog and no
@@ -561,7 +567,9 @@ today's elapsed form (`_stamp`'s fallback, `model.py:415-419`). No format change
   `steps.jsonl` or `legs.jsonl`, newest first, as "<local start time> <map file name> <laps done> <size>".
   "Refresh" re-reads the folder; "Open" loads the selected run with `load_folder` (`model.py:711`) into the view as a
   replay, in place of the idle live minimap or a kept run view (5.2); a load that fails puts its error on the status
-  line and leaves the view as it was. The list, Open and Refresh are disabled while a run is live.
+  line and leaves the view as it was. The list, Open and Refresh are disabled while a run is live. When a run ends the list is read again by itself,
+  as Refresh reads it, once the controls come back (every way a run can end, but not while the window waits to
+  close), so the run just ended shows with no press (Hong, H83).
 - Sizes: a long run holds tens of thousands of frame files (10 per second is 36 000 per hour), so summing them on the
   Tk thread would freeze the app. The list is filled at once with "size ..." and a daemon thread (`saved-run-sizes`)
   sums each folder's file sizes (`os.scandir`, no Tk) and posts the results to a queue that the tab drains with
@@ -769,7 +777,7 @@ New:
   exactly one `ended` event, with `code` 7 as today; an exception raised outside the walk body (e.g. by a fake
   `make_clock` or the leg log) posts `ended` with `code=None` and the error text, and `run()` re-raises it; the
   recorder wrapper turns an `OSError` from `cv2.imwrite` (patched; not `json.dumps`, which the whole run shares) into
-  one `warning` event and the walk goes on; with the free space patched below the 1 GB floor, recording stops at the
+  one `warning` event and the walk goes on; with the free space patched below the 1.5 GB floor, recording stops at the
   next check with the low-space warning and the walk goes on (tested on the wrapper with the check interval patched
   small, since `record` polls on real time; a constants test pins the 600 frames).
 - `tests/route/test_walk_cli.py`: its existing `setattr(walk, ...)` patches (:464-470, :555, :575) reach the run
@@ -967,6 +975,7 @@ plan's own message. Hashes are in build order within a task. The commit that las
 | RT-13 part B | `914c179` | the free-space numbers from H-1's recording: 0.6 GB per hour, Start refuses below 2.5 GB, the recorder stops below 1.5 GB (12.3) |
 | H35-ANA-D1 | `120ef31` | the capture's floor between frames is 20 ms, Hong's pick (H80; 12.3) |
 | RT-13B minors | `02adf2d` | doc minors N2-N4 and P2-m4: the stale RV3-D6 markers, two line cites (route-view plan, spec 5.10), the `extend` cite |
+| RT-FIX-2 | `f91e21f` | Hong's three live-check items (H83): the saved-run list reads again when a run ends (5.11), the stop and not-started texts also go to the console box (5.5), Laps starts at 1 (5.2, 5.3) |
 
 ### 12.2 RT-12's measurement: the in-app key path against the CLI's
 
@@ -1020,8 +1029,9 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   bytes over 599.5 s) gives 571.0 MB per hour and 0.56 GB per hour (0.5577 before rounding). By choice 15, from the
   one-decimal rate: `RECORD_GB_PER_HOUR` 0.6, Start's refusal `START_FREE_BYTES` 2.5 GB (4 h is 2.4 GB, up to the next
   0.5 GB) and the recorder's floor `RECORD_FLOOR_BYTES` 1.5 GB (2 h is 1.2 GB, up to the next 0.5 GB), at
-  `src/route/session.py:85-87`. Where sections 5.2, 5.4, 5.6 and 5.11 say 0.5 GB per hour, 2 GB and 1 GB, those are the
-  provisional figures. The tab's texts follow the constants ("about 0.6 GB per hour", "Less than 2.5 GB free on C:",
+  `src/route/session.py:85-87`. Sections 5.2, 5.4, 5.6, 5.11 and 8 first said 0.5 GB per hour, 2 GB and 1 GB, as
+  provisional figures; they were updated in place to these on 2026-11-03 (RT-FIX-2), and section 11's plan instruction
+  keeps the old words as history. The tab's texts follow the constants ("about 0.6 GB per hour", "Less than 2.5 GB free on C:",
   "less than 1.5 GB free on C:"). At 0.6 GB per hour 2.5 GB lasts about 4 h.
   `test_recorder_numbers_follow_the_measured_rate` pins choice 15's rule.
 - **The capture's pace (H77, `87ceab1`).** Sections 5.9 and 6.3 were brought up to date with it. By Hong's QA116-1
@@ -1033,20 +1043,28 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   presents it. With the game drawing, a later measurement on Hong's 240 Hz screen (H80, `120ef31`; `notes/MD2-RUN.md` in
   the workspace): the old loop ran 45.0 frames a second at 13.3% of one core, the 10 ms floor 82.0 at 23.8% and the 20
   ms floor 45.7 at 12.5%; Hong chose 20 ms.
+- **RT-FIX-2 (`f91e21f`, H83).** Three changes from Hong's live checks, which 5.2, 5.3, 5.5 and 5.11 now say: the Laps
+  field starts at 1 (empty still means until stopped); `_showEvent` also writes the status text of a clean stop or of a
+  stop before the walk (`stopText`) to the console box (not "all laps done", not the failures); and `drainEvents` calls
+  `refreshSavedRuns` when it clears a dead worker (not while the window closes), which also clears the list's
+  selection, as Refresh does.
 
 ### 12.4 Test counts
 
 At `415dbf0` the suite has 2287 tests: 63 marked `slow` (42 in `tests/input`, 14 in `tests/route`, 7 in
 `tests/route_view`), 10 skipped. At `23c803c` it has 2320 tests: the same 63 `slow` (the same split), 10 skipped, 2310
-passed. At `02adf2d` it has 2322 tests: the same 63 `slow` (the same split), 10 skipped, 2312 passed (RT-13 part B added
-`test_recorder_numbers_follow_the_measured_rate`). The new test files are listed in `tests/CLAUDE.md`.
+passed. At `02adf2d` it has 2322 tests: the same 63 `slow` (the same split), 10 skipped, 2312 passed (two new tests since `23c803c`: RT-13 part B's
+`test_recorder_numbers_follow_the_measured_rate` and `5db01f8`'s "Close anyway?" box test). The new test files are listed in `tests/CLAUDE.md`.
 
 ### 12.5 Still open
 
-- Hong's hands, the capture's pace (H77): a ~35 s live check with the game open, its minimap on the captured monitor
-  and no run; it reads monitor pixels only and sends no key:
-  `C:\Users\Qing_programming\Desktop\helix-rt\.venv\Scripts\python.exe C:\Users\Qing_programming\Desktop\helix-claude-clone\.superpowers\orchestrator\2026-10-21-phase1\notes\QA116-PACE-scratch\measure_dup.py`.
-  Pass: the new loop's CPU at or below the old loop's (its SUMMARY prints both), and the median image gap is the game's
-  frame interval (under about 21 ms the 20 ms floor sets the pace, which is fine).
-- Hong's hands: H-2 (`python tools/route_tab_sim.py manual`, clicks on the app) and H-3 (an in-app 1-lap walk with the
-  game and the board). No agent runs either.
+- Closed 2026-11-03: Hong's hands, the capture's pace (H77), the ~35 s live check with the game open. The agent-run
+  measurement MD2-RUN (`notes/MD2-RUN.md` in the workspace) met the pass line: the 20 ms floor's CPU, 12.5% of a
+  core, is at or below the old loop's 13.3%, and the median image gap is 21.70 ms (the floor sets the pace, which
+  is fine). Hong chose the 20 ms floor on those numbers (H80, 12.3), and the orchestrator ruled the check closed.
+- Hong's hands: H-3, an in-app 1-lap walk with the game and the board. No agent runs it. Hong ran three on `8290b04`
+  (2026-11-03): Stop and a click on the app stopped the walk, F12 with the game in front did not (H82: Helix now runs
+  as administrator), the Saved runs list needed Refresh (H83: it reads itself again), and the walk overshot nodes
+  (H81: the planner's walk speed is 12.5 px/s). One more 1-lap walk on the fixed code is his to run. H-2
+  (`python tools/route_tab_sim.py manual`) is done: PASS on `8290b04` (2026-11-03); his remark that the stop texts
+  were not in the console is H83.
