@@ -20,6 +20,16 @@ FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "fossil_foundry_
 TELEPORT_DOWN = Move(MoveKind.TELEPORT, Key.DOWN, None)
 DROP = Move(MoveKind.DROP, None, None)
 
+_DEFAULTS = MovementParams()
+WALK_PX_PER_S = _DEFAULTS.walk_px_per_s
+# (101,24) -> (105,42) on FF2: one teleport down, then 4 px of walking
+FF2_DOWN_COST_S = _DEFAULTS.teleport_s + 4 / WALK_PX_PER_S
+
+
+def _ms(px):
+    """The hold of a `px` pixel walk at the default walk speed."""
+    return 1000.0 * px / WALK_PX_PER_S
+
 
 @pytest.fixture(scope="module")
 def ff2():
@@ -77,17 +87,17 @@ def test_known_case_2_walks_level_with_the_target_teleports_down_then_walks_righ
     target = _node(agent, (105, 42))
     # B14-inv-D1 case 1: the top platform spans x 105, so the DOWN edge (101,24) -> (105,42) is made from x 105
     first = _decide(rg, (101, 24), target)
-    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, _ms(4))
     assert first.toward is target
-    assert first.cost_to_go_s == pytest.approx(1.05)
+    assert first.cost_to_go_s == pytest.approx(FF2_DOWN_COST_S)
     lined_up = _decide(rg, (105, 23), target)
     assert lined_up.move == TELEPORT_DOWN
     assert lined_up.toward is target
-    assert lined_up.cost_to_go_s == pytest.approx(0.5 + 1.05)  # approach from x 105 back to the start (101,24)
+    assert lined_up.cost_to_go_s == pytest.approx(4 / WALK_PX_PER_S + FF2_DOWN_COST_S)  # approach from x 105 back to the start (101,24)
     landed = _decide(rg, (101, 42), target)
     assert landed.move.kind == MoveKind.WALK
     assert landed.move.direction == Key.RIGHT
-    assert landed.move.walk_ms == pytest.approx(500.0)
+    assert landed.move.walk_ms == pytest.approx(_ms(4))
     assert landed.toward is target
 
 
@@ -99,16 +109,16 @@ def test_known_case_1_teleports_to_the_slope_walks_it_then_teleports_on(ff2):
     assert run.move == Move(MoveKind.TELEPORT, Key.RIGHT, None)
     assert run.toward is _node(agent, (66, 28))
 
-    slope_start = _decide(rg, (66, 28), target)  # the SLOPE edge, 13 px at 8 px/s
+    slope_start = _decide(rg, (66, 28), target)  # the SLOPE edge, 13 px
     assert slope_start.move.kind == MoveKind.WALK
     assert slope_start.move.direction == Key.RIGHT
-    assert slope_start.move.walk_ms == pytest.approx(1625.0)
+    assert slope_start.move.walk_ms == pytest.approx(_ms(13))
     assert slope_start.toward is _node(agent, (79, 24))
 
     on_slope = _decide(rg, (72, 26), target)  # 7 px of slope left
     assert on_slope.move.kind == MoveKind.WALK
     assert on_slope.move.direction == Key.RIGHT
-    assert on_slope.move.walk_ms == pytest.approx(875.0)
+    assert on_slope.move.walk_ms == pytest.approx(_ms(7))
     assert on_slope.toward is _node(agent, (79, 24))
 
     after = _decide(rg, (79, 24), target)  # run 79 -> 101 over the WALK edges, d = 22
@@ -119,9 +129,9 @@ def test_known_case_1_teleports_to_the_slope_walks_it_then_teleports_on(ff2):
 def test_cost_to_go_is_the_approach_plus_the_graph_cost(ff2):
     agent, rg = ff2
     target = _node(agent, (101, 24))
-    # on the slope the approach to the right end is |dx| / V = 7 / 8
+    # on the slope the approach to the right end is |dx| / V = 7 / V
     on_slope = _decide(rg, (72, 26), target)
-    assert on_slope.cost_to_go_s == pytest.approx(7 / 8 + rg.cost_to(_node(agent, (79, 24)), target).unwrap())
+    assert on_slope.cost_to_go_s == pytest.approx(7 / WALK_PX_PER_S + rg.cost_to(_node(agent, (79, 24)), target).unwrap())
     at_node = _decide(rg, (79, 24), target)
     assert at_node.cost_to_go_s == pytest.approx(rg.cost_to(_node(agent, (79, 24)), target).unwrap())
 
@@ -131,7 +141,7 @@ def test_on_the_slope_the_nearer_end_towards_the_target_is_the_goal(ff2):
     decision = _decide(rg, (72, 26), _node(agent, (49, 28)))  # target is left, so the left end is the start
     assert decision.move.kind == MoveKind.WALK  # a slope is always walked
     assert decision.move.direction == Key.LEFT
-    assert decision.move.walk_ms == pytest.approx(750.0)
+    assert decision.move.walk_ms == pytest.approx(_ms(6))
     assert decision.toward is _node(agent, (66, 28))
 
 
@@ -139,9 +149,9 @@ def test_on_the_slope_the_nearer_end_towards_the_target_is_the_goal(ff2):
     "pos, kind, walk_ms",
     [
         ((82, 60), MoveKind.TELEPORT, None),  # d = 17
-        ((88, 60), MoveKind.WALK, 1375.0),  # d = 11
+        ((88, 60), MoveKind.WALK, _ms(11)),  # d = 11
         ((86, 60), MoveKind.TELEPORT, None),  # d = 13
-        ((95, 60), MoveKind.WALK, 500.0),  # d = 4
+        ((95, 60), MoveKind.WALK, _ms(4)),  # d = 4
     ],
 )
 def test_p4_teleport_or_walk_by_the_formula(ff2, pos, kind, walk_ms):
@@ -162,7 +172,7 @@ def test_p4_walks_left_when_the_goal_is_to_the_left(ff2):
     decision = _decide(rg, (104, 60), _node(agent, (99, 60)))
     assert decision.move.kind == MoveKind.WALK
     assert decision.move.direction == Key.LEFT
-    assert decision.move.walk_ms == pytest.approx(625.0)
+    assert decision.move.walk_ms == pytest.approx(_ms(5))
 
 
 def test_up_edge_teleports_up(ff2):
@@ -230,18 +240,20 @@ def test_the_attach_failure_is_returned_unchanged(ff2):
 
 def test_walk_ms_is_capped_at_max_walk_ms(ff2):
     agent, _ = ff2
-    rg = _rebuild(agent, max_walk_ms=1000)
-    decision = _decide(rg, (37, 60), _node(agent, (48, 61)))  # an 11 px walk would be 1375 ms
+    rg = _rebuild(agent, max_walk_ms=500)
+    decision = _decide(rg, (37, 60), _node(agent, (48, 61)))  # an 11 px walk would be about 880 ms
+    assert _ms(11) > 500
     assert decision.move.kind == MoveKind.WALK
-    assert decision.move.walk_ms == 1000.0
+    assert decision.move.walk_ms == 500.0
 
 
 def test_slope_walk_ms_is_capped_at_max_walk_ms(ff2):
     agent, _ = ff2
-    rg = _rebuild(agent, max_walk_ms=1000)
-    decision = _decide(rg, (66, 28), _node(agent, (101, 24)))  # the 13 px slope would be 1625 ms
+    rg = _rebuild(agent, max_walk_ms=500)
+    decision = _decide(rg, (66, 28), _node(agent, (101, 24)))  # the 13 px slope would be about 1040 ms
+    assert _ms(13) > 500
     assert decision.move.kind == MoveKind.WALK
-    assert decision.move.walk_ms == 1000.0
+    assert decision.move.walk_ms == 500.0
 
 
 def test_node_off_the_surface_counts_as_arrived_on_its_platform(ff2):
@@ -300,7 +312,7 @@ def test_no_path_to_the_target_is_a_failure():
         ((95, 60), (99, 60), {}),
         ((48, 61), (58, 46), {}),
         ((86, 37), (99, 60), {}),
-        ((37, 60), (48, 61), {"max_walk_ms": 1000}),
+        ((37, 60), (48, 61), {"max_walk_ms": 500}),
         ((105, 45), (105, 42), {}),
         ((105, 46), (105, 42), {}),
         ((48, 64), (58, 46), {}),
@@ -356,7 +368,7 @@ def test_case_1_walks_until_level_with_the_target_x_then_teleports_down():
     assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.DOWN
     target = nodes[3]
     first = _decide(rg, (25, 10), target)  # at (25,10), the old rule fired from here
-    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, _ms(4))
     assert first.toward is target
     assert _decide(rg, (29, 10), target).move == TELEPORT_DOWN
     assert _decide(rg, (27, 10), target).move == TELEPORT_DOWN  # within arrive_px of x 29: the walk rule is unchanged
@@ -366,7 +378,7 @@ def test_case_1_walks_until_level_with_the_target_x_then_teleports_up():
     nodes, rg = _synthetic([(10, 10), (25, 10), (20, 28), (29, 28)])  # the lower platform spans x 25
     target = nodes[1]
     first = _decide(rg, (29, 28), target)
-    assert first.move == Move(MoveKind.WALK, Key.LEFT, 500.0)
+    assert first.move == Move(MoveKind.WALK, Key.LEFT, _ms(4))
     assert first.toward is target
     assert _decide(rg, (25, 28), target).move == Move(MoveKind.TELEPORT, Key.UP, None)
 
@@ -376,7 +388,7 @@ def test_case_2_walks_to_the_platform_end_when_the_floor_below_it_is_the_target_
     assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.DOWN
     target = nodes[3]
     first = _decide(rg, (21, 10), target)
-    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)  # to the end at x 25, not to x 29
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, _ms(4))  # to the end at x 25, not to x 29
     assert first.toward is target
     assert _decide(rg, (25, 10), target).move == TELEPORT_DOWN  # (20,28)-(29,28) is straight below x 25
 
@@ -398,7 +410,7 @@ def test_case_2_walks_to_the_platform_end_when_the_piece_above_it_is_the_target_
     assert rg.graph.edges[nodes[1], nodes[3]]["kind"] == EdgeKind.UP
     target = nodes[3]
     first = _decide(rg, (21, 28), target)
-    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 500.0)  # to the end at x 25, not to x 29
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, _ms(4))  # to the end at x 25, not to x 29
     assert first.toward is target
     assert _decide(rg, (25, 28), target).move == Move(MoveKind.TELEPORT, Key.UP, None)  # (20,10)-(29,10) is above
 
@@ -436,5 +448,5 @@ def test_split_mid_platform_no_longer_sends_the_character_down_from_the_wrong_x(
     lone, target = _node(agent, (97, 45)), _node(agent, (105, 40))
     assert (lone,) in rg.terrain.platforms  # the split
     first = _decide(rg, (99, 24), target)
-    assert first.move == Move(MoveKind.WALK, Key.RIGHT, 750.0)  # to x 105
+    assert first.move == Move(MoveKind.WALK, Key.RIGHT, _ms(6))  # to x 105
     assert _decide(rg, (105, 23), target).move == TELEPORT_DOWN

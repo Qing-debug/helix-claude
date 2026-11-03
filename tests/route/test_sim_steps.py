@@ -44,19 +44,22 @@ TERRAIN = FIXTURES / "ff2_terrain.json"
 V2_METHODS = ("leg", "read_failed", "no_plan", "reached", "stall", "planned", "sent", "settled", "leg_end")
 OFFSETS = NoiseConfig(node_offset_px=2)
 BOTH_NOISES = pytest.mark.parametrize("noise", [NoiseConfig(), OFFSETS], ids=["plain", "node_offsets"])
-# The report of the 20-lap seed-1 run before this task. laps_completed 20, legs_reached 141 and moves 379 are the
-# plan's (spec 7); the rest were measured on the base commit 7f2735d. The two floats are ns counts over 1e9.
+# The report of the 20-lap seed-1 run before this task. Pinned at the planner's 8 px/s and re-pinned at 12.5 px/s
+# (H81), run on 8290b04 with the two changed values; at 8 px/s it was moves 379, no_ops 22, single_error_legs 43,
+# multi_error_legs 9, sim_seconds 298.5323 and mean_lap_s 14.926615. The two floats are ns counts over 1e9.
 PINNED_REPORT = dict(
     laps_requested=20, laps_completed=20, legs=141, legs_reached=141, stalls=0, timeouts=0, link_down=0,
-    known_cases={}, single_error_legs=43, single_error_within_3=43, multi_error_legs=9, multi_error_within_bound=9,
-    moves=379, no_ops=22, drops=25, teleport_downs=16,
-    sim_seconds=pytest.approx(298.5323, rel=1e-9), mean_lap_s=pytest.approx(14.926615, rel=1e-9),
+    known_cases={}, single_error_legs=37, single_error_within_3=37, multi_error_legs=8, multi_error_within_bound=8,
+    moves=355, no_ops=17, drops=25, teleport_downs=16,
+    sim_seconds=pytest.approx(233.5318, rel=1e-9), mean_lap_s=pytest.approx(11.67659, rel=1e-9),
 )
-# The same for NoiseConfig(node_offset_px=2): the shifted copy's draws must not move (moves 356 is the count RV-5 uses).
+# The same for NoiseConfig(node_offset_px=2): the shifted copy's draws must not move (moves 350 is the count RV-5 uses;
+# it was 356 at 8 px/s, with single_error_legs 42, multi_error_legs 4, no_ops 19, drops 23, teleport_downs 19,
+# sim_seconds 314.927 and mean_lap_s 15.74635).
 PINNED_OFFSET_REPORT = dict(
-    PINNED_REPORT, single_error_legs=42, single_error_within_3=42, multi_error_legs=4, multi_error_within_bound=4,
-    moves=356, no_ops=19, drops=23, teleport_downs=19,
-    sim_seconds=pytest.approx(314.927, rel=1e-9), mean_lap_s=pytest.approx(15.74635, rel=1e-9),
+    PINNED_REPORT, single_error_legs=38, single_error_within_3=38, multi_error_legs=5, multi_error_within_bound=5,
+    moves=350, no_ops=20, drops=21, teleport_downs=19,
+    sim_seconds=pytest.approx(253.9981, rel=1e-9), mean_lap_s=pytest.approx(12.699905, rel=1e-9),
 )
 
 

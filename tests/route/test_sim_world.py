@@ -33,6 +33,11 @@ def terrain() -> SimTerrain:
     return result.unwrap()
 
 
+def _held_ms(px):
+    """The hold that walks `px` pixels at the world's walk speed."""
+    return px / SimParams().walk_px_per_s * 1000
+
+
 def _world(terrain, start, noise=None, seed=0):
     return SimWorld(
         terrain, REACH_H, REACH_V, SimParams(), noise if noise is not None else NoiseConfig.off(),
@@ -127,7 +132,7 @@ def test_teleport_left_off_platform_falls_to_floor(terrain):
 
 def test_walk_right_up_slope(terrain):
     world = _world(terrain, (66, 28))
-    effect = world.walk(Key.RIGHT, 1625, T_NS)
+    effect = world.walk(Key.RIGHT, _held_ms(13), T_NS)
     assert effect.kind == "walk"
     assert effect.end == pytest.approx((79, 24))
     assert effect.settle_s == pytest.approx(0)
@@ -135,7 +140,7 @@ def test_walk_right_up_slope(terrain):
 
 def test_walk_off_platform_end_falls_without_crossing_gap(terrain):
     world = _world(terrain, (74, 45))
-    effect = world.walk(Key.RIGHT, 2000, T_NS)  # 16 px: would reach x 90, past mid-left's end at 80
+    effect = world.walk(Key.RIGHT, _held_ms(16), T_NS)  # 16 px: would reach x 90, past mid-left's end at 80
     assert effect.end == pytest.approx((80, 60))
     assert effect.settle_s == pytest.approx(15 / 60)
 

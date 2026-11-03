@@ -13,7 +13,7 @@ class MovementParams:
     slope_max_grade: float = 0.5   # DC2: |dy| <= grade * |dx|
     near_x_px: int = 5             # DC3
     attach_y_px: int = 3           # DC5
-    walk_px_per_s: float = 8.0     # ESTIMATE, unmeasured; B20/B21 measure it
+    walk_px_per_s: float = 12.5    # measured 2026-11-03: 12.6 px/s, 0.2 px coast, 25 live walks (H81; was an 8.0 estimate)
     teleport_s: float = 0.55       # ESTIMATE: keys + animation of one teleport
     drop_base_s: float = 0.35      # ESTIMATE: keys + start of a drop
     fall_px_per_s: float = 60.0    # ESTIMATE

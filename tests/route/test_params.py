@@ -16,7 +16,7 @@ def test_defaults_match_contract_c3():
     assert p.slope_max_grade == 0.5
     assert p.near_x_px == 5
     assert p.attach_y_px == 3
-    assert p.walk_px_per_s == 8.0
+    assert p.walk_px_per_s == 12.5  # measured 2026-11-03 (H81)
     assert p.teleport_s == 0.55
     assert p.drop_base_s == 0.35
     assert p.fall_px_per_s == 60.0

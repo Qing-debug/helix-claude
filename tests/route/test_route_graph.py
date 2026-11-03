@@ -105,9 +105,10 @@ def test_ff2_down_edge_from_101_24_to_105_42_costs_teleport_plus_walk(ff2):
     assert is_successful(result)
     assert result.unwrap() == (src, dst)
     assert rg.graph[src][dst]["kind"] == EdgeKind.DOWN
-    assert rg.graph[src][dst]["cost_s"] == pytest.approx(1.05)
+    expected = P.teleport_s + 4 / P.walk_px_per_s  # one teleport down, then 4 px of walking
+    assert rg.graph[src][dst]["cost_s"] == pytest.approx(expected)
     cost = rg.cost_to(src, dst)
-    assert is_successful(cost) and cost.unwrap() == pytest.approx(1.05)
+    assert is_successful(cost) and cost.unwrap() == pytest.approx(expected)
 
 
 def test_ff2_every_rotation_leg_has_a_path(ff2):
@@ -125,8 +126,17 @@ def test_cost_to_self_is_zero_and_path_is_the_node(ff2):
     assert rg.cost_to(n, n).unwrap() == 0
 
 
+V, T = P.walk_px_per_s, P.teleport_s
+
+
 @pytest.mark.parametrize("d, expected", [
-    (4, 0.5), (13, 1.3), (17, 0.8), (19, 0.55), (23, 1.05), (30, 1.925), (40, 1.35),
+    (4, 4 / V),            # walk all of it
+    (13, T + 6 / V),       # one teleport overshoots by 6 px, walk back
+    (17, T + 2 / V),       # one teleport overshoots by 2 px, walk back
+    (19, T),               # exactly one teleport
+    (23, T + 4 / V),       # one teleport, walk the remaining 4 px
+    (30, T + 11 / V),      # one teleport, walk the remaining 11 px
+    (40, 2 * T + 2 / V),   # two teleports, walk the remaining 2 px
 ])
 def test_horizontal_cost_s_matches_the_contract_values(d, expected):
     assert horizontal_cost_s(d, REACH_H, P) == pytest.approx(expected, abs=1e-9)

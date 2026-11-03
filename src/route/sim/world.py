@@ -115,7 +115,7 @@ def load_terrain(path: Path) -> Result[SimTerrain, str]:
 
 @dataclass(frozen=True)
 class SimParams:
-    walk_px_per_s: float = 8.0
+    walk_px_per_s: float = 12.5    # copy of MovementParams.walk_px_per_s (H81)
     teleport_settle_s: float = 0.35
     drop_settle_s: float = 0.25
     fall_px_per_s: float = 60.0

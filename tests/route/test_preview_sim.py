@@ -57,7 +57,7 @@ TERRAIN = FIXTURES / "ff2_terrain.json"
 
 LAPS, SEED = 20, 1
 # The moves of each run (spec 7 for the plain run; RV-3's PINNED_OFFSET_REPORT for the offset run).
-MOVES = {"plain": 379, "offset": 356}
+MOVES = {"plain": 355, "offset": 350}
 
 Pos = tuple[int, int]
 

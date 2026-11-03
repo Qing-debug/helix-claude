@@ -99,19 +99,21 @@ ARRIVED = "arrived"
 # ---- the table: (id, graph, pos, target, expected); a target or `toward` is an FF2 position or `#i` as the int i ----
 # expected: Fail(message), ARRIVED, or (cost, [(options, toward, landing), ...])
 
+# The walk times assume the planner's walk speed of 12.5 px/s (H81): a walk of d px is 80 * d ms. The table was first
+# computed at 8 px/s (a walk of d px was 125 * d ms) and every literal below was recomputed for 12.5.
 CASES = [
-    ("T1", FF2, (49, 28), (101, 24), (5.175, [
+    ("T1", FF2, (49, 28), (101, 24), (3.51, [
         (TP_R, (66, 28), (68, 27)),
-        (walk(R, 1375), (79, 24), (79, 24)),
+        (walk(R, 880), (79, 24), (79, 24)),
         (TP_R, (101, 24), (98, 24)),
-        (walk(R, 375), (101, 24), (101, 24)),
+        (walk(R, 240), (101, 24), (101, 24)),
     ])),
-    ("T2", ff2(ability_mix_band=0), (101, 24), (105, 42), (1.05, [
-        (walk(R, 500), (105, 42), (105, 24)),
+    ("T2", ff2(ability_mix_band=0), (101, 24), (105, 42), (0.87, [
+        (walk(R, 320), (105, 42), (105, 24)),
         (TP_DOWN, (105, 42), (105, 42)),
     ])),
-    ("T3", FF2, (101, 24), (105, 42), (1.05, [
-        (walk(R, 500), (105, 42), (105, 24)),
+    ("T3", FF2, (101, 24), (105, 42), (0.87, [
+        (walk(R, 320), (105, 42), (105, 24)),
         (COIN, (105, 42), (105, 42)),
     ])),
     ("T4", FF2, (104, 43), (105, 42), ARRIVED),
@@ -122,33 +124,33 @@ CASES = [
     ("T7", syn([(10, 10), (10, 28)], can_fall=True, ability_mix_band=0), (10, 10), 1, (0.55, [
         (TP_DOWN, 1, (10, 28)),
     ])),
-    ("T8", ff2(ability_mix_band=0, teleport_s=0.9), (105, 23), (105, 42), (1.65, [
+    ("T8", ff2(ability_mix_band=0, teleport_s=0.9), (105, 23), (105, 42), (1.29, [
         (DROP, (105, 42), (105, 42)),
     ])),
-    ("T9", ff2(('"(79, 24)"', '"(79, 22)"')), (77, 25), (101, 24), (3.0, [
+    ("T9", ff2(('"(79, 24)"', '"(79, 22)"')), (77, 25), (101, 24), (1.92, [
         (TP_R, (101, 24), (96, 24)),
-        (walk(R, 625), (101, 24), (101, 24)),
+        (walk(R, 400), (101, 24), (101, 24)),
     ])),
     ("T10", ff2(('"(97, 43)"', '"(97, 45)"'), ('"(105, 42)"', '"(105, 40)"'), ability_mix_band=0),
-     (99, 24), (105, 40), (1.05, [
-        (walk(R, 750), (105, 40), (105, 24)),
+     (99, 24), (105, 40), (0.87, [
+        (walk(R, 480), (105, 40), (105, 24)),
         (TP_DOWN, (105, 40), (105, 40)),
     ])),
     ("T11", syn([(10, 10), (25, 10), (29, 28), (45, 28), (5, 45), (20, 45), (35, 45), (50, 45)], can_fall=True),
-     (25, 10), 2, (7.8583333, [
+     (25, 10), 2, (6.5533333, [
         (TP_L, 4, (6, 10)),
-        (walk(R, 500), 4, (10, 10)),
+        (walk(R, 320), 4, (10, 10)),
         (DROP, 4, (10, 45)),
         (TP_R, 3, (29, 45)),
         (TP_R, 3, (48, 45)),
-        (walk(L, 375), 3, (45, 45)),
+        (walk(L, 240), 3, (45, 45)),
         (TP_UP, 3, (45, 28)),
         (TP_L, 2, (26, 28)),
-        (walk(R, 375), 2, (29, 28)),
+        (walk(R, 240), 2, (29, 28)),
     ])),
-    ("T12", syn([(10, 60), (25, 60), (29, 50), (45, 50), (6, 38), (18, 38), (30, 38)]), (25, 60), 2, (5.625, [
+    ("T12", syn([(10, 60), (25, 60), (29, 50), (45, 50), (6, 38), (18, 38), (30, 38)]), (25, 60), 2, (4.29, [
         (TP_L, 4, (6, 60)),
-        (walk(R, 500), 4, (10, 60)),
+        (walk(R, 320), 4, (10, 60)),
         (TP_UP, 4, (10, 38)),
         (TP_R, 2, (29, 38)),
         (TP_DOWN, 2, (29, 50)),
@@ -157,45 +159,45 @@ CASES = [
     ("T14", syn([(10, 10), (100, 10)]), (10, 10), 1, Fail("no path from (10, 10) to (100, 10)")),
     ("T15", syn([(10, 10), (25, 10), (29, 28), (45, 28)]), (25, 10), 2, Fail("no path from (25, 10) to (29, 28)")),
     ("T16", FF2, (113, 60), STRANGER, Fail("target (113, 60) is not in the route graph")),
-    ("T17", syn([(10, 10), (25, 10), (40, 10), (29, 28), (45, 28)]), (25, 10), 3, (1.05, [
-        (walk(R, 500), 3, (29, 10)),
+    ("T17", syn([(10, 10), (25, 10), (40, 10), (29, 28), (45, 28)]), (25, 10), 3, (0.87, [
+        (walk(R, 320), 3, (29, 10)),
         (TP_DOWN, 3, (29, 28)),
     ])),
-    ("T18", syn([(10, 28), (25, 28), (20, 10), (29, 10)]), (21, 28), 3, (1.55, [
-        (walk(R, 500), 3, (25, 28)),
+    ("T18", syn([(10, 28), (25, 28), (20, 10), (29, 10)]), (21, 28), 3, (1.19, [
+        (walk(R, 320), 3, (25, 28)),
         (TP_UP, 3, (25, 10)),
-        (walk(R, 500), 3, (29, 10)),
+        (walk(R, 320), 3, (29, 10)),
     ])),
-    ("T19", FF2, (48, 61), (58, 46), (1.8, [
+    ("T19", FF2, (48, 61), (58, 46), (1.35, [
         (TP_UP, (48, 45), (48, 45)),
-        (walk(R, 1250), (58, 46), (58, 46)),
+        (walk(R, 800), (58, 46), (58, 46)),
     ])),
-    ("T20", ff2(max_walk_ms=1000), (37, 60), (48, 61), (1.375, [
-        (walk(R, 1000), (48, 61), (45, 61)),
-        (walk(R, 375), (48, 61), (48, 61)),
+    ("T20", ff2(max_walk_ms=500), (37, 60), (48, 61), (0.88, [
+        (walk(R, 500), (48, 61), (43, 61)),
+        (walk(R, 400), (48, 61), (48, 61)),
     ])),
-    ("T21", ff2(max_walk_ms=1000), (66, 28), (101, 24), (4.375, [
-        (walk(R, 1000), (79, 24), (74, 26)),
-        (walk(R, 625), (79, 24), (79, 24)),
-        (TP_R, (101, 24), (98, 24)),
-        (walk(R, 375), (101, 24), (101, 24)),
+    ("T21", ff2(max_walk_ms=500), (66, 28), (101, 24), (2.8, [
+        (walk(R, 500), (79, 24), (72, 26)),
+        (walk(R, 500), (79, 24), (78, 24)),
+        (TP_R, (101, 24), (97, 24)),
+        (walk(R, 320), (101, 24), (101, 24)),
     ])),
-    ("T22", FF2, (72, 26), (49, 28), (1.55, [
-        (walk(L, 750), (66, 28), (66, 28)),
+    ("T22", FF2, (72, 26), (49, 28), (1.19, [
+        (walk(L, 480), (66, 28), (66, 28)),
         (TP_L, (49, 28), (47, 28)),
     ])),
-    ("T23", FF2, (82, 60), (99, 60), (0.8, [
+    ("T23", FF2, (82, 60), (99, 60), (0.71, [
         (TP_R, (99, 60), (101, 60)),
     ])),
-    ("T24", FF2, (48, 64), (58, 46), (1.8, [
+    ("T24", FF2, (48, 64), (58, 46), (1.35, [
         (TP_UP, (48, 45), (48, 45)),
-        (walk(R, 1250), (58, 46), (58, 46)),
+        (walk(R, 800), (58, 46), (58, 46)),
     ])),
-    ("D1", FF2, (129, 60), (97, 43), (3.475, [
-        (TP_L, (97, 43), (110, 60)),
-        (walk(L, 625), (105, 42), (105, 60)),
+    ("D1", FF2, (129, 60), (97, 43), (2.62, [
+        (TP_L, (105, 42), (110, 60)),
+        (walk(L, 400), (105, 42), (105, 60)),
         (TP_UP, (105, 42), (105, 42)),
-        (walk(L, 1000), (97, 43), (97, 43)),
+        (walk(L, 640), (97, 43), (97, 43)),
     ])),
 ]
 IDS = [case[0] for case in CASES]
@@ -385,7 +387,7 @@ def test_starts_on_a_slope_segment_are_both_ends_left_before_right(built):
     c2 = offered.cost_to(right, case.target).unwrap()
     assert c1 == rg.cost_to(left, case.target).unwrap() and c2 == rg.cost_to(right, case.target).unwrap()
     pv = _preview(case)
-    assert [(s.node, s.cost_s) for s in pv.starts] == [(left, 6 / 8 + c1), (right, 7 / 8 + c2)]
+    assert [(s.node, s.cost_s) for s in pv.starts] == [(left, 6 / rg.params.walk_px_per_s + c1), (right, 7 / rg.params.walk_px_per_s + c2)]
     assert pv.start is left
 
 
@@ -490,11 +492,11 @@ def test_landing_a_teleport_past_a_platform_end_takes_the_end_nodes_y(built):
 
 
 def test_landing_a_capped_walk_stops_short_of_its_aim(built):
-    # V4, left/right bullet: 1000 * 11 / 8 = 1375 > max_walk_ms 1000, so lx = px + round(max_walk_ms * v / 1000)
+    # V4, left/right bullet: 1000 * 11 / 12.5 = 880 > max_walk_ms 500, so lx = px + round(max_walk_ms * v / 1000)
     case = built["T20"]
     hop = _preview(case).hops[0]
-    assert hop.options == (walk(R, 1000),)
-    assert hop.landing[0] == 45 == 37 + round(1000 * 8 / 1000)
+    assert hop.options == (walk(R, 500),)
+    assert hop.landing[0] == 43 == 37 + round(500 * 12.5 / 1000)
 
 
 def test_landing_an_up_move_off_the_node_is_on_the_upper_platform_at_px(built):
@@ -521,11 +523,11 @@ def test_s3b_every_later_hop_agrees_with_next_move(built, case_id):
     case = built[case_id]
     pv = _preview(case)
     assert s3b_problems(case.rg, pv, case.target) == []
-    # D1 is an exact cost tie, not a re-route: from (129,60) both routes to (97,43) cost 3.475 s (via (99,60) and up
-    # at x 97, or via (105,42) and up at x 105), and from hop 1's landing (110,60) both cost 2.175 s. `rg.path` breaks
-    # the tie one way from (129,60) and the other way from (105,60), so `path` goes via (99,60) while the hops go via
-    # (105,42). The moves still agree at every landing, which `s3b_problems` pins.
-    assert follows(pv.path, pv.hops) is (case_id != "D1")
+    # D1 was an exact cost tie at 8 px/s (3.475 s from (129,60) both via (99,60) and up at x 97, and via (105,42) and
+    # up at x 105), which `rg.path` broke one way from (129,60) and the other from (105,60), so `path` and the hops
+    # differed. At 12.5 px/s (H81) the tie is gone: `path` and the hops both go via (105,42) (2.62 s), so D1 follows
+    # like the other cases. The moves agree at every landing, which `s3b_problems` pins.
+    assert follows(pv.path, pv.hops)
 
 
 def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray_path(built):
@@ -542,12 +544,11 @@ def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray
 
 # ---- 10. FF2 sweep ----
 
+# The set at 12.5 px/s (H81); at 8 px/s it held nine pairs, among them D1 (the tie) and the pairs to (66,28) and (42,28).
 NOT_FOLLOWING = {
-    ((129, 60), (97, 43)),  # D1, the tie above
-    ((105, 42), (66, 28)),  # hop 2's re-plan from the UP's launch x goes via (97,43), down and along the bottom
-    ((118, 43), (66, 28)),
-    ((109, 23), (49, 28)),  # the re-plan from (105,24) goes via (101,24) and the upper route
-    ((109, 23), (42, 28)),
+    ((105, 42), (58, 46)),  # the first hop walks to x 101 on the (101,42) piece; the re-plan from there goes down to
+    ((118, 43), (58, 46)),  # (99,60) and along the bottom, where `path` went via (101,24) and the upper route
+    ((109, 23), (48, 45)),  # the re-plan from (105,24) goes via (79,24) and the upper route, where `path` went down
     ((65, 60), (90, 24)),  # two teleports right overshoot the launch x 97; (103,60) anchors on (105,60)
     ((65, 60), (97, 43)),
     ((65, 60), (101, 24)),

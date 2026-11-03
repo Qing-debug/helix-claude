@@ -19,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FF2 = REPO_ROOT / "tests" / "fixtures" / "fossil_foundry_2.csv"
 FF2_ROTATION = ((113, 60), (82, 60), (48, 61), (58, 46), (49, 28), (101, 24), (105, 42))
 GIT_HEAD = "a" * 40
+# The hand-built run G (the table below) was recorded at the planner's old walk speed: its holds are 125 ms a pixel
+# (1375 ms for 11 px). A run's header carries the params it ran with and the viewer plans from them, so the fixture
+# keeps 8 px/s (H81: the default is now 12.5) and the viewer's golden text stays what an old run shows.
+G_PARAMS = {**dataclasses.asdict(MovementParams()), "walk_px_per_s": 8.0}
 
 # (ev, seconds, *values in FIELDS order): the table of the plan, one row per step k.
 G: list[tuple] = [
@@ -58,7 +62,7 @@ def ns(seconds: float) -> int:
 def default_header(map_bytes: bytes | None = None, **changes) -> RunHeader:
     data = FF2.read_bytes() if map_bytes is None else map_bytes
     fields = dict(source="walk", clock="perf_counter_ns", map=MAP_COPY, map_sha256=hashlib.sha256(data).hexdigest(),
-                  character="kanna", params=dataclasses.asdict(MovementParams()), rotation=FF2_ROTATION,
+                  character="kanna", params=G_PARAMS, rotation=FF2_ROTATION,
                   git_head=GIT_HEAD)
     fields.update(changes)
     return RunHeader(**fields)
@@ -81,7 +85,7 @@ def make_folder(tmp_path: Path, events: list[tuple] | None = None, header: RunHe
 
 def make_legs_folder(tmp_path: Path) -> Path:
     """A folder of `session.json` + `legs.jsonl` (two legs, the second ends `LINK_DOWN`), the map the FF2 fixture."""
-    session = {"seed": 1, "params": dataclasses.asdict(MovementParams()), "leg_timeout_s": 30.0, "map": str(FF2),
+    session = {"seed": 1, "params": G_PARAMS, "leg_timeout_s": 30.0, "map": str(FF2),
                "map_sha256": hashlib.sha256(FF2.read_bytes()).hexdigest(), "git_head": GIT_HEAD,
                "start_utc": "2026-10-27T10:00:00+00:00", "class": "kanna", "laps": 1, "minutes": None, "record": False}
     (tmp_path / "session.json").write_text(json.dumps(session), encoding="utf-8")
