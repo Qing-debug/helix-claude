@@ -1,7 +1,8 @@
 """Tests for the simulator's real-world knobs (off-graph fix plan, Task 2, OFFP141): the dot's offset, the live
 teleport length and mob knockback. The world is the real ground of Fossil Foundry 2 (`ff2_real_ground.json`).
 
-Every knob defaults to "off", so the seeded runs of the earlier tasks stay bit-identical (`test_defaults_change_nothing`).
+The knobs default to "off", so the seeded runs of the earlier tasks stay bit-identical (`test_defaults_change_nothing`);
+the dot's offset defaults to the live 3 px (Task 4), which the position source takes off again with `foot_from_dot`.
 """
 
 import dataclasses
@@ -14,6 +15,7 @@ from returns.pipeline import is_successful
 from src.classes.classes import Kanna
 from src.input.protocol import Key
 from src.route.params import MovementParams
+from src.route.position import foot_from_dot
 from src.route.sim.link import SimClock, SimPositionSource
 from src.route.sim.run import run_sim
 from src.route.sim.world import InjectedError, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain
@@ -57,11 +59,13 @@ def _curve(effect, t_ns):
 
 
 def test_read_reports_the_dot(terrain):
+    """The world draws the dot 3 px above the foot; the source reports it through `foot_from_dot`, 3 px below."""
     params = SimParams(dot_above_foot_px=3)
-    for start, want in (((70, 26.0), (70, 23)), ((100, 42.5), (100, 39))):
+    for start, dot, want in (((70, 26.0), (70, 23), (70, 26)), ((100, 42.5), (100, 39), (100, 42))):
         world = _world(terrain, start, params=params)
         source = SimPositionSource(world, SimClock(T_NS), 0.0, np.random.default_rng(0))
-        assert source.read().unwrap() == want
+        assert (round(start[0]), round(start[1]) - world.params.dot_above_foot_px) == dot  # the dot itself
+        assert source.read().unwrap() == want == foot_from_dot(dot)
 
 
 def test_read_with_default_params_is_unchanged(terrain):

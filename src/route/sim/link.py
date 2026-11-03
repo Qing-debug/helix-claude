@@ -2,8 +2,9 @@
 
 `SimLink` duck-types `BleLink` for a real `InputLayer` (DC7): it decodes each key schedule into one `SimWorld` move
 and advances a virtual `SimClock` by the link latency plus the schedule's total. `SimPositionSource` reads the
-world's position at the clock's time, rounded to minimap pixels, and misses with a set probability. The y it reads
-is the dot's centre: `SimParams.dot_above_foot_px` above the foot the world tracks (OFFP141).
+world's position at the clock's time, rounded to minimap pixels, and misses with a set probability. It draws the dot's
+centre, `SimParams.dot_above_foot_px` above the foot the world tracks, and reports it through `position.foot_from_dot`,
+as the live source does (OFFP141): with the default offset of `position.DOT_TO_FOOT_PX` the read is the rounded foot.
 
 Where the plan is silent: a play that fails from `fail_next` advances no time and uses no seq; `play` and
 `release_all` share one seq counter (as `BleLink` does); a read draws one `rng.random()` every call, even with
@@ -20,6 +21,7 @@ from returns.result import Failure, Result, Success
 
 from src.input.link import InputError, SendReport
 from src.input.protocol import Accepted, Done, DoneStatus, Key, Step
+from src.route.position import foot_from_dot
 from src.route.sim.world import SimParams, SimWorld
 
 _ARROWS = frozenset({Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN})
@@ -132,4 +134,4 @@ class SimPositionSource:
         if self.rng.random() < self.miss_p:
             return Failure("miss")
         x, y = self.world.position_at(self.clock.now_ns())
-        return Success((round(x), round(y) - self.world.params.dot_above_foot_px))
+        return Success(foot_from_dot((round(x), round(y) - self.world.params.dot_above_foot_px)))

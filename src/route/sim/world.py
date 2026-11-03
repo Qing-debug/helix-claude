@@ -123,7 +123,7 @@ class SimParams:
     drop_settle_s: float = 0.25
     fall_px_per_s: float = 60.0
     link_latency_s: float = 0.03
-    dot_above_foot_px: int = 0           # the position source reads the dot's centre this many px above the foot
+    dot_above_foot_px: int = 3           # the dot's centre sits this many px above the foot (= position.DOT_TO_FOOT_PX)
     side_teleport_extra_px: float = 0.0  # a sideways teleport goes this much farther than the character's reach
     knockback_air_s: float = 0.3         # how long a mob's shove keeps the character in the air
 
