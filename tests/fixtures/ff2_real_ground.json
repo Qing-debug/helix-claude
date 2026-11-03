@@ -1,0 +1,6 @@
+{"_source": "derived by tools/derive_real_ground.py from 8 saved FF2 runs (2026-11-03T123429Z .. 2026-11-03T165230Z); 7 with frames; ground in the map's foot reference (real ground row - 3), change points only", "minimap_size": [162, 82],
+ "platforms": [
+  {"name": "floor", "droppable": false, "points": [[30, 61], [135, 61]]},
+  {"name": "mid-left", "droppable": true, "points": [[44, 46], [80, 46]]},
+  {"name": "top", "droppable": true, "points": [[38, 28], [67, 28], [68, 27], [69, 26], [70, 26], [71, 25], [72, 24], [113, 24]]},
+  {"name": "mid-right", "droppable": true, "points": [[94, 43], [122, 43]]}]}
