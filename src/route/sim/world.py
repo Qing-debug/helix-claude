@@ -227,7 +227,7 @@ class SimWorld:
 
     def _shoved(self, move: MoveEffect) -> MoveEffect:
         """`move`, after a mob's shove if one is drawn: no draw at all with `knockback_p == 0`, else one
-        `rng.random()` for the hit, one for the sign and one `rng.integers` for the size."""
+        `rng.random()` for the hit and, on a hit only, one for the sign and one `rng.integers` for the size."""
         if self.noise.knockback_p > 0 and self.rng.random() < self.noise.knockback_p:
             lo, hi = self.noise.knockback_px
             sign = 1 if self.rng.random() < 0.5 else -1

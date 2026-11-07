@@ -1,6 +1,6 @@
-"""Tests for the real-ground simulator run (off-graph fix plan, Tasks 3-4, OFFP141): the preset `--real-ground` stands for
-(Fossil Foundry 2's real ground, the dot 3 px above the foot, the live teleport length, mob knockback), and the run the
-walker passes under it. Task 3 built the run and proved, with a strict xfail, that the walker froze on the top slope
+"""Tests for the real-ground simulator run (off-graph fix plan, Tasks 3-4, OFFP141): the preset `--real-ground` stands
+for (Fossil Foundry 2's real ground, the dot 3 px above the foot, the live teleport length, mob knockback), and the run
+the walker passes under it. Task 3 built the run and proved, with a strict xfail, that the walker froze on the top slope
 (at x 68, leg (49, 28) -> (101, 24)); Task 4's 3 px shift lifted the freeze, so the run is a plain test now.
 """
 
@@ -31,8 +31,8 @@ def test_preset_teleport_matches_the_recordings():
     expected = median - Kanna().max_horizontal_traversal_dist
     assert REAL_GROUND_SIM.side_teleport_extra_px == expected
     assert REAL_GROUND_SIM.side_teleport_extra_px >= 1, (
-        "with an extra of 0 the sim lands at x 68 from 49, which attached on the unshifted code, so the run would "
-        "never have shown the freeze on the slope (Task 3); OFFD140 saw exactly this")
+        "with an extra of 0 the teleport from (48, 25) lands at x 67 on the flat part, which attached on the "
+        "unshifted code, so the run would never have shown the freeze on the slope (Task 3)")
     assert REAL_GROUND_SIM.dot_above_foot_px == 3
     assert REAL_GROUND_NOISE.knockback_p == 0.02
     assert REAL_GROUND_TERRAIN == FIXTURES / "ff2_real_ground.json"
@@ -64,8 +64,9 @@ def test_off_map_is_counted(tmp_path):
     """Off-graph fix Task 7: a run whose character stands 10 px under every line of the map (the world's floor is
     lower than the map says) ends its first leg `off_map` (QB213: more than 6 px from every platform). The report
     counts that leg, and `judge` fails `laps` and says so (QB215)."""
-    nodes = ["# minimap_size=162,82",
-             "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge"]
+    header = ("nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,"
+              "is_left_platform_edge,is_right_platform_edge")
+    nodes = ["# minimap_size=162,82", header]
     nodes += [f'blue_node,"({x}, 50)",FALSE,FALSE,FALSE,FALSE' for x in (40, 60, 80)]
     csv = tmp_path / "map.csv"
     csv.write_text("\n".join(nodes) + "\n", encoding="utf-8")
@@ -82,6 +83,27 @@ def test_off_map_is_counted(tmp_path):
     laps = judge(report, 0)[0]
     assert laps.name == "laps" and not laps.ok
     assert laps.detail.endswith("0 timed out, 0 link down, 1 off map")
+
+
+def test_an_off_map_leg_in_the_middle_of_a_lap_is_counted(tmp_path):
+    """OFFG-R7 m3: the mid-right platform's ground 10 px lower than the map says. The walk reaches six legs on the
+    way, then the leg up to mid-right ends `off_map`: one counted, the run ends there, `judge` fails `laps`."""
+    terrain = json.loads(REAL_GROUND_TERRAIN.read_text(encoding="utf-8"))
+    for platform in terrain["platforms"]:
+        if platform["name"] == "mid-right":
+            platform["points"] = [[x, y + 10] for x, y in platform["points"]]
+    lowered = tmp_path / "lowered.json"
+    lowered.write_text(json.dumps(terrain), encoding="utf-8")
+
+    result = run_sim(CSV, lowered, 1, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
+
+    assert is_successful(result), result
+    report = result.unwrap()
+    assert (report.legs, report.legs_reached, report.off_map) == (7, 6, 1)
+    assert (report.laps_completed, report.timeouts, report.link_down) == (0, 0, 0)
+    laps = judge(report, 0)[0]
+    assert laps.name == "laps" and not laps.ok
+    assert laps.detail.endswith("1 off map")
 
 
 def test_runs_without_an_off_map_leg_report_none():
@@ -116,7 +138,8 @@ def test_real_ground_flag_with_the_ff2_map_passes_the_three_presets(monkeypatch)
     monkeypatch.setattr(run_module, "run_sim", spy)
     for extra in ([], ["--map", str(CSV)]):  # the default map, then the FF2 fixture named outright
         seen.clear()
-        assert main(["--laps", "1", "--seed", "2", "--real-ground", *extra]) == 2  # the stub's Failure, not a usage error
+        # 2 is the stub's Failure, not a usage error
+        assert main(["--laps", "1", "--seed", "2", "--real-ground", *extra]) == 2
         assert seen["terrain"] == REAL_GROUND_TERRAIN
         assert seen["noise"] == REAL_GROUND_NOISE
         assert seen["sim_params"] == REAL_GROUND_SIM

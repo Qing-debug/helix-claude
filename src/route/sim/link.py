@@ -122,7 +122,9 @@ class SimLink:
 
 
 class SimPositionSource:
-    """The world's position at the clock's time, rounded to ints; `Failure("miss")` with `miss_p`."""
+    """The world's position at the clock's time as the walker reads it: rounded to ints, the dot drawn
+    `dot_above_foot_px` above the foot, then moved down by `foot_from_dot` (the default reads the rounded foot);
+    `Failure("miss")` with `miss_p`."""
 
     def __init__(self, world: SimWorld, clock: SimClock, miss_p: float, rng: np.random.Generator) -> None:
         self.world = world

@@ -1,5 +1,5 @@
-"""The 3 px shift replayed on Hong's recorded Fossil Foundry 2 reads (off-graph fix plan, Task 4, OFFP141; the figures are
-OFFD140's "shift 3" row).
+"""The 3 px shift replayed on Hong's recorded Fossil Foundry 2 reads (off-graph fix plan, Task 4, OFFP141; the figures
+are OFFD140's "shift 3" row).
 
 `ff2_live_reads.json` holds the positions the planner logged in eight saved runs: the dot's centre, before any shift.
 Replaying them through `locate.attach` on the fixture map's route graph shows, in both directions, what reading the
@@ -79,7 +79,8 @@ def test_shift_leaves_five_mid_air(rg, runs):
     assert len(failing) == 5
     assert Counter(_dot(event) for _, _, event in failing) == {(69, 21): 3, (67, 21): 2}
 
-    # the longest wait: consecutive failing polls of one leg (a `read_failed` between two is skipped; a `leg`, a
+    # the longest wait, first to last failing poll of one leg (the walker's real wait runs to the next attaching poll,
+    # one poll, about 52 ms, longer: about 0.26 s; a `read_failed` between two is skipped; a `leg`, a
     # `planned`, a `reached`, a `settled` or a poll that attaches ends the run)
     longest_ms = 0
     for events in runs.values():
@@ -124,8 +125,9 @@ def test_shift_keeps_the_good_reads(rg, runs):
     expected_settled = {(107, 24): (107, 22), (105, 44): (105, 41), (103, 44): (103, 41)}
     for name, i, event in lost:
         j = i - 1
-        while runs[name][j][1] == "read_failed":
+        while j >= 0 and runs[name][j][1] == "read_failed":
             j -= 1
+        assert j >= 0, f"{event} has only read_failed events before it"
         before = runs[name][j]
         assert before[1] == "settled", f"past any `read_failed`, {event} follows {before}, not a settled read"
         assert _dot(before) == expected_settled[_dot(event)], (event, before)

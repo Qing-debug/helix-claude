@@ -1,7 +1,7 @@
 """Tests for the 3 px shift (off-graph fix plan, Task 4, OFFP141, Hong's QB213): every position source reports the point
-`DOT_TO_FOOT_PX` below the dot's centre, the row the map editor's nodes sit on. The minimap source shifts what its locator
-found, the simulator's source shifts what it draws (and draws the dot `dot_above_foot_px` above the foot), and a failure
-passes through unchanged.
+`DOT_TO_FOOT_PX` below the dot's centre, the row the map editor's nodes sit on. The minimap source shifts what its
+locator found, the simulator's source shifts what it draws (and draws the dot `dot_above_foot_px` above the foot), and a
+failure passes through unchanged.
 """
 
 import threading

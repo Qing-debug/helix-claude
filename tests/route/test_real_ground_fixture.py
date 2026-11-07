@@ -38,7 +38,7 @@ def _platform_at(terrain: SimTerrain, x: int, y: float) -> tuple[str, float]:
     """The platform whose surface at x is nearest to y, with that surface."""
     found = [(p.name, p.surface_y(x)) for p in terrain.platforms if p.surface_y(x) is not None]
     assert found, f"no platform spans x={x}"
-    return min(found, key=lambda item: abs(item[1] - y))  # type: ignore[operator]
+    return min(found, key=lambda item: abs(item[1] - y))
 
 
 def test_real_ground_loads() -> None:

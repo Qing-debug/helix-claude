@@ -401,7 +401,7 @@ def _off_the_end(tmp_path, drop_px):
 
 def test_sim_knockback_onto_an_unmapped_ledge_stops(tmp_path):
     """A mob shoves the character off the platform's end onto ground 10 px below the map's line: nothing to attach to
-    within 6 px, so the run ends 0.5 s after the character stops falling, with no key sent after the shove."""
+    within 6 px, so the run ends 0.5 s after the walker's first read on the ledge, with no key sent after the shove."""
     sim = _off_the_end(tmp_path, 10)
 
     record = sim.rig.walker.walk_leg(1, 0, None, sim.dst)

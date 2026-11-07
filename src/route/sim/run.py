@@ -9,9 +9,9 @@ report into six pass/fail checks, and `main` is the CLI:
     python -m src.route.sim.run --laps N --seed S [--map CSV] [--terrain JSON | --real-ground] [--out DIR]
         [--known-case X1,Y1:X2,Y2]... [--min-single-error-legs K] [--class kanna]
 
-`--real-ground` runs Fossil Foundry 2 on the ground the live runs showed (`REAL_GROUND_TERRAIN`), with the dot 3 px above
-the foot, the live teleport length and mob knockback (`REAL_GROUND_SIM`, `REAL_GROUND_NOISE`). It is for the FF2 map only:
-`--terrain` or another `--map` with it is a usage error (exit 2).
+`--real-ground` runs Fossil Foundry 2 on the ground the live runs showed (`REAL_GROUND_TERRAIN`), with the dot 3 px
+above the foot, the live teleport length and mob knockback (`REAL_GROUND_SIM`, `REAL_GROUND_NOISE`). It is for the FF2
+map only: `--terrain` or another `--map` with it is a usage error (exit 2).
 
 With `out_dir` (`--out`) the run writes `legs.jsonl` and `laps.jsonl` (the leg log), `map.csv` and `steps.jsonl` (the
 step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end`
@@ -510,7 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.terrain is not None:
             parser.error("--real-ground brings its own terrain: do not give --terrain")
         if args.map.resolve() != ff2_map.resolve():
-            parser.error("--real-ground is for Fossil Foundry 2 only: drop --map or name tests/fixtures/fossil_foundry_2.csv")
+            parser.error(
+                "--real-ground is for Fossil Foundry 2 only: drop --map or name tests/fixtures/fossil_foundry_2.csv")
         terrain, noise, sim_params = REAL_GROUND_TERRAIN, REAL_GROUND_NOISE, REAL_GROUND_SIM
     else:
         terrain = fixtures / "ff2_terrain.json" if args.terrain is None else args.terrain

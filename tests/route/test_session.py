@@ -546,6 +546,8 @@ def test_off_map_run_exits_10(env, monkeypatch):
     stop_json = _json(env.out / "stop.json")
     assert stop_json["reason"] == "off_map"
     assert stop_json["trigger_source"] is None and stop_json["trigger_ns"] is None  # no stop control trigger
+    end = _lines(env.out / "steps.jsonl")[-1]
+    assert (end["ev"], end["reason"], end["code"]) == ("end", "off_map", 10)  # the step log ends with the same code
     assert [source for stop in env.stops for source in stop.triggers] == []
     assert [text for text, error in env.lines if error] == []
     assert env.lines[-1] == ("stopped: off_map", False)

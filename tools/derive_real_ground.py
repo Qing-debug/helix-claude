@@ -27,8 +27,9 @@ from the run's first timed event; and `side_teleports`, [x_from, x_to] for each 
 next `settled` position of the same leg (a stop leaves `settled` with no position: no pair), kept when the character
 moved in the commanded direction. There is no |dy| filter: it would drop the steepest ramp landings.
 
-Exit 0 when both files are written; exit 2 with one `error: ...` line on stderr for a usage problem, a run folder
-without frames or with another map, or an unreadable input.
+Exit 0 when both files are written; exit 2 with one `error: ...` line on stderr for a usage problem, no run folder
+with frames (a run folder without frames is only skipped), run folders whose map.csv nodes differ, a platform with no
+bright ground row, a `leg` event without its `to`, or an unreadable input.
 """
 import argparse
 import ast
@@ -206,7 +207,10 @@ def ground_rows(
     candidates = _candidates(frames, platform)
     ys = [y for _x, y in platform.points]
     if max(ys) - min(ys) <= FLAT_PX:
-        level = Counter(c for c in candidates.values() if c is not None).most_common(1)[0][0]
+        found = Counter(c for c in candidates.values() if c is not None)
+        if not found:
+            raise DeriveError(f"platform {platform.name!r}: no bright ground row under its line in any frame")
+        level = found.most_common(1)[0][0]
         clean = {x: level for x, c in candidates.items() if c == level}
     else:
         spans = OBJECT_COLUMNS.get(platform.name, ())
@@ -264,6 +268,8 @@ def run_reads(events: list[dict]) -> tuple[list[list], list[list[int]]]:
         ev, t_ms, pos = e["ev"], round((e["t_ns"] - t0) / 1e6), None
         if ev == "leg":
             pending = None
+            if not isinstance(e.get("to"), list):
+                raise DeriveError(f"a `leg` event without its `to`: {e}")
             rows.append([t_ms, ev, *e["to"]])
         elif ev == "read_failed":
             rows.append([t_ms, ev, None, None])

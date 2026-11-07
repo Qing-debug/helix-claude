@@ -160,13 +160,15 @@ def test_snapped_point_reattaches_to_the_same_platform(ff2):
 
 def test_equal_offset_across_platforms_picks_the_lower_platform_index():
     rg = _synthetic([(0, 16), (10, 16), (20, 16), (0, 10), (10, 10), (20, 10)])
-    assert len(rg.terrain.platforms) == 2  # y=16 comes first in node_map order, so it is platform 0
+    assert len(rg.terrain.platforms) == 2
+    assert rg.terrain.platforms[0][0].minimap_position[1] == 16  # y=16 comes first in node_map order
     assert attach_standing(rg, (10, 13)) == Success((10, 16))  # 3 px from each line
 
 
 def test_the_nearer_line_wins_over_the_lower_platform_index():
     rg = _synthetic([(0, 17), (8, 17), (16, 17), (0, 12), (8, 12), (16, 12)])
     assert len(rg.terrain.platforms) == 2
+    assert rg.terrain.platforms[0][0].minimap_position[1] == 17  # y=17 is platform 0, the farther line
     assert attach_standing(rg, (4, 14)) == Success((4, 12))  # 2 px from the y=12 line, 3 px from the y=17 line
 
 

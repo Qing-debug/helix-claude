@@ -1057,7 +1057,7 @@ def test_a_still_off_map_read_exits_10_with_the_walkers_line_only(sim, capsys):
     assert stop["reason"] == "off_map" and stop["trigger_source"] is None and stop["trigger_ns"] is None
     steps = _lines(sim.out / "steps.jsonl")
     assert [ev["outcome"] for ev in steps if ev.get("ev") == "leg_end"] == ["off_map"]
-    assert steps[-1]["ev"] == "end" and steps[-1]["reason"] == "off_map"
+    assert (steps[-1]["ev"], steps[-1]["reason"], steps[-1]["code"]) == ("end", "off_map", 10)
     assert sim.stops[0].triggers == []
     assert sim.link.plays == 0
     assert sim.link.release_calls >= 1 and sim.link.close_calls == 1 and sim.stops[0].close_calls == 1
