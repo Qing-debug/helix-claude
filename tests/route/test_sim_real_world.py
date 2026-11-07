@@ -18,7 +18,9 @@ from src.route.params import MovementParams
 from src.route.position import foot_from_dot
 from src.route.sim.link import SimClock, SimPositionSource
 from src.route.sim.run import run_sim
-from src.route.sim.world import InjectedError, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain
+from src.route.sim.world import (
+    InjectedError, NoiseConfig, SimParams, SimPlatform, SimTerrain, SimWorld, load_terrain,
+)
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 REAL_GROUND = FIXTURES / "ff2_real_ground.json"
@@ -188,6 +190,48 @@ def test_knockback_is_drawn_from_the_seeded_generator(terrain):
 
     assert shoves(7) == shoves(7)
     assert len({shoves(seed) for seed in range(10)}) > 1
+
+
+def test_knockback_rises_at_most_six_px():
+    """OFFG-R2 R2-1: a shove lands on the first surface at or below its y minus 6. Ledge B is exactly 6 px above the
+    character (reached); ledge C is 7 px above (passed over for the floor). A mutant with any other rise fails one."""
+    terrain = SimTerrain((120, 80), (
+        SimPlatform("a", True, ((0, 50), (48, 50))),
+        SimPlatform("b", True, ((52, 44), (70, 44))),
+        SimPlatform("c", True, ((72, 43), (100, 43))),
+        SimPlatform("floor", False, ((0, 70), (100, 70))),
+    ))
+    assert _world(terrain, (45, 50)).knockback(10, T_NS).end == (55.0, 44.0)
+    assert _world(terrain, (45, 50)).knockback(30, T_NS).end == (75.0, 70.0)
+
+
+def test_knockback_up_the_ramp_lands_on_the_ramp(terrain):
+    """R2-1 on the real ground: 8 px right of (60, 28) is the ramp at y 27, not a fall to the floor."""
+    assert _world(terrain, (60, 28)).knockback(8, T_NS).end == (68.0, 27.0)
+
+
+def test_knockback_sign_and_size_cover_the_range(terrain):
+    """R2-1: over many seeds the shove is every size 3..8 (8 included) on both sides, nothing else."""
+    sizes = set()
+    for seed in range(200):
+        world = _world(terrain, (82, 61), noise=_always_knockback(), seed=seed)
+        world.walk(Key.RIGHT, 0, T_NS)
+        shove = world.effects[-1]
+        assert shove.kind == "knockback"
+        sizes.add(shove.end[0] - shove.start[0])
+    assert sizes == {-8.0, -7.0, -6.0, -5.0, -4.0, -3.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}
+
+
+@pytest.mark.parametrize("move", ["drop", "walk"])
+def test_no_knockback_after_a_none_record(terrain, move):
+    """R2-1: a drop from the non-droppable floor and a walk from off every surface are "none" records; no shove. (The
+    public moves never leave a surface, so the walk case puts the world off the floor's end by hand.)"""
+    world = _world(terrain, (82, 61), noise=_always_knockback())
+    if move == "walk":
+        world.pos = (5.0, 61.0)
+    first = world.drop(T_NS) if move == "drop" else world.walk(Key.RIGHT, 400, T_NS)
+    assert first.kind == "none"
+    assert [effect.kind for effect in world.effects] == ["none"]
 
 
 # --- 4. the defaults ----------------------------------------------------------------------------------------
