@@ -12,8 +12,10 @@ character 3 px lower (`foot_from_dot`) does:
 
 import json
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pytest
 from returns.pipeline import is_successful
 
@@ -21,9 +23,11 @@ from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
 from src.route.locate import attach, attach_standing
 from src.route.params import MovementParams
+from src.route.planner import next_move
 from src.route.position import foot_from_dot
 from src.route.route_graph import RouteGraph
 from src.route.sim.world import load_terrain
+from src.route.walker import _Stillness
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 MAP = FIXTURES / "fossil_foundry_2.csv"
@@ -168,3 +172,101 @@ def test_loose_attach_on_the_no_plan_reads(rg, runs):
             if (name, i) in failing:
                 longest_ms = max(longest_ms, t_ms - first_ms)
     assert longest_ms == 103 < MovementParams().standing_s * 1000
+
+
+# --- 4. the still rule on the same polls (Task 6) -----------------------------------------------------------------
+
+
+@dataclass
+class Replay:
+    """What the walker's still rule would do with the logged `no_plan` polls, poll by poll."""
+
+    placed: int = 0
+    left: int = 0                  # polls waited out: not placed, still for less than `standing_s`
+    off_map: int = 0               # polls at >= `standing_s` that have no line within the band
+    loose: list = field(default_factory=list)   # (leg dst Node, position, snapped point) per poll attached loosely
+    longest_still_s: float = 0.0   # the longest the same unplaced position was read in a row
+    longest_wait_ms: int = 0       # the longest stretch of consecutive polls left off-graph in one leg
+
+
+def _replay(rg, runs, *, shift, misses_reset) -> Replay:
+    """Walk each run's events in order as the walker does: a placed poll, a plan (`planned`, `reached`), a new leg
+    and a failed read reset the timer. The replay does not reset after its own loose attaches (no move is replayed),
+    so every poll at or after `standing_s` of one position counts as attached (OFFP141-RR N3). The fixture keeps no
+    `why` for a `read_failed`, so it is either a STALE read (the timer goes on) or a miss (it restarts): `misses_reset`
+    says which the replay takes every one to be."""
+    nodes = {node.minimap_position: node for node in rg.graph.nodes}
+    out = Replay()
+    for events in runs.values():
+        still, dst, first_ms, last_ms = _Stillness(), None, None, None
+        for t_ms, kind, x, y in events:
+            if kind == "no_plan":
+                pos = foot_from_dot((x, y)) if shift else (x, y)
+                if _attaches(rg, pos):
+                    out.placed += 1
+                    still.reset()
+                    first_ms = last_ms = None
+                    continue
+                seconds = still.see(pos, t_ms * 1_000_000)
+                out.longest_still_s = max(out.longest_still_s, seconds)
+                if seconds >= rg.params.standing_s:
+                    snapped = attach_standing(rg, pos)
+                    if is_successful(snapped):
+                        out.loose.append((dst, pos, snapped.unwrap()))
+                    else:
+                        out.off_map += 1
+                    first_ms = last_ms = None
+                else:
+                    out.left += 1
+                    first_ms = t_ms if first_ms is None else first_ms
+                    last_ms = t_ms
+                    out.longest_wait_ms = max(out.longest_wait_ms, last_ms - first_ms)
+            elif kind == "read_failed":
+                if misses_reset:
+                    still.reset()   # a `read_failed` between two polls does not end a wait either way
+            else:
+                still.reset()
+                first_ms = last_ms = None
+                if kind == "leg":
+                    dst = nodes[(x, y)]
+    return out
+
+
+def test_option_c_replay(rg, runs):
+    """OFFD140's "shift 3 + still" row: with part 1's shift the still rule has nothing left to do on these logs."""
+    for misses_reset in (True, False):   # every `read_failed` a miss (the plan's replay), or every one a STALE read
+        out = _replay(rg, runs, shift=True, misses_reset=misses_reset)
+        assert out.placed + out.left == 1229
+        assert (out.left, len(out.loose), out.off_map) == (5, 0, 0)
+        assert out.longest_still_s < MovementParams().standing_s
+        assert out.longest_wait_ms <= 210
+
+
+def test_rule_alone_replay(rg, runs):
+    """OFFD140's "still 0.5 s, band 6" row, on the logged positions as they are (no shift): the still rule alone."""
+    # The figures are OFFD140's, whose replay let the timer run through every logged `read_failed` (they are STALE reads,
+    # which the walker does not count). Were each a miss that restarts the timer, 817 polls would attach and 412 wait,
+    # the longest wait 1.9 s (see the next test): the same rule, a stricter reading of the log.
+    out = _replay(rg, runs, shift=False, misses_reset=False)
+    print(f"rule alone: placed {out.placed}, loose {len(out.loose)}, left {out.left}, off_map {out.off_map}, "
+          f"longest wait {out.longest_wait_ms} ms, longest still {out.longest_still_s:.3f} s")
+    assert out.placed == 0
+    assert (len(out.loose), out.left, out.off_map) == (1027, 202, 0)
+    assert round(out.longest_wait_ms / 1000, 1) == 1.3
+
+    top = attach(rg, (49, 28)).unwrap().platform
+    offsets = []
+    for dst, pos, snapped in out.loose:
+        assert attach(rg, snapped).unwrap().platform == top, (pos, snapped)
+        offsets.append(abs(snapped[1] - pos[1]))
+        assert is_successful(next_move(rg, snapped, dst, np.random.default_rng(0))), (pos, snapped, dst)
+    assert 3 <= min(offsets) and max(offsets) <= 6   # OFFD140: 3.2-5.5 px from the line, here rounded to whole px
+
+
+def test_rule_alone_replay_with_every_read_failed_a_miss(rg, runs):
+    """The same replay, each logged `read_failed` taken as a miss that restarts the timer: fewer polls attach, none is
+    off the map, and every snapped point still plans."""
+    out = _replay(rg, runs, shift=False, misses_reset=True)
+    assert (len(out.loose), out.left, out.off_map) == (817, 412, 0)
+    assert round(out.longest_wait_ms / 1000, 1) == 1.9
+    assert all(is_successful(next_move(rg, snapped, dst, np.random.default_rng(0))) for dst, _, snapped in out.loose)

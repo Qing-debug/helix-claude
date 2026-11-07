@@ -23,8 +23,14 @@ Where the plan is silent:
 - A sink `Failure` is reported through `log` (by default on stderr) once per run, the first one, whether it came from
   `write_leg` or `write_lap`.
 - A lap record's `start_ns` is its first leg's `start_ns` and its `end_ns` is its last leg's `end_ns`; a leg that
-  ends `STOPPED` or `LINK_DOWN` is written to the sink and counted in `RunSummary.legs`, its lap is not.
+  ends `STOPPED`, `LINK_DOWN` or `OFF_MAP` is written to the sink and counted in `RunSummary.legs`, its lap is not.
 - `max_laps` of 0 (or less) walks the approach leg only and returns reason `"max_laps"`.
+- The still rule (off-graph fix, QB213/QB215): while the character cannot be placed on the map, `_Stillness` times how
+  long the same position has been read in a row (by the clock; one new position or one miss restarts it, a STALE read
+  does not). At `standing_s` the position is attached to the nearest platform line within `standing_band_px`
+  (`locate.attach_standing`) and the walker plans from that point; with no line that close it logs one line and ends
+  the leg `OFF_MAP` (the run ends too, as for `STOPPED`). A character the strict rules place (`locate.attach`) never
+  starts the timer, whether or not the planner finds a path, and every move sent restarts it.
 - The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
   thread, and after its first exception it is reported once through `log` and not called again this run. With no
   observer nothing else happens: each call site is one `is not None` test.
@@ -46,6 +52,7 @@ from src.controller.node import Node
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import InputError
 from src.route.leg_log import LapRecord, LegOutcome, LegRecord, LegSink, MoveEntry
+from src.route.locate import attach, attach_standing
 from src.route.moves import execute
 from src.route.planner import next_move
 from src.route.route_graph import RouteGraph
@@ -54,6 +61,7 @@ STALE = "stale"  # the PositionSource Failure that means "no new frame yet"; any
 
 _NS_PER_S = 1_000_000_000
 _LINK_DOWN = frozenset({InputError.LINK_LOST, InputError.NOT_CONNECTED})
+_ENDS_THE_RUN = (LegOutcome.STOPPED, LegOutcome.LINK_DOWN, LegOutcome.OFF_MAP)
 _GUARD_PERIOD_S = 0.05  # the stop guard sends release_all this often, in wall time (PB-D4)
 _GUARD_JOIN_S = 1.0     # how long run waits for the stop guard to end
 
@@ -97,6 +105,25 @@ class StepObserver(Protocol):
     def leg_end(self, t_ns: int, outcome: str, misses: int, off_graph: int, stalls: int) -> None: ...
 
 
+class _Stillness:
+    """How long the same position has been read in a row. `see` takes a read and the clock's time for it and returns
+    the seconds since this position was first read in the current run of it; a different position starts a new run at
+    0, and so does the first read after `reset`. Time, not poll counts: the walker's poll period is not the rule."""
+
+    def __init__(self) -> None:
+        self._pos: tuple[int, int] | None = None
+        self._since_ns = 0
+
+    def see(self, pos: tuple[int, int], t_ns: int) -> float:
+        if pos != self._pos:
+            self._pos = pos
+            self._since_ns = t_ns
+        return (t_ns - self._since_ns) / _NS_PER_S
+
+    def reset(self) -> None:
+        self._pos = None
+
+
 class RealClock:
     """`now_ns` is `time.perf_counter_ns`, the clock `InputLayer` measures a stimulus on; `sleep` is `time.sleep`."""
 
@@ -118,7 +145,7 @@ class WalkerConfig:
 class RunSummary:
     laps_completed: int
     legs: int
-    reason: str  # "max_laps" | "stopped" | "link_down"
+    reason: str  # "max_laps" | "stopped" | "link_down" | "off_map"
 
 
 class RouteWalker:
@@ -166,6 +193,7 @@ class RouteWalker:
         last_progress = start_ns
         entries: list[MoveEntry] = []
         misses = off_graph = stalls = 0
+        still = _Stillness()  # the character cannot be placed on the map: how long it has read the same
 
         while True:
             if self._stop.is_set():  # 1
@@ -186,6 +214,7 @@ class RouteWalker:
             if not is_successful(read):
                 if read.failure() != STALE:
                     misses += 1
+                    still.reset()
                 if self._observer is not None:
                     self._emit(self._observer.read_failed, read_ns, read.failure())
                 clock.sleep(params.poll_s)
@@ -197,8 +226,25 @@ class RouteWalker:
                 off_graph += 1
                 if self._observer is not None:
                     self._emit(self._observer.no_plan, read_ns, pos, planned.failure())
-                clock.sleep(params.poll_s)
-                continue
+                if is_successful(attach(self._rg, pos)):  # placed by A1-A3, but no path: waiting is as today
+                    still.reset()
+                    clock.sleep(params.poll_s)
+                    continue
+                if still.see(pos, read_ns) < params.standing_s:
+                    clock.sleep(params.poll_s)
+                    continue
+                snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
+                if not is_successful(snapped):
+                    self._log_line(f"the character is {snapped.failure()}; ending the run")
+                    outcome = LegOutcome.OFF_MAP
+                    break
+                pos = snapped.unwrap()
+                planned = next_move(self._rg, pos, dst, self._rng)
+                if not is_successful(planned):
+                    clock.sleep(params.poll_s)
+                    continue
+            else:
+                still.reset()
             decision = planned.unwrap()
             move = decision.move
             if move is None:
@@ -223,6 +269,7 @@ class RouteWalker:
             stimulus_ns = read_ns if self._config.use_stimulus else None
             sent = execute(self._layer, move, stimulus_ns)
             failure = None if is_successful(sent) else sent.failure()
+            still.reset()  # a move was sent: a no-op needs another 0.5 s in a row before the next loose attach
             if self._observer is not None:
                 self._emit(self._observer.sent, clock.now_ns(), *_sent_values(sent))
             entry = MoveEntry(
@@ -310,7 +357,7 @@ class RouteWalker:
         record = self.walk_leg(0, 0, None, rotation[0])
         self._log(self._sink.write_leg(record))
         legs += 1
-        if record.outcome in (LegOutcome.STOPPED, LegOutcome.LINK_DOWN):
+        if record.outcome in _ENDS_THE_RUN:
             return RunSummary(laps, legs, _reason(record))
 
         lap = 1
@@ -321,7 +368,7 @@ class RouteWalker:
                 records.append(record)
                 self._log(self._sink.write_leg(record))
                 legs += 1
-                if record.outcome in (LegOutcome.STOPPED, LegOutcome.LINK_DOWN):
+                if record.outcome in _ENDS_THE_RUN:
                     return RunSummary(laps, legs, _reason(record))
             all_reached = all(r.outcome == LegOutcome.REACHED for r in records)
             self._log(self._sink.write_lap(LapRecord(lap, records[0].start_ns, records[-1].end_ns, n, all_reached)))
@@ -372,7 +419,9 @@ class RouteWalker:
 
 def _reason(record: LegRecord) -> str:
     """The `RunSummary.reason` for a leg that ends the run."""
-    return "stopped" if record.outcome == LegOutcome.STOPPED else "link_down"
+    if record.outcome == LegOutcome.STOPPED:
+        return "stopped"
+    return "off_map" if record.outcome == LegOutcome.OFF_MAP else "link_down"
 
 
 def _sent_values(

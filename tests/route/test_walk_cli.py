@@ -3,6 +3,7 @@
 No test here installs a real hook except the Windows-only one marked below, and none sends a key."""
 
 import inspect
+import itertools
 import json
 import signal
 import sys
@@ -503,12 +504,19 @@ class LostAfter:
 
     def read(self):
         if self.lost:
-            return self.lost_read
+            return self.lost_read() if callable(self.lost_read) else self.lost_read
         if self.reads is not None:
             self.reads -= 1
             if self.reads <= 0:
                 self.lost = True
         return self.inner.read()
+
+
+def _drifting_off_graph():
+    """A lost character that is never still: far outside the minimap, a pixel further at every read. (A character read
+    still there for 0.5 s ends its leg `off_map`, QB213; this one keeps the 60 s leg watchdog, B19-D1, under test.)"""
+    reads = itertools.count(500)
+    return lambda: Success((next(reads), 500))
 
 
 def _alive_names() -> set[str]:
@@ -937,7 +945,7 @@ def test_lost_on_the_approach_leg_exits_10_no_position(sim):
 
 
 def test_lost_mid_lap_off_graph_exits_10_and_sends_no_move_after_the_trigger(sim, monkeypatch, capsys):
-    positions = LostAfter(sim.positions, OFF_GRAPH)
+    positions = LostAfter(sim.positions, _drifting_off_graph())
     sim.positions = positions
 
     def before(lap: int, leg: int) -> None:
@@ -1010,7 +1018,7 @@ def test_out_naming_a_file_is_refused(sim, capsys):
 def test_lost_leg_with_the_stop_controls_own_stop_also_firing_exits_10(sim, monkeypatch):
     """B19-R M4(b): the stop control's on_stop (walker.stop_now) fires inside trigger, then the sink's own stop_now."""
     sim.stop_calls_on_stop = True
-    positions = LostAfter(sim.positions, OFF_GRAPH)
+    positions = LostAfter(sim.positions, _drifting_off_graph())
     sim.positions = positions
 
     def before(lap: int, leg: int) -> None:

@@ -33,6 +33,7 @@ class LegOutcome(StrEnum):
     STOPPED = "stopped"
     TIMED_OUT = "timed_out"
     LINK_DOWN = "link_down"
+    OFF_MAP = "off_map"  # the character stood still where the map has no platform within the loose-attach band
 
 
 @dataclass(frozen=True)

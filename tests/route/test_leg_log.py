@@ -57,7 +57,7 @@ def _lines(path: Path) -> list[str]:
 
 
 def test_leg_outcome_values():
-    assert [o.value for o in LegOutcome] == ["reached", "stopped", "timed_out", "link_down"]
+    assert [o.value for o in LegOutcome] == ["reached", "stopped", "timed_out", "link_down", "off_map"]
 
 
 def test_leg_to_json_has_exactly_c9_keys():
