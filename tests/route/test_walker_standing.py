@@ -51,7 +51,8 @@ OFF_MAP_LINE = "the character is standing at ({x}, {y}), more than 6 px from any
 
 def _write_map(path: Path, points) -> Path:
     rows = ["# minimap_size=162,82",
-            "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge"]
+            "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,"
+            "is_left_platform_edge,is_right_platform_edge"]
     rows += [f'blue_node,"({x}, {y})",FALSE,FALSE,FALSE,FALSE' for x, y in points]
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
@@ -232,7 +233,8 @@ def test_a_miss_restarts_and_stale_does_not(ff2):
     assert stale.rec.of("read_failed")[0][2] == STALE
     assert STANDING_NS <= stale.layer.plays[0][0] - stale.source.t0 < STANDING_NS + POLL_NS
 
-    miss = _rig(ff2, steps((0, Success((70, 22))), (0.3, Failure("miss")), (0.35, Success((70, 22)))), leg_timeout_s=1.5)
+    miss = _rig(ff2, steps((0, Success((70, 22))), (0.3, Failure("miss")), (0.35, Success((70, 22)))),
+                leg_timeout_s=1.5)
     _leg(ff2, miss, TOP_RIGHT)
     after_miss = round(0.35 * S)
     assert after_miss + STANDING_NS <= miss.layer.plays[0][0] - miss.source.t0 < after_miss + STANDING_NS + POLL_NS

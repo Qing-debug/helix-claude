@@ -1,4 +1,4 @@
-"""Tests for `tools/derive_real_ground.py` (OFFG-R1 M2, M4): the tool that made the real-ground fixtures from saved runs.
+"""Tests for `tools/derive_real_ground.py` (OFFG-R1 M2, M4): the tool that made the real-ground fixtures from runs.
 
 The keylog promise of its docstring is checked here on a small run folder built in `tmp_path`, with a `keys.jsonl`
 beside the files the tool may read: the tool must never open it, and must never list a run folder (a listing would show
@@ -16,8 +16,16 @@ import numpy as np
 
 from tools import derive_real_ground as derive
 
-MAP_HEADER = "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge"
-LAYOUT = {"minimap_size": [40, 30], "platforms": [{"name": "floor", "droppable": False, "points": [[5, 10], [15, 10]]}]}
+MAP_HEADER = ("nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,"
+              "is_left_platform_edge,is_right_platform_edge")
+
+
+def _layout(points):
+    return {"minimap_size": [40, 30], "platforms": [{"name": "floor", "droppable": False, "points": points}]}
+
+
+LAYOUT = _layout([[5, 10], [15, 10]])
+SLOPE = _layout([[5, 10], [15, 16]])
 GROUND_ROW = 14
 
 
@@ -40,9 +48,9 @@ def _run_folder(root: Path, *, ground: bool = True, steps: list[dict] | None = N
     return run
 
 
-def _args(root: Path) -> list[str]:
+def _args(root: Path, layout_data: dict = LAYOUT) -> list[str]:
     layout = root / "layout.json"
-    layout.write_text(json.dumps(LAYOUT), encoding="utf-8")
+    layout.write_text(json.dumps(layout_data), encoding="utf-8")
     return ["--runs", str(root / "runs"), "--layout", str(layout),
             "--terrain-out", str(root / "terrain.json"), "--reads-out", str(root / "reads.json")]
 
@@ -74,7 +82,7 @@ def test_the_tool_never_opens_or_lists_the_keylog(tmp_path, monkeypatch, capsys)
     assert (run / "keys.jsonl").exists()
     touched = opened + listed
     assert any("steps.jsonl" in p for p in opened) and any(p.endswith(".png") for p in opened)  # the watch sees reads
-    assert not [p for p in touched if "keys" in p], touched
+    assert not [p for p in touched if Path(p).name == "keys.jsonl"], touched
     assert {Path(p) for p in listed} <= {tmp_path / "runs", run / "frames"}, listed  # never a run folder itself
 
 
@@ -94,3 +102,12 @@ def test_a_leg_event_without_its_target_is_a_usage_error_not_a_crash(tmp_path, c
 
     err = capsys.readouterr().err
     assert err.startswith("error: ") and "`leg` event without its `to`" in err and len(err.splitlines()) == 1
+
+
+def test_a_sloped_platform_with_no_bright_ground_row_is_a_usage_error_not_a_crash(tmp_path, capsys):
+    _run_folder(tmp_path, ground=False)
+
+    assert derive.main(_args(tmp_path, SLOPE)) == 2
+
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "no bright ground row" in err and len(err.splitlines()) == 1

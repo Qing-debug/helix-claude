@@ -52,7 +52,8 @@ FRAME_GLOB = "*.png"
 DEFAULT_LAYOUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "ff2_terrain.json"
 
 GROUND_GREY = 180            # the plan's threshold (OFFD140 section 1)
-FOOT_FROM_GROUND = 3         # the node row is the real ground row minus 3 (Hong rests the 3 px node circle on the ground)
+# the node row is the real ground row minus 3 (Hong rests the 3 px node circle on the ground)
+FOOT_FROM_GROUND = 3
 DOT_TO_GROUND_PX = 6         # the dot's centre sits 6 px above the ground (+6 in 1642 of 2214 frames, +5 and +7 else)
 SCAN_ABOVE_PX = 2            # the scan for a column starts this far above the platform's line there ...
 SCAN_BELOW_PX = 12           # ... and stops this far below it
@@ -165,7 +166,8 @@ def _candidates(frames: Sequence[np.ndarray], platform: Platform) -> dict[int, i
         line = round(platform.line_y(x))
         rows = [_first_bright(f, x, line - SCAN_ABOVE_PX, line + SCAN_BELOW_PX) for f in frames]
         found = [r for r in rows if r is not None]
-        out[x] = statistics.median_low(found) if len(found) * 2 > len(rows) else None   # a dim pixel: most runs see none
+        # a dim pixel: most runs see none
+        out[x] = statistics.median_low(found) if len(found) * 2 > len(rows) else None
     return out
 
 
@@ -218,6 +220,8 @@ def ground_rows(
             x: c for x, c in candidates.items()
             if c is not None and not any(a <= x <= b for a, b in spans)
         }
+        if not clean:
+            raise DeriveError(f"platform {platform.name!r}: no bright ground row under its line in any frame")
     covered = [x for x in platform.x_range if x not in clean]
     expected = _expected(set(covered), clean)
     ground = dict(clean)

@@ -126,8 +126,8 @@ def test_a_falling_knockback_changes_every_read_until_it_lands(terrain):
 @pytest.mark.parametrize("dx", [3, 4])
 def test_a_slow_flat_shove_reads_equal_one_poll_early(terrain, dx):
     """Plan review N1: the walker settles on two equal reads, so a 3 or 4 px level shove (reads 50 ms apart) can end
-    its settle with the character still 1 px short of `world.pos`, as live. From a fractional x (after a walk) 5 and 6 px
-    shoves can end it early too, by up to 2 px (OFFG-R2 M2); this test starts at an integer x."""
+    its settle with the character still 1 px short of `world.pos`, as live. From a fractional x (after a walk) 5 and 6
+    px shoves can end it early too, by up to 2 px (OFFG-R2 M2); this test starts at an integer x."""
     world = _world(terrain, (60, 28))
     clock = SimClock(T_NS)
     source = SimPositionSource(world, clock, 0.0, np.random.default_rng(0))
