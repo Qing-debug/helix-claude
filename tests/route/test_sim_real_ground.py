@@ -45,8 +45,10 @@ def test_preset_teleport_matches_the_recordings():
 def test_real_ground_run_passes():
     result = run_sim(CSV, REAL_GROUND_TERRAIN, 20, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
     assert is_successful(result), result
-    checks = judge(result.unwrap(), 0)
+    report = result.unwrap()
+    checks = judge(report, 0)
     assert all(check.ok for check in checks), [check for check in checks if not check.ok]
+    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 8 on seed 2"
 
 
 def test_report_counts_the_knockbacks():

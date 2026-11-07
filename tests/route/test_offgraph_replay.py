@@ -115,11 +115,15 @@ def test_shift_keeps_the_good_reads(rg, runs):
         ("planned", (103, 44)), ("planned", (105, 44)), ("planned", (107, 24))]
 
     # each is a mid-fall read: the walker settled early, and 50 ms later the character had dropped 2-3 px more. In the
-    # same leg, the last `settled` read before it (a `read_failed` may sit between) is at the same x, 2-3 px higher.
+    # same leg, the last `settled` read before it is at the same x, 2-3 px higher, and only `read_failed` events sit
+    # between the two (the shape of every `planned` in the log: settled, read_failed, planned).
     expected_settled = {(107, 24): (107, 22), (105, 44): (105, 41), (103, 44): (103, 41)}
     for name, i, event in lost:
-        before = next(e for e in reversed(runs[name][:i]) if e[1] in ("settled", "leg"))
-        assert before[1] == "settled", f"a `leg` event comes between {event} and any settled read"
+        j = i - 1
+        while runs[name][j][1] == "read_failed":
+            j -= 1
+        before = runs[name][j]
+        assert before[1] == "settled", f"past any `read_failed`, {event} follows {before}, not a settled read"
         assert _dot(before) == expected_settled[_dot(event)], (event, before)
         assert 0 < event[0] - before[0] <= 60, (event, before)
 
