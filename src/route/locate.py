@@ -3,8 +3,12 @@
 `attach` turns a minimap pixel into an `Anchor` by the first of four rules that applies: on a node (A1), on a
 platform segment between two nodes (A2), just beyond the end of a platform (A3), else off-graph (A4). Positions
 are minimap pixels with a top-left origin (y grows downward).
+
+`attach_standing` is the loose attach for a character that has stood still where those rules cannot place it: it
+snaps the position onto the nearest platform line within `standing_band_px` (QB213, OFFP141).
 """
 
+import math
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -92,3 +96,32 @@ def attach(rg: RouteGraph, pos: tuple[int, int]) -> Result[Anchor, str]:
         if anchor is not None:
             return Success(anchor)
     return Failure(f"off-graph: ({px}, {py})")
+
+
+def attach_standing(rg: RouteGraph, pos: tuple[int, int]) -> Result[tuple[int, int], str]:
+    """Snap a standing character's position `pos` onto the platform line nearest to it (QB213).
+
+    Over every platform segment with Lx <= px <= Rx (a vertical segment is skipped, as in A2), the line whose
+    interpolated y is nearest to py with an offset of at most `standing_band_px`, above or below; ties go to the
+    lower platform index, then the leftmost segment. Returns `Success((px, y_line))`, the line's y rounded half up
+    (the offset is an exact `Fraction`, so neither the tie-break nor the rounding is decided by float error), or
+    `Failure("standing at (x, y), more than N px from any platform of the map")`. A position beyond a platform's
+    end gets no loose attach: A3 already places those within reach.
+    """
+    px, py = pos
+    band = rg.params.standing_band_px
+    best_offset: Fraction | None = None
+    best_y = Fraction(0)
+    for platform in rg.terrain.platforms:
+        for left, right in zip(platform, platform[1:]):
+            lx, ly = left.minimap_position
+            rx, ry = right.minimap_position
+            if rx == lx or not lx <= px <= rx:
+                continue
+            line_y = ly + Fraction(ry - ly) * (px - lx) / (rx - lx)
+            offset = abs(py - line_y)
+            if offset <= band and (best_offset is None or offset < best_offset):
+                best_offset, best_y = offset, line_y
+    if best_offset is None:
+        return Failure(f"standing at ({px}, {py}), more than {band} px from any platform of the map")
+    return Success((px, math.floor(best_y + Fraction(1, 2))))

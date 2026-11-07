@@ -24,6 +24,8 @@ class MovementParams:
     poll_s: float = 0.05           # position poll interval while settling or waiting
     min_settle_s: float = 0.15     # wait at least this after a move before settling
     settle_timeout_s: float = 2.0
+    standing_s: float = 0.5         # QB213: read still this long = standing
+    standing_band_px: int = 6       # QB213: a standing character attaches to a platform line this close, above or below
 
 
 _MAX_WALK_MS_LIMIT = 5000.0  # a WALK draw at T = 5000 has SD ~210 ms, far below the 6553.5 ms per-step cap (G12/G14)

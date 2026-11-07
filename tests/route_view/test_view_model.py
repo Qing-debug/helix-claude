@@ -412,6 +412,16 @@ def test_5_an_unknown_class_and_a_bad_params_key_give_a_warning_not_a_traceback(
         render_text(model, model.step(k))
 
 
+def test_5_a_header_from_before_the_standing_params_still_shows_its_route(tmp_path):
+    # OFFP141 T5, Review Focus 1: a saved run's params lack standing_s and standing_band_px; the route still shows
+    folder = make_folder(tmp_path)
+    old = {k: v for k, v in dataclasses.asdict(MovementParams()).items() if k not in ("standing_s", "standing_band_px")}
+    (folder / STEPS_FILE).write_bytes(header_line(default_header(params=old)).unwrap() + b"".join(event_lines(G)))
+    model = _load(folder)
+    assert model.warnings == () and model.rg is not None and model.nodes
+    assert model.rg.params == MovementParams()
+
+
 def test_5_junk_in_the_params_the_why_lines_read_falls_back_to_the_defaults(tmp_path):
     folder = make_folder(tmp_path)
     params = {**dataclasses.asdict(MovementParams()), "settle_timeout_s": None, "stall_s": "ten"}
