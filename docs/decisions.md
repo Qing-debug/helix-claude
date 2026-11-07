@@ -12,8 +12,9 @@ Facts and principles Hong would give the same way every time (his answer to Q7, 
 - Fix real problems, not ones we don't know will happen. Make checks only as strict as they need to be.
 - Inputs must still look human generated. Bad map files must be obvious, with how to fix them.
 - Anti-cheat: "we can't interact with memory/windows API else the anticheat flags it" (Hong, 2026-10-31). While MapleStory runs, nothing of ours may read or write its memory, open, query or enumerate its process or window, or ask Windows which window is in front (H56).
+- "i will be sharing this project with other people for them to run, so it should be easily usable. The app should be designed such that it has everything it needs." (Hong, chat, 2026-11-03.)
 
-Sources: `.superpowers/orchestrator/2026-10-21-phase1/notes/QA60-page/index.html`, section "The proposal" (the five bullets, copied in plain sentences); `notes/QA60-a.md` section 5f (the questions behind them: Q13, Q27, Q36, Q57, Q40, Q30, Q35, Q55, Q29); ledger-B.md:610 (Hong's yes to writing them down). The anti-cheat bullet: `ledger-RV.md:291` (his words, 2026-10-31) and H56.
+Sources: `.superpowers/orchestrator/2026-10-21-phase1/notes/QA60-page/index.html`, section "The proposal" (the five bullets, copied in plain sentences); `notes/QA60-a.md` section 5f (the questions behind them: Q13, Q27, Q36, Q57, Q40, Q30, Q35, Q55, Q29); ledger-B.md:610 (Hong's yes to writing them down). The anti-cheat bullet: `ledger-RV.md:291` (his words, 2026-10-31) and H56. The sharing bullet: his words in chat, 2026-11-03, copied unchanged.
 
 ## H1 (2026-10-21): Phase 1 specs approved
 
@@ -2622,3 +2623,57 @@ Cost if wrong: one read of the run folder at the end of each run (the list is sm
 Undo: `git revert f91e21f` (the commit titled `feat(route-tab): saved runs refresh when a run ends, stop texts also in the console, Laps starts at 1 (RT-FIX-2)`) and the docs commit that follows it, or Hong says so.
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/H3-DBG.md` section 2 (the refresh), `notes/RT-FIX-2.md` and `notes/RT-FIX-2b.md`; question bank QB186 (`C:/Users/Qing_programming/.claude/orchestrator/question-bank.md`); `.superpowers/sdd/2026-10-31-route-tab/progress.md` (`Decision (Hong) ... QB186`, "the lateest saved runs", "set the number of laps to1 by default").
+
+## H84 (2026-11-03): The off-graph bug is fixed in general first, and the sign-off walk waits for the fix (Hong's QB212)
+
+Hong reported, in chat, where the walk gets stuck on Fossil Foundry 2: "it occurs between the two top most nodes. When going from the left blue node to the right blue nnode, it will tp and then get stuck inn the midpoint. That area is where the slope exists of the topmost platform". The cause (OFFG140): the character's minimap dot sits about 3 px above the node line, and the real ground rises about 4 px over x 66 to 71 where the map has one slope edge, so the walker read a position it could not place on the map, took the character to be in the air and sent no key until the 60 s leg timeout.
+
+He was offered two ways forward: "(1) move nodes now + sign-off on today's code, general fix in parallel; (2) general fix first, sign-off on final code". His answer: "2".
+
+About his second sign-off walk (run 164604Z) he said: "i had to move it by hand, or a mob knoccked it to the side which eventually fixed it." So that walk does not count towards the sign-off: the one-lap walk without F12 runs again after the fix, before the 10-lap walk. His first walk (run 164545Z) still counts.
+
+Affects: the order of the sign-off walks (B21): the fix (H85, H86) first, then the one-lap walk, then the 10-lap walk; the plan `docs/superpowers/plans/2026-11-03-offgraph-fix.md`.
+
+Cost if wrong: the sign-off walks wait for the fix. Undo: Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/OFFG140.md` (the bug), question bank QB212, Hong's words in `.superpowers/sdd/2026-10-31-route-tab/progress.md` (lines 802-806).
+
+## H85 (2026-11-03): The walker reads the character 3 px lower; a character that stays still for 0.5 s is attached to the platform under it within 6 px, or the run ends (Hong's QB213 and QB215)
+
+Hong was shown three ways to stop the freeze (OFFD140-D1): read the position 3 px lower (A), his own rule (B), or both (C). The rule was his idea: "we know the c haracter isnt fallinng if its y position stays stable so isnnt that a simple way of stopping this innfinite fall as opposed to checkingg its close to the ground?" He answered "Both (Recommended)", which is option C. In plain words:
+
+- 3 px lower: every position source reports the point 3 px below the centre of the character's minimap dot (`position.DOT_TO_FOOT_PX`, `foot_from_dot`). That is where nodes sit when they are placed in the map editor: the dot's centre is 6 px above the ground and the editor's node circle rests on it. Step logs, leg logs and replays now hold this point. Runs saved before this change hold the dot's centre, 3 px higher for the same spot; the step log does not say which kind it holds, and a replay is still right because the viewer attaches the logged position with the same rules.
+- Still for 0.5 s: when the walker cannot place the character on the map (the attach rules A1-A3 of the Feature B plan's contract C6 all fail) and reads the same position for 0.5 s in a row (`MovementParams.standing_s`), the character is standing, not falling. A new position, a missed read and every key sent start the 0.5 s again; a frame with no new picture does not.
+- Within 6 px: the character is attached to the platform line under it, at most 6 px away (`standing_band_px`), and the walker plans from that point on the line.
+- Nothing within 6 px: the run ends at once (QB215 below) instead of waiting for the leg timeout.
+- Frozen files this opens: `walker.py`, `locate.py` and `params.py` (Ruling [spec-text], orch 140). `planner.py` was named but is not needed: the walker plans from the snapped point with the unchanged `next_move`.
+
+How "within 6 px" is read (Ruling [spec-text], orch 141; not Hong's words): within 6 px on either side of the read, above or below the platform's line, because a dip in the ground puts the read below the mapped line. So a character read up to 6 px under a line is attached to the platform above it.
+
+Limits of the rule, in plain words (OFFG reviews R4, R5): the 6 px counts between a platform's nodes only. A still character just past a platform's end, 4 to 6 px off the end node's height, gets neither the old 3 px rule (A3) nor the loose attach, and the run ends `off_map`; this does not happen on Fossil Foundry 2. The numbers 3 and 6 were fitted on one map and one minimap crop (Fossil Foundry 2, Kanna); a differently cropped session may read a pixel or two off, and the 6 px band is the margin for it. A character in the air whose dot stops moving for 0.5 s while the screen still updates (a game render stall), within 6 px of a line, would be attached as if it stood; that comes with "a stable y means standing".
+
+The one live change besides the slope: on Hong's recorded runs, 3 reads taken mid-fall, 50 ms after the walker had settled too early, no longer place the character, so the walker waits for the landing instead of planning a drop from the air (pinned in `tests/route/test_offgraph_replay.py::test_shift_keeps_the_good_reads`).
+
+Decision (Hong) OFFP141-D1 (QB215, 2026-11-03, asked with AskUserQuestion): how the run ends when no platform is within 6 px. He chose "Console line only (Recommended)", option A: a new leg outcome and `stop.json` reason `off_map` (also in `legs.jsonl` and the step log's `leg_end`), exit 10 (the existing "character lost" code), and one console line from the walker: "the character is standing at (x, y), more than 6 px from any platform of the map; ending the run" ((x, y) is the point the walker reads, 3 px below the dot's centre). The Route tab's status line stays "Ended: the character was lost (exit 10)."
+
+Decision (Hong) (2026-11-07, asked in chat whether to keep the `stopped: off_map` line that every stop prints): "Keep both lines". The console box shows the walker's reason line and then the usual `stopped: off_map` line; the Route tab status and exit 10 are unchanged.
+
+Affects: `src/route/position.py`, `walker.py`, `locate.py`, `params.py`, `leg_log.py`, `session.py`, `walk.py` (docstring), `sim/link.py`, `sim/world.py`, `sim/run.py` (`SimReport.off_map`); `tests/route/` (`test_position_foot`, `test_locate_standing`, `test_walker_standing`, `test_offgraph_replay`, `test_sim_real_ground` and others); spec B ("Where the character stands"); `src/route/CLAUDE.md`, the root `CLAUDE.md`.
+
+Cost if wrong: a character read up to 6 px under a line is attached to the platform above it; one extra console line when this stop happens. Undo: revert the commits of branch `p1b-offgraph-fix` (the feature commits are marked OFFP141 T4 to T7 in `git log`), or Hong says so.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/OFFD140.md` (the design and the replay table), question bank QB213 and QB215, Hong's words in `.superpowers/sdd/2026-10-31-route-tab/progress.md` (lines 802-806).
+
+## H86 (2026-11-03): The route simulator is upgraded to catch this class of bug, and it was built before the fix (Hong's QB214)
+
+Hong was asked whether to upgrade the simulator so that it fails on today's walker first and the fix is then proven against it. He answered "Yes, upgrade it (Recommended)": a real-ground fixture from his recordings, the dot offset and a knockback injector; the simulator first, then the fix.
+
+What was built: `python -m src.route.sim.run ... --real-ground` runs Fossil Foundry 2 on the ground taken from Hong's 8 recorded runs (`tests/fixtures/ff2_real_ground.json`), with the dot's centre 3 px above the node line, sideways teleports as long as the live ones and mob knockback. `tests/fixtures/ff2_live_reads.json` keeps the event kinds and minimap positions of those runs (never keys) for the replay tests; `tools/derive_real_ground.py` made both and never opens `keys.jsonl`. The new simulator knobs are off by default, so the default smoke (366 moves, 25 no-ops) and the 1000-lap run (18093 moves, 1054 no-ops) are unchanged. The knockback values (0.02 per move, 3 to 8 px, 0.3 s in the air) are simulator settings, not Hong's. Proof: before the fix the real-ground run failed on the top slope (leg (49, 28) to (101, 24), 5 of 141 legs reached); after it, it passes 6/6.
+
+Ruling [local, OFFG-T1-D1, orchestrator; not Hong's decision]: the top ramp's surface at x = 68 is 27, not 28. The plan said 28 for x 50 to 68 (ground 31 minus 3, from OFFD140's prose, which is one pixel off at its last column). The recordings put the ground at row 30 at x = 68 (the median of all 2214 frames, all 7 per-run medians and 143 standing reads at (68, 24)), so the fixture and its test have 28 for x 50 to 67, 27 at x = 68, 26 at 69 and 70, 25 at 71 and 24 for x 72 to 100. Cost if wrong: one test line.
+
+Affects: `src/route/sim/` (`world.py`, `link.py`, `run.py`), `tools/derive_real_ground.py`, `tests/fixtures/ff2_real_ground.json`, `tests/fixtures/ff2_live_reads.json`, `tests/route/test_sim_real_ground.py` and `test_real_ground_fixture.py`; spec B (Verification); `src/route/CLAUDE.md`, `tests/CLAUDE.md`, the root `CLAUDE.md`.
+
+Cost if wrong: simulator work that a second map would not need. Undo: Hong says so; the knobs are off by default.
+
+Pointer: question bank QB214; `.superpowers/orchestrator/2026-10-21-phase1/notes/OFFG-T1.md` (the x = 68 measurements), `OFFG-T3.md` (the failing run).

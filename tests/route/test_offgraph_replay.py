@@ -244,9 +244,11 @@ def test_option_c_replay(rg, runs):
 
 def test_rule_alone_replay(rg, runs):
     """OFFD140's "still 0.5 s, band 6" row, on the logged positions as they are (no shift): the still rule alone."""
-    # The figures are OFFD140's, whose replay let the timer run through every logged `read_failed` (they are STALE reads,
-    # which the walker does not count). Were each a miss that restarts the timer, 817 polls would attach and 412 wait,
-    # the longest wait 1.9 s (see the next test): the same rule, a stricter reading of the log.
+    # The figures are OFFD140's, whose replay let the timer run through every logged `read_failed`: they are STALE
+    # reads, which the walker does not count. All 244 `read_failed` events of the fixture are `why: stale` (OFFG-R6
+    # checked them against the `steps.jsonl` of the 8 source runs; the fixture itself keeps no `why`). Were each a miss
+    # that restarts the timer, 817 polls would attach and 412 wait, the longest wait 1.9 s (see the next test): the
+    # same rule, a stricter reading of the log.
     out = _replay(rg, runs, shift=False, misses_reset=False)
     print(f"rule alone: placed {out.placed}, loose {len(out.loose)}, left {out.left}, off_map {out.off_map}, "
           f"longest wait {out.longest_wait_ms} ms, longest still {out.longest_still_s:.3f} s")

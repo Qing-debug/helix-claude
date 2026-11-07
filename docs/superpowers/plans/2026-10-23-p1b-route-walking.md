@@ -1181,7 +1181,7 @@ class MinimapPositionSource:                     # implements walker.PositionSou
 
 - [ ] **Behaviour:** under `shared.minimap_frame_lock`: frame None → `Failure("no frame")`; the same object as the
   previous read (`is`) → `Failure("stale")` (`walker.STALE`); else keep a reference and take `frame.copy()`. Outside
-  the lock: `locator.locate(copy)`, returned unchanged.
+  the lock: `locator.locate(copy)`, returned unchanged (since the off-graph fix, H85, a success is first moved 3 px down by `foot_from_dot`; a failure is still returned unchanged).
 - [ ] **Tests** (a fake shared object whose `minimap_frame_lock` is a wrapper around a `threading.Lock` implementing
   `acquire`/`release`/`__enter__`/`__exit__`, counting acquires and exposing whether it is held — `threading.Lock`
   cannot be subclassed on 3.14 — and a fake locator recording whether the lock was held when `locate` ran): None → `"no frame"`; same array twice → second is `"stale"`; a new array with the icon

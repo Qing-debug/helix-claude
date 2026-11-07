@@ -49,9 +49,18 @@ These are test cases, not things to fix by editing the map.
 - The frame in `SharedInfo` is stored RGB despite a comment saying BGR.
 - All timing comes from Feature A's human-like input layer.
 
+## Where the character stands (added 2026-11-03, Hong's QB213, H85)
+
+- The walker reads the character 3 px below the centre of its minimap dot (`DOT_TO_FOOT_PX`, `src/route/position.py`). That is where nodes sit when they are placed in the map editor: the dot's centre is 6 px above the ground, and the editor's node circle (radius 3) rests on it. Step logs, leg logs and replays now hold this point. One live change besides the slope: on Hong's recorded runs, 3 reads taken mid-fall, 50 ms after the walker had settled too early, no longer place the character, so the walker now waits for the landing instead of planning a drop from the air.
+- When the walker cannot place the character on the map (attach rules A1-A3 of the Feature B plan's contract C6 all fail) and reads the same position for 0.5 s in a row (`standing_s`), the character is standing. The walker attaches it to the platform under it: the platform segment that spans its x and whose line is nearest, at most 6 px above or below (`standing_band_px`), and plans from that point on the line. "Within 6 px" counts either side of the line, because a dip in the ground puts the character below the mapped line; so a character up to 6 px under a line is attached to the platform above it. A missed read starts the 0.5 s again; a frame with no new picture does not; every move sent starts it again too.
+- A character the rules A1-A3 do place, but with no path to the target, is never "off the map": the walker waits as before.
+- If no platform line is within 6 px, the walk ends at once with "the character is standing at (x, y), more than 6 px from any platform of the map; ending the run" (exit 10, `stop.json` reason `off_map`) instead of waiting for the leg timeout. (x, y) is the point the walker reads, 3 px below the dot's centre. The Route tab shows its usual exit-10 line, "Ended: the character was lost (exit 10)."; the console box shows the walker's reason line and then the usual `stopped: off_map` line that every stop prints (Hong, QB215; "Keep both lines", 2026-11-07).
+- While the position keeps changing (a fall, a knockback through the air) nothing is attached loosely and no key is sent, as before.
+
 ## Verification (first guess — tried early, gaps filled by Claude first)
 
 - **Offline:** a simulated character on this map (teleport reach known; walk/drop/teleport timings and variance estimated) driving the real planner and control loop, so planning, terrain inference, and recovery are tested without the game. Target: many consecutive simulated laps with every leg completed and no stalls.
+- **Offline on the real ground** (2026-11-03, H86): the simulator's `--real-ground` run uses the ground of FF2 taken from Hong's recorded runs, the dot 3 px above the node line, sideways teleports as long as the live ones and mob knockback. Before the fix it froze on the top slope as the live runs did; after it, the 20-lap seed-2 run passes 6/6.
 - **Real minimap frames of Fossil Foundry 2** to test character detection and the sim's realism. `data/recordings/ff2_2026-10-21/` has 307 full-screen frames (character standing still; every 5th frame checked, all show a valid 162×82 minimap). More come from passive capture. Frames with the character moving come from the first supervised session.
 - **In-game:** supervised short runs with the user for sign-off.
 
@@ -118,13 +127,15 @@ drops: 994
 teleport_downs: 1110
 sim_seconds: 14729.5829
 mean_lap_s: 14.729582899999999
-PASS laps: 1000/1000 laps, 7001/7001 legs reached, 0 timed out, 0 link down
+PASS laps: 1000/1000 laps, 7001/7001 legs reached, 0 timed out, 0 link down, 0 off map
 PASS stalls: 0 stalls
 PASS known_cases: (49, 28)->(101, 24) 1000/1000, (101, 24)->(105, 42) 1000/1000 reached/attempted (need 1000 each)
 PASS recovery: 1805/1805 single-error legs within 3 extra moves (need >= 100 legs and 99%); 428/428 multi-error legs within 3 extra moves per error
 PASS noise: 1078/18660 moves were no-ops (5.78%, need >= 5%)
 PASS abilities: 994 drops, 1110 teleports down (need both > 0)
 ```
+
+Note, 2026-11-07, on the off-graph fix (H84-H86): the laps line above ends with `, 0 off map` since the fix gave the report that count. The same command run on the fix's last commit gives exit 0, 7001 of 7001 legs reached, 18093 moves, 1054 silent no-ops (5.83%), 1003 drops, 1121 teleports down, 11945.1853 simulated seconds, both known cases 1000 of 1000, 0 off map and 6 of 6 checks PASS. Those figures differ from the block above because the walk speed became 12.5 px/s (H81) among other changes after it was recorded; the off-graph fix leaves them as they were before it (18093 moves and 1054 no-ops at `1dbb2b4`).
 
 **Detection run** (plan task B18, 2026-10-26; exit 0):
 
@@ -169,6 +180,7 @@ The plan was amended after approval for B19, B15, B20 and B21 (the plan's "Amend
 - B19-D1, B19-D2, B19-D3: the walk ends with exit 10 when a leg times out with no move (the character is lost); it refuses an `--out` that already holds a run, or names a file, and `--laps` below 1, each with exit 2.
 - B20-D1 to B20-D4: the measurement tool writes directions as `Key` names and leaves no-op moves out of reach and walk speed; settles a move on one position held for 0.5 s; keeps its built CLI and file surface; and its vertical reach is a lower bound that B21 checks on hand-teleport frames before changing Kanna's 23.
 - Shared code changed during the build, which the walk uses: H16 and H19 (the map loader refuses a file that does not match the format, or has a header and no nodes); H17 (`PathGraph` up/down links skip a node Kanna can't teleport to; `RouteGraph.build` copies every `PathGraph` edge; the entry states that FF2 builds the same 40 edges as before); H20 (the main window's draw-node buttons use route's `CharacterLocator`). H18 and H21 were made in the same round and do not touch Feature B.
+- H84-H86 (2026-11-03): the off-graph fix (the 3 px reading and the still rule above) and the real-ground simulator; plan `docs/superpowers/plans/2026-11-03-offgraph-fix.md`.
 
 ### Not done yet
 
