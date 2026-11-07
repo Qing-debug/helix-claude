@@ -120,6 +120,7 @@ class SimReport:
     sim_seconds: float
     mean_lap_s: float
     knockbacks: int = 0                      # world effects with a mob knockback (`--real-ground` turns them on)
+    off_map: int = 0                         # legs that ended `off_map`: stood 0.5 s more than 6 px from every platform
 
 
 @dataclass(frozen=True)
@@ -430,6 +431,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         sim_seconds=sim_seconds,
         mean_lap_s=sum(lap_seconds) / len(lap_seconds) if lap_seconds else 0.0,
         knockbacks=sum(InjectedError.KNOCKBACK in e.injected for e in world.effects),
+        off_map=sum(rec.outcome == LegOutcome.OFF_MAP for rec in legs),
     ))
 
 
@@ -439,9 +441,9 @@ def judge(report: SimReport, min_single_error_legs: int = 100) -> list[Check]:
     checks = [
         Check("laps",
               r.laps_completed == r.laps_requested and r.legs_reached == r.legs and r.timeouts == 0
-              and r.link_down == 0,
+              and r.link_down == 0 and r.off_map == 0,
               f"{r.laps_completed}/{r.laps_requested} laps, {r.legs_reached}/{r.legs} legs reached, "
-              f"{r.timeouts} timed out, {r.link_down} link down"),
+              f"{r.timeouts} timed out, {r.link_down} link down, {r.off_map} off map"),
         Check("stalls", r.stalls == 0, f"{r.stalls} stalls"),
     ]
 

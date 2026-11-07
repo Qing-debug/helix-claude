@@ -6,7 +6,7 @@
 Exit codes: 0 done · 1 run ended link_down · 2 usage (a --laps below 1, a bad --minutes or --seed), no --supervised, an --out that
 already holds a run (B19-D2), or a leg log that cannot be opened · 3 no first frame or no character found · 4 connect
 failed · 5 map, route graph or character icon failed to load · 6 run() returned a Failure · 7 run() raised an exception · 9 the stop control failed to start · 10 the character
-was lost: a leg timed out with no move (B19-D1) · 11 Helix is not running as administrator, so F12 could not stop the
+was lost: a leg timed out with no move (B19-D1), or it stood more than 6 px from every platform (QB213) · 11 Helix is not running as administrator, so F12 could not stop the
 walk with MapleStory in front (RT-FIX-1, H82; the CLI does not relaunch itself, RT-FIX-1b). 8 is the live link check's own
 code, never `main`'s.
 

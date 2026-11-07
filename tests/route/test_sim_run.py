@@ -140,7 +140,7 @@ def test_judge_recovery_shares_and_minimum(changes, minimum, ok):
 
 @pytest.mark.parametrize("changes, name", [
     (dict(laps_completed=9), "laps"), (dict(legs_reached=70), "laps"), (dict(timeouts=1), "laps"),
-    (dict(link_down=1), "laps"), (dict(stalls=1), "stalls"),
+    (dict(link_down=1), "laps"), (dict(off_map=1), "laps"), (dict(stalls=1), "stalls"),
     (dict(known_cases={"a->b": (10, 10), "c->d": (9, 10)}), "known_cases"),
     (dict(no_ops=49), "noise"), (dict(moves=0, no_ops=0), "noise"),
     (dict(drops=0), "abilities"), (dict(teleport_downs=0), "abilities"),

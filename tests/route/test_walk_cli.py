@@ -1036,6 +1036,33 @@ def test_lost_leg_with_the_stop_controls_own_stop_also_firing_exits_10(sim, monk
     assert sim.link.release_calls >= 1 and sim.link.close_calls == 1 and stop.close_calls == 1
 
 
+# Off-graph fix Task 7 (QB213, QB215; OFFG-R6 m3): a character read still, off the map, ends the run with exit 10
+
+def test_a_still_off_map_read_exits_10_with_the_walkers_line_only(sim, capsys):
+    """The pre-check read succeeds, then the character is read at (500, 500) for ever: the first leg stands 0.5 s
+    (QB213), finds no platform within 6 px and ends `off_map`. Exit 10, `stop.json` reason `off_map`, no key, and the
+    walker's one line on stderr is the only console line about it (Hong's QB215, "Console line only"); the session's
+    own `stopped: off_map` is the line every stop.json write prints, on stdout. The 60 s watchdog (B19-D1) never
+    fires and nothing triggers the stop control."""
+    sim.frame = np.zeros((4, 6, 3), np.uint8)  # minimap.png can be written, so the step log starts (no other line)
+    sim.positions = LostAfter(sim.positions, OFF_GRAPH, reads=1)  # main's pre-check read succeeds
+    assert sim.main("--laps", "1") == 10
+    out, err = capsys.readouterr()
+    assert err.splitlines() == ["the character is standing at (500, 500), more than 6 px from any platform of the "
+                                "map; ending the run"]
+    assert "stopped: off_map" in out.splitlines()
+    legs = _lines(sim.out / "legs.jsonl")
+    assert [leg["outcome"] for leg in legs] == ["off_map"] and legs[0]["moves"] == []
+    stop = _json(sim.out / "stop.json")
+    assert stop["reason"] == "off_map" and stop["trigger_source"] is None and stop["trigger_ns"] is None
+    steps = _lines(sim.out / "steps.jsonl")
+    assert [ev["outcome"] for ev in steps if ev.get("ev") == "leg_end"] == ["off_map"]
+    assert steps[-1]["ev"] == "end" and steps[-1]["reason"] == "off_map"
+    assert sim.stops[0].triggers == []
+    assert sim.link.plays == 0
+    assert sim.link.release_calls >= 1 and sim.link.close_calls == 1 and sim.stops[0].close_calls == 1
+
+
 # B19-R M2: a seed numpy rejects
 
 def test_negative_seed_exits_2_before_capture(sim, capsys):

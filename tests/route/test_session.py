@@ -533,6 +533,25 @@ def test_exit_codes(env, monkeypatch, tmp_path, case):
     assert _no_run_thread_left()
 
 
+def test_off_map_run_exits_10(env, monkeypatch):
+    """Off-graph fix Task 7 (QB213, QB215 "Console line only"): a walker that ends `off_map` makes the walk exit 10
+    (the character was lost), `stop.json` reason `off_map` and `ended` text `off_map/`. The walker's own line is the
+    console line: the session adds no error line of its own, only the `stopped: off_map` line every stop.json write
+    gets (the run's last line)."""
+    env.lines = []
+    monkeypatch.setattr(RouteWalker, "run", lambda self: Success(RunSummary(0, 3, "off_map")))
+    assert env.run() == 10
+    ended = _ended(env.events)
+    assert ended.code == 10 and ended.text == "off_map/"
+    stop_json = _json(env.out / "stop.json")
+    assert stop_json["reason"] == "off_map"
+    assert stop_json["trigger_source"] is None and stop_json["trigger_ns"] is None  # no stop control trigger
+    assert [source for stop in env.stops for source in stop.triggers] == []
+    assert [text for text, error in env.lines if error] == []
+    assert env.lines[-1] == ("stopped: off_map", False)
+    assert _no_run_thread_left()
+
+
 def test_recording_always_on(env):
     assert env.run() == 0
     assert len(_lines(env.out / "frames" / "index.jsonl")) == 1

@@ -15,6 +15,9 @@ Rulings this builds on top of the plan text:
   `walker.stop_now()` itself on the walker thread, so no move follows the lost leg (`trigger` only sets an event,
   runtime.py:90-98). `stop.json` reason is that source and the exit is 10, also when the lost leg was the last leg of
   the last lap. A leg that sent moves and then timed out does not end the run (the walker goes on to the next leg).
+- Off the map (QB213, QB215): a walker that ends `off_map` (the character stood still, 0.5 s, more than 6 px from every
+  platform of the map) makes `stop.json` reason `off_map` and exit 10. The walker has already printed its one line, so
+  the session adds none; the Route tab keeps its exit-10 text.
 - B19-D2 (re-run into a used --out): the CLI refuses with exit 2, before capture starts or any file is written, when
   `--out` is an existing file or holds any of `OUT_FILES`'s eight names (`check_out`).
 
@@ -578,6 +581,9 @@ class RunSession:
             elif summary is not None and summary.reason == "link_down":
                 stop_payload = {"reason": "link_down"}
                 code = 1
+            elif summary is not None and summary.reason == "off_map":  # QB213: stood more than 6 px from every platform
+                stop_payload = {"reason": "off_map"}
+                code = 10  # the walker's own log line is the console line (QB215); this adds none
             elif summary is not None and stop.trigger_source in _LOST_SOURCES:
                 stop_payload = {"reason": stop.trigger_source}
                 code = 10

@@ -60,6 +60,37 @@ def test_report_counts_the_knockbacks():
     assert (shoved.knockbacks, shoved.moves) == (5, 20)  # seeded: five shoves in a lap of 20 moves
 
 
+def test_off_map_is_counted(tmp_path):
+    """Off-graph fix Task 7: a run whose character stands 10 px under every line of the map (the world's floor is
+    lower than the map says) ends its first leg `off_map` (QB213: more than 6 px from every platform). The report
+    counts that leg, and `judge` fails `laps` and says so (QB215)."""
+    nodes = ["# minimap_size=162,82",
+             "nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge"]
+    nodes += [f'blue_node,"({x}, 50)",FALSE,FALSE,FALSE,FALSE' for x in (40, 60, 80)]
+    csv = tmp_path / "map.csv"
+    csv.write_text("\n".join(nodes) + "\n", encoding="utf-8")
+    terrain = tmp_path / "terrain.json"
+    terrain.write_text(json.dumps({"minimap_size": [162, 82], "platforms": [
+        {"name": "floor", "droppable": False, "points": [[30, 60], [100, 60]]}]}), encoding="utf-8")
+
+    result = run_sim(csv, terrain, 1, 1)
+
+    assert is_successful(result), result
+    report = result.unwrap()
+    assert report.off_map == 1
+    assert (report.laps_completed, report.legs_reached, report.timeouts, report.link_down) == (0, 0, 0, 0)
+    laps = judge(report, 0)[0]
+    assert laps.name == "laps" and not laps.ok
+    assert laps.detail.endswith("0 timed out, 0 link down, 1 off map")
+
+
+def test_runs_without_an_off_map_leg_report_none():
+    result = run_sim(CSV, REAL_GROUND_TERRAIN, 1, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
+    report = result.unwrap()
+    assert report.off_map == 0
+    assert judge(report, 0)[0].detail.endswith("0 link down, 0 off map")
+
+
 # --- 3. the flag ---------------------------------------------------------------------------------------------
 
 
