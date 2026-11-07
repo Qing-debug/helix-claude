@@ -271,7 +271,7 @@ Ways a run ends, each a `StopControl.trigger(source)` except the natural end:
 | Stop button | `button` (new) | "Ended: you pressed Stop." while connecting, or in the countdown before Hong has clicked the game. While the game has the keyboard (walking, or the countdown after he clicked it) a press on Stop is first a click on the app: the `app_focus` stop lands first (`StopControl` keeps the first trigger, `runtime.py:6`) and its text shows (H73) |
 | Minutes reached | as `walk` today (the timer) | "Ended: the time limit was reached." |
 | Laps done | none (natural end, exit 0; `stop.json` reason `max_laps`, also when a stop lands as the last lap ends) | "Ended: all laps done." |
-| Character lost (B19-D1) | `off_graph` / `no_position` | "Ended: the character was lost (exit 10)." |
+| Character lost (B19-D1) | `off_graph` / `no_position` / `off_map` | "Ended: the character was lost (exit 10)." |
 | App window closed | `window_close` (new) | none (the app closes after the cleanup) |
 | App got the keyboard while walking (section 9), a press on Stop while walking included (H73) | `app_focus` (new) | "Stopped: you clicked the app. Press Start to run again." |
 | Stop before the walk (route load, connect or countdown) | `button`, `window_close` or `app_focus`, reason `cancelled` (5.6) | "Ended: cancelled before the walk (you pressed Stop)." (`app_focus`: "Stopped: you clicked the app. Press Start to run again."; a press on Stop after he clicked the game shows it too, H73) |
