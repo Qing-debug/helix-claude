@@ -19,7 +19,7 @@ from returns.pipeline import is_successful
 
 from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
-from src.route.locate import attach
+from src.route.locate import attach, attach_standing
 from src.route.params import MovementParams
 from src.route.position import foot_from_dot
 from src.route.route_graph import RouteGraph
@@ -132,3 +132,39 @@ def test_shift_keeps_the_good_reads(rg, runs):
         after = attach(rg, foot_from_dot(_dot(event)))
         if is_successful(after):
             assert after.unwrap().platform == attach(rg, _dot(event)).unwrap().platform, (name, i, event)
+
+
+# --- 3. the loose attach on the same polls (Task 5) --------------------------------------------------------------
+
+
+def test_loose_attach_on_the_no_plan_reads(rg, runs):
+    """What `attach_standing` (6 px) does with the polls that `attach` (3 px) places thinly or not at all."""
+    foots = [(name, i, foot_from_dot(_dot(event))) for name, i, event in _reads(runs, "no_plan")]
+    placed = [pos for _, _, pos in foots if _attaches(rg, pos)]
+    assert len(placed) == 1224
+    assert all(is_successful(attach_standing(rg, pos)) for pos in placed)  # within 3 px implies within 6
+
+    # 330 polls (the character standing on the top ramp at x 71..75) have no upward spare under the strict rule: one
+    # pixel higher and they would be off the graph. The loose attach keeps them with 3 px to spare.
+    thin = [pos for pos in placed if not _attaches(rg, (pos[0], pos[1] - 1))]
+    assert len(thin) == 330
+    assert all(is_successful(attach_standing(rg, (x, y - 3))) for x, y in thin)
+
+    # the 5 mid-air reads would snap loosely too (3.1 and 3.7 px above the ramp line): what holds them off is that none
+    # is read still for `standing_s` (Task 6's timer): the longest run of one position is three polls, 103 ms.
+    failing = {(name, i): pos for name, i, pos in foots if not _attaches(rg, pos)}
+    assert len(failing) == 5
+    assert all(is_successful(attach_standing(rg, pos)) for pos in failing.values())
+    longest_ms = 0
+    for name, events in runs.items():
+        last = first_ms = None
+        for i, (t_ms, kind, x, y) in enumerate(events):
+            if kind != "no_plan":
+                last = None  # any other event, a `read_failed` included, ends a run
+                continue
+            pos = foot_from_dot((x, y))
+            if pos != last:
+                last, first_ms = pos, t_ms
+            if (name, i) in failing:
+                longest_ms = max(longest_ms, t_ms - first_ms)
+    assert longest_ms == 103 < MovementParams().standing_s * 1000
