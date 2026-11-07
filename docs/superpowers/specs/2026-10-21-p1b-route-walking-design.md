@@ -135,7 +135,7 @@ PASS noise: 1078/18660 moves were no-ops (5.78%, need >= 5%)
 PASS abilities: 994 drops, 1110 teleports down (need both > 0)
 ```
 
-Note, 2026-11-07, on the off-graph fix (H84-H86): the laps line above ends with `, 0 off map` since the fix gave the report that count. The same command run on the fix's last commit gives exit 0, 7001 of 7001 legs reached, 18093 moves, 1054 silent no-ops (5.83%), 1003 drops, 1121 teleports down, 11945.1853 simulated seconds, both known cases 1000 of 1000, 0 off map and 6 of 6 checks PASS. Those figures differ from the block above because the walk speed became 12.5 px/s (H81) among other changes after it was recorded; the off-graph fix leaves them as they were before it (18093 moves and 1054 no-ops at `1dbb2b4`).
+Note, 2026-11-07, on the off-graph fix (H84-H86): the laps line above was edited in place to end with `, 0 off map`: the 2026-10-26 run printed no such count, the fix added it to the report. The same command run on the fix's last commit gives exit 0, 7001 of 7001 legs reached, 18093 moves, 1054 silent no-ops (5.83%), 1003 drops, 1121 teleports down, 11945.1853 simulated seconds, both known cases 1000 of 1000, 0 off map and 6 of 6 checks PASS. Those figures differ from the block above because the walk speed became 12.5 px/s (H81) among other changes after it was recorded; the off-graph fix leaves them as they were before it (18093 moves and 1054 no-ops at `1dbb2b4`).
 
 **Detection run** (plan task B18, 2026-10-26; exit 0):
 
