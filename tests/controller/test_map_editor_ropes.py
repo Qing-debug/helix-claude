@@ -1,10 +1,12 @@
-"""Ropes in the map editor, part 3a (H91, H94; plan Task 3a): the rope state and its dirty baseline, the rope file's load
-and save, the keep-out (the click refusal, the red rings, the Save block) and the drawing.
+"""Ropes in the map editor, parts 3a and 3b (H91, H92, H94; plan Task 3). Part 3a: the rope state and its dirty baseline,
+the rope file's load and save, the keep-out (the click refusal, the red rings, the Save block) and the drawing. Part 3b
+(at the end): the Ropes panel (Find ropes, Add rope, select, edit, delete) and the Delete key.
 
 These build a real `MapEditor` on a real Tk root (withdrawn, never shown, no mainloop), so they are skipped where Tk cannot
 open a display. `tk.Misc.after` only records, so nothing is re-run on its own (part 3b steps its frame collection by calling
 the recorded callbacks by hand); `messagebox` and `filedialog` are patched. Part 3a changes `state.ropes` directly and then
 follows the contract's one rule: `_recomputeDirty()`, then `_renderNodes()` (`set_ropes`)."""
+import json
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -18,6 +20,7 @@ import src.gui.map_editor as map_editor
 from src.controller.controller import Controller
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.rope_file import RopeFile, RopeMark, read_ropes, rope_file_for, write_ropes
+from src.controller.rope_finder import find_ropes
 
 FRAME_H, FRAME_W = 82, 162  # Fossil Foundry 2's minimap, native px
 BACKGROUND = (38, 66, 95)
@@ -25,6 +28,9 @@ NOT_LOADED_TEXT = "The map's nodes were loaded without its ropes. Mark the ropes
 DAMAGED_QUESTION = "This map's rope file is damaged and no ropes are marked. Save with no ropes and remove the rope file?"
 ROPE_107 = RopeMark(107, 43, 61)
 ROPE_46 = RopeMark(46, 28, 46)
+ROPE_COLOUR = (38, 58, 73)
+PLATFORM_COLOUR = (238, 255, 255)
+PLAIN = object()  # make(frame=PLAIN): the plain background frame; make(None): no minimap frame yet
 
 
 def _open_root():
@@ -67,10 +73,10 @@ def make_editor(monkeypatch):
     monkeypatch.setattr(map_editor.filedialog, "askopenfilename", lambda **kw: dialogs.open_path)
     monkeypatch.setattr(map_editor.filedialog, "asksaveasfilename", lambda **kw: dialogs.save_path)
 
-    def make():
+    def make(frame=PLAIN):
         shared = SimpleNamespace(
             minimap_frame_lock=threading.Lock(),
-            minimap_frame=np.full((FRAME_H, FRAME_W, 3), BACKGROUND, dtype=np.uint8),
+            minimap_frame=np.full((FRAME_H, FRAME_W, 3), BACKGROUND, dtype=np.uint8) if frame is PLAIN else frame,
         )
         if not roots:
             roots.append(_open_root())
@@ -369,10 +375,11 @@ def test_saving_with_no_ropes_asks_and_no_leaves_the_damaged_file(make_editor, t
     rig.dialogs.yes_answer = False
     click(rig.editor, 90, 20)  # a change the CSV must carry
     assert rig.editor.state.dirty
+    reader_message = read_ropes(rope_path).failure()
 
     rig.editor._save()
 
-    assert rig.dialogs.questions == [("Rope file damaged", DAMAGED_QUESTION)]
+    assert rig.dialogs.questions == [("Rope file damaged", f"{DAMAGED_QUESTION}\n\n{reader_message}")]
     assert rope_path.read_bytes() == b"this is not json"  # No: the file stays (the walk still refuses it)
     assert len(read_editor_nodes(str(csv_path)).unwrap()[0]) == 2  # but the map is saved
     assert not rig.editor.state.dirty and not rig.editor.state.rope_file_read
@@ -387,10 +394,11 @@ def test_saving_with_no_ropes_asks_and_yes_removes_only_that_rope_file(make_edit
     load(rig, csv_path)
     rig.dialogs.yes_answer = True
     click(rig.editor, 90, 20)
+    reader_message = read_ropes(rope_path).failure()
 
     rig.editor._save()
 
-    assert rig.dialogs.questions == [("Rope file damaged", DAMAGED_QUESTION)]
+    assert rig.dialogs.questions == [("Rope file damaged", f"{DAMAGED_QUESTION}\n\n{reader_message}")]
     assert not rope_path.exists()  # Yes: the map now works with no ropes
     assert (tmp_path / "other.ropes.json").exists() and (tmp_path / "other.csv").exists()
     assert len(read_editor_nodes(str(csv_path)).unwrap()[0]) == 2
@@ -429,3 +437,382 @@ def test_save_as_elsewhere_asks_nothing_and_leaves_the_damaged_file(make_editor,
     assert rig.dialogs.questions == []
     assert (tmp_path / "copy.csv").exists() and not (tmp_path / "copy.ropes.json").exists()
     assert rope_path.read_bytes() == b"this is not json"
+
+
+def test_the_damaged_question_says_why_the_reader_failed(make_editor, tmp_path):
+    # ROPE152-R3a M1: a rope file from a newer Helix is not "damaged", so the question shows the reader's own message
+    csv_path = write_map(tmp_path / "m.csv")
+    rope_path = rope_file_for(csv_path)
+    rope_path.write_text(json.dumps({"format": "helix-ropes", "version": 2, "ropes": []}), encoding="utf-8")
+    rig = make_editor()
+    load(rig, csv_path)
+    rig.dialogs.yes_answer = False
+    click(rig.editor, 90, 20)
+
+    rig.editor._save()
+
+    (title, message), = rig.dialogs.questions
+    assert title == "Rope file damaged"
+    assert message.startswith(DAMAGED_QUESTION + "\n\n") and message.endswith(read_ropes(rope_path).failure())
+    assert "made by a newer Helix" in message and "update Helix" in message
+    assert rope_path.exists()
+
+
+def test_a_failed_csv_write_after_yes_leaves_the_rope_file(make_editor, tmp_path, monkeypatch):
+    csv_path, rope_path = damaged_map(tmp_path)
+    rig = make_editor()
+    load(rig, csv_path)
+    rig.dialogs.yes_answer = True
+    click(rig.editor, 90, 20)
+    monkeypatch.setattr(map_editor, "write_editor_nodes", lambda *args, **kwargs: Failure("disk full"))
+
+    rig.editor._save()
+
+    assert len(rig.dialogs.questions) == 1  # asked before anything was written ...
+    assert rope_path.read_bytes() == b"this is not json"  # ... and Yes removes nothing when the CSV was not written
+    title, message = rig.dialogs.errors[-1]
+    assert title == "Save failed" and "disk full" in message
+    assert rig.editor.state.dirty and rig.dialogs.infos == []
+
+
+def test_a_failed_rope_file_delete_says_so_and_keeps_the_title_dirty(make_editor, tmp_path, monkeypatch):
+    csv_path, rope_path = damaged_map(tmp_path)
+    rig = make_editor()
+    load(rig, csv_path)
+    rig.dialogs.yes_answer = True
+    click(rig.editor, 90, 20)
+
+    def refuse(self, missing_ok=False):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", refuse)
+        rig.editor._save()
+
+    assert len(read_editor_nodes(str(csv_path)).unwrap()[0]) == 2  # the CSV is already written
+    assert rope_path.read_bytes() == b"this is not json"
+    title, message = rig.dialogs.errors[-1]
+    assert title == "Save failed" and str(rope_path) in message and "Permission denied" in message
+    assert rig.editor.state.dirty and rig.editor.window.title().startswith("* ")
+    assert rig.dialogs.infos == [] and not rig.editor.state.rope_file_read
+
+
+# -- part 3b: the Ropes panel (H92, D3) -------------------------------------------------------------------------------------
+
+def rope_frame(*, rope_46=True, rope_107=True) -> np.ndarray:
+    """A synthetic Fossil Foundry 2 minimap: platform rows 31 and 49 (left), 46 (right), 64 (floor); rope 46 runs between
+    rows 31 and 49 and rope 107 between rows 46 and 64, so the finder gives RopeMark(46, 28, 46) and RopeMark(107, 43, 61)."""
+    frame = np.full((FRAME_H, FRAME_W, 3), BACKGROUND, dtype=np.uint8)
+    for row, x0, x1 in ((31, 20, 80), (49, 20, 80), (46, 85, 140), (64, 0, FRAME_W)):
+        frame[row, x0:x1] = PLATFORM_COLOUR
+    if rope_46:
+        frame[32:49, 46] = ROPE_COLOUR
+    if rope_107:
+        frame[47:64, 107] = ROPE_COLOUR
+    return frame
+
+
+def run_scan(rig) -> int:
+    """Run the recorded Find-ropes ticks by hand, one at a time, until none is pending. Returns how many ran."""
+    ran = 0
+    while True:
+        pending = [item for item in rig.scheduled if item[1] == rig.editor._onRopeScanTick]
+        if not pending:
+            return ran
+        rig.scheduled.remove(pending[0])
+        assert pending[0][0] == map_editor.ROPE_SCAN_EVERY_MS
+        pending[0][1]()
+        ran += 1
+
+
+def status(editor) -> str:
+    return editor._status_label.cget("text")
+
+
+def rope_lines(editor) -> int:
+    return len(editor.minimap_canvas.find_withtag(map_editor.CANVAS_TAG_ROPE))
+
+
+def box_values(editor) -> list:
+    return [editor._rope_vars[name].get() for name in ("x", "top_y", "bottom_y")]
+
+
+def box_states(editor) -> set:
+    return {str(box.cget("state")) for box in editor._rope_boxes.values()}
+
+
+def type_in_box(editor, name, text):
+    """What the user does in a number box: type a value and press Return."""
+    editor._rope_vars[name].set(text)
+    editor._applyRopeBox(name)
+
+
+def press_delete(editor):
+    """The window's <Delete> handler as Tk calls it: with event.widget set to the widget that has the focus in the editor's
+    window (the canvas after a click on the map, a number box after a click in it). HANDOFF NOTE (ROPE153): a real key
+    event (`focus_lastfor().event_generate("<Delete>")`) is not used because Tk's display-wide focus record leaks between
+    the roots of different tests and the event then goes nowhere (seen: passes alone, fails inside tests/controller).
+    So the binding itself (`window.bind("<Delete>")` -> `_onDeleteKey`) is not covered by a test yet."""
+    editor.window.update()
+    editor._onDeleteKey(SimpleNamespace(widget=editor.window.focus_lastfor()))
+
+
+def test_find_ropes_adds_the_ropes_in_the_frames(make_editor):
+    rig = make_editor(rope_frame())
+    editor = rig.editor
+    assert map_editor.ROPE_SCAN_FRAMES == 30 and map_editor.ROPE_SCAN_EVERY_MS == 100
+
+    editor._findRopes()
+    assert status(editor) == "Finding ropes: keep the character moving for 3 seconds..."
+    editor._findRopes()  # a press while collecting does nothing
+    assert len([1 for item in rig.scheduled if item[1] == editor._onRopeScanTick]) == 1
+
+    assert run_scan(rig) == 30
+    assert editor.state.ropes == [ROPE_46, ROPE_107]
+    assert status(editor) == "Found 2 ropes"
+    assert editor.state.dirty and rope_lines(editor) == 2
+
+    editor._findRopes()  # a second search finds the same ropes and adds nothing
+    run_scan(rig)
+    assert editor.state.ropes == [ROPE_46, ROPE_107] and rope_lines(editor) == 2
+
+    # a found rope within 2 px of a mark is skipped; one farther away is added
+    set_ropes(editor, [RopeMark(108, 43, 61)])
+    editor._findRopes()
+    run_scan(rig)
+    assert editor.state.ropes == [RopeMark(108, 43, 61), ROPE_46]
+
+    one = make_editor(rope_frame(rope_46=False))
+    one.editor._findRopes()
+    run_scan(one)
+    assert status(one.editor) == "Found 1 rope" and one.editor.state.ropes == [ROPE_107]
+    none = make_editor()
+    none.editor._findRopes()
+    run_scan(none)
+    assert status(none.editor) == "Found no rope" and none.editor.state.ropes == [] and not none.editor.state.dirty
+
+
+def test_find_ropes_with_no_frames_says_why(make_editor):
+    rig = make_editor(rope_frame())
+    rig.editor._findRopes()
+    rig.editor.sharedInfo.minimap_frame = None  # the vision thread lost the minimap for the whole collection
+
+    run_scan(rig)
+
+    assert "no minimap frames were collected" in status(rig.editor) and rig.editor.state.ropes == []
+
+
+class RecordingLock:
+    """Stands in for minimap_frame_lock: counts the times it was taken and says whether it is held now."""
+
+    def __init__(self):
+        self.held = False
+        self.taken = 0
+
+    def __enter__(self):
+        assert not self.held
+        self.held = True
+        self.taken += 1
+
+    def __exit__(self, *exc):
+        self.held = False
+
+
+class WhileUnlocked:
+    """Wraps a Tk object: using any of it while the lock is held fails the test."""
+
+    def __init__(self, inner, lock):
+        self._inner, self._lock = inner, lock
+
+    def __getattr__(self, name):
+        assert not self._lock.held, f"{name} was used while minimap_frame_lock was held"
+        return getattr(self._inner, name)
+
+
+def test_find_ropes_holds_the_lock_only_to_copy(make_editor):
+    rig = make_editor(rope_frame())
+    editor = rig.editor
+    lock = RecordingLock()
+    editor.sharedInfo.minimap_frame_lock = lock
+    editor.window = WhileUnlocked(editor.window, lock)  # after, winfo_exists, title: no Tk call under the lock
+    editor.minimap_canvas = WhileUnlocked(editor.minimap_canvas, lock)
+    editor._status_label = WhileUnlocked(editor._status_label, lock)
+
+    editor._findRopes()
+    assert run_scan(rig) == 30
+
+    assert lock.taken == 30 and not lock.held
+    assert editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+def test_find_ropes_before_the_minimap(make_editor):
+    rig = make_editor(None)  # no minimap frame yet, so no canvas
+    editor = rig.editor
+    assert editor.minimap_canvas is None
+    scheduled = list(rig.scheduled)
+
+    editor._findRopes()
+
+    assert status(editor) == "Minimap not found yet"
+    assert rig.scheduled == scheduled and editor.state.ropes == []
+    editor._startAddRope()  # nothing to click on either
+    assert status(editor) == "Minimap not found yet" and not editor.state.add_rope_armed
+
+
+def test_add_rope_clicks_are_where_nodes_sit(make_editor):
+    rig = make_editor(rope_frame(rope_46=False))
+    editor = rig.editor
+
+    editor._startAddRope()
+    assert status(editor) == "Add rope: click the rope's top end, where a node on the platform above would sit."
+    editor._onCanvasClick(SimpleNamespace(x=215, y=87))  # screen px: native (215 // 2, 87 // 2) = (107, 43), as a node click
+    assert status(editor) == "Now click its bottom end, where a node on the platform below would sit."
+    assert editor.state.ropes == [] and editor.state.nodes == {}
+    click(editor, 107, 61)
+
+    assert editor.state.ropes == [RopeMark(107, 43, 61)]
+    assert editor.state.nodes == {}  # an armed Add rope places no node
+    assert editor.state.ropes == find_ropes(rope_frame(rope_46=False))  # the finder gives the same mark for the same rope
+
+
+def test_add_move_delete_rope(make_editor, tmp_path):
+    rig = make_editor()
+    editor = rig.editor
+    editor._startAddRope()
+    click(editor, 60, 50)
+    click(editor, 64, 50)  # the same height: refused, the first end is kept
+    assert editor.state.ropes == [] and editor.state.adding_rope == (60, 50) and status(editor).startswith("Not added")
+    click(editor, 64, 30)  # the second end is higher: x comes from the first click, the ends are ordered
+    assert editor.state.ropes == [RopeMark(60, 30, 50)]
+    assert editor.state.selected_rope == 0 and editor.state.adding_rope is None and not editor.state.add_rope_armed
+    assert editor.state.dirty and rope_lines(editor) == 1
+    assert box_values(editor) == ["60", "30", "50"] and box_states(editor) == {"normal"}
+
+    type_in_box(editor, "x", "70")
+    type_in_box(editor, "top_y", "20")
+    type_in_box(editor, "bottom_y", "45")
+    assert editor.state.ropes == [RopeMark(70, 20, 45)]
+    for name, text, reason in (
+            ("top_y", "45", "Not changed: top y (45) must be less than bottom y (45)."),
+            ("bottom_y", "20", "Not changed: top y (20) must be less than bottom y (20)."),
+            ("x", "abc", "Not changed: x must be a whole number, 0 or more."),
+            ("x", "-3", "Not changed: x must be a whole number, 0 or more."),
+            ("x", "", "Not changed: x must be a whole number, 0 or more.")):
+        type_in_box(editor, name, text)
+        assert status(editor) == reason
+        assert editor.state.ropes == [RopeMark(70, 20, 45)]
+        assert editor._rope_vars[name].get() == str(getattr(editor.state.ropes[0], name))  # the box went back
+
+    editor._deleteSelectedRope()  # the panel's Delete rope
+    assert editor.state.ropes == [] and editor.state.selected_rope is None
+    assert not editor.state.dirty and rope_lines(editor) == 0  # added, moved and deleted: back to the saved state
+    assert box_values(editor) == ["", "", ""] and box_states(editor) == {"disabled"}
+
+    # moving a mark of a saved map and moving it back is clean again
+    csv_path = write_map(tmp_path / "m.csv")
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107,), (FRAME_W, FRAME_H), {}))
+    load(rig, csv_path)
+    click(editor, 107, 52)
+    type_in_box(editor, "x", "108")
+    assert editor.state.ropes == [RopeMark(108, 43, 61)] and editor.state.dirty
+    type_in_box(editor, "x", "107")
+    assert editor.state.ropes == [ROPE_107] and not editor.state.dirty
+
+
+def test_click_on_a_node_next_to_a_rope_selects_the_node(make_editor, tmp_path):
+    rig = make_editor()
+    editor = rig.editor
+    load(rig, write_map(tmp_path / "m.csv", [(105, 60), (48, 45), (20, 20)]))
+    set_ropes(editor, [ROPE_107, ROPE_46])  # (105, 60) and (48, 45) are 2 px from a rope's line
+
+    for node_id, pos in ((1, (105, 60)), (2, (48, 45))):
+        click(editor, *pos)
+        assert editor.state.selected_id == node_id and editor.state.selected_rope is None
+        editor._deleteSelected()
+        assert node_id not in editor.state.nodes
+    assert editor.state.ropes == [ROPE_107, ROPE_46]  # the ropes were not touched
+
+    click(editor, 107, 52)  # on the line, no node within 3 px
+    assert editor.state.selected_rope == 0 and editor.state.selected_id is None
+    assert box_values(editor) == ["107", "43", "61"]
+    click(editor, 20, 20)  # selecting a node clears the rope selection
+    assert editor.state.selected_id == 3 and editor.state.selected_rope is None
+    assert box_states(editor) == {"disabled"}
+    click(editor, 44, 40)  # 2 px from rope 46's line
+    assert editor.state.selected_rope == 1 and editor.state.selected_id is None
+    click(editor, 90, 10)  # far from both: a new node, and the rope is no longer selected
+    assert editor.state.selected_rope is None and len(editor.state.nodes) == 2
+
+
+def test_delete_key_deletes_the_selected_rope(make_editor, tmp_path):
+    csv_path = write_map(tmp_path / "m.csv", [(20, 20)])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107, ROPE_46), (FRAME_W, FRAME_H), {}))
+    rig = make_editor()
+    editor = rig.editor
+    load(rig, csv_path)
+    assert not editor.state.dirty
+
+    click(editor, 107, 52)
+    press_delete(editor)
+
+    assert editor.state.ropes == [ROPE_46] and editor.state.selected_rope is None
+    assert editor.state.dirty and len(editor.state.nodes) == 1 and rope_lines(editor) == 1
+
+    by_key = (list(editor.state.ropes), editor.state.selected_rope, editor.state.dirty)
+    load(rig, csv_path)  # the same again with the panel's Delete rope instead of the key (the box asks, the answer is Discard)
+    click(editor, 107, 52)
+    editor._deleteSelectedRope()
+    assert (editor.state.ropes, editor.state.selected_rope, editor.state.dirty) == by_key
+
+    click(editor, 20, 20)  # a node: Delete removes the node, as today, and leaves the ropes
+    assert editor.state.selected_id == 1
+    press_delete(editor)
+    assert editor.state.nodes == {} and editor.state.ropes == [ROPE_46]
+
+    press_delete(editor)  # nothing selected: nothing changes
+    assert editor.state.nodes == {} and editor.state.ropes == [ROPE_46]
+
+
+def test_delete_in_a_number_box_edits_the_text_and_leaves_the_ropes(make_editor):
+    # ROPE150RR R-I2: the <Delete> binding is on the window, and Tk runs it after a box's own binding
+    rig = make_editor()
+    editor = rig.editor
+    set_ropes(editor, [ROPE_107, ROPE_46])
+    click(editor, 107, 52)
+    assert editor.state.selected_rope == 0
+
+    # The window's handler as Tk calls it for a Delete typed in a number box: event.widget is the box (a Spinbox).
+    # HANDOFF NOTE (ROPE153): a real key event on the focused box, `box.focus_set(); press_delete(editor)`, edits the text
+    # ("107" -> "07") and leaves the ropes when this test runs alone, but not after the Delete-key test in the same
+    # process (Tk's display-wide focus record leaks between roots); that half is not asserted until it is made robust.
+    for name in ("x", "top_y", "bottom_y"):
+        editor._onDeleteKey(SimpleNamespace(widget=editor._rope_boxes[name]))
+    assert editor.state.ropes == [ROPE_107, ROPE_46] and editor.state.selected_rope == 0
+    assert rope_lines(editor) == 2
+
+    click(editor, 107, 52)  # a click on the map gives the canvas the keyboard back
+    press_delete(editor)
+    assert editor.state.ropes == [ROPE_46] and editor.state.selected_rope is None
+
+
+def test_load_clears_an_armed_add_rope(make_editor, tmp_path):
+    rig = make_editor()
+    editor = rig.editor
+    editor._startAddRope()
+    click(editor, 60, 50)
+    assert editor.state.adding_rope == (60, 50) and editor.state.add_rope_armed
+
+    load(rig, write_map(tmp_path / "m.csv", [(20, 20)]))
+    assert editor.state.adding_rope is None and not editor.state.add_rope_armed
+
+    click(editor, 90, 20)  # a node as usual, not the second end of a rope
+    assert len(editor.state.nodes) == 2 and editor.state.ropes == []
+    set_ropes(editor, [ROPE_107])
+    click(editor, 101, 43)  # and the keep-out still refuses
+    assert status(editor).startswith("Not placed:") and len(editor.state.nodes) == 2
+
+    editor._startAddRope()  # armed with no click yet is cleared too
+    load(rig, tmp_path / "m.csv")
+    assert not editor.state.add_rope_armed
+    click(editor, 90, 40)
+    assert editor.state.ropes == [] and len(editor.state.nodes) == 2

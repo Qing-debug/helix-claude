@@ -12,14 +12,17 @@ import tkinter as tk
 import tkinter.filedialog as filedialog
 import tkinter.font as tkfont
 import tkinter.messagebox as messagebox
-from dataclasses import dataclass, field
+import tkinter.ttk as ttk
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import numpy as np
 from PIL import Image, ImageTk
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
 from src.controller.rope_file import RopeFile, RopeMark, free_x, near_rope_end, read_ropes, rope_file_for, write_ropes
+from src.controller.rope_finder import SAME_ROPE_PX, find_ropes, median_frame
 from returns.pipeline import is_successful
 
 
@@ -65,6 +68,17 @@ ROPE_FILE_DAMAGED_QUESTION = ("This map's rope file is damaged and no ropes are 
 ROPE_FILE_NOT_LOADED_TEXT = ("The map's nodes were loaded without its ropes. "
                              "Mark the ropes again and save to replace the file.")
 
+# The Ropes panel (H92, plan Task 3b, D3).
+ROPE_SCAN_FRAMES = 30          # Find ropes collects this many frames ...
+ROPE_SCAN_EVERY_MS = 100       # ... one every this many ms (3 s in all)
+ROPE_SELECT_PX = 2             # native px; a click this close to a rope's line selects the rope
+ROPE_BOX_MAX = 999             # the number boxes' arrow limit (typed values are checked, not clamped)
+FIND_ROPES_TEXT = "Finding ropes: keep the character moving for 3 seconds..."
+ADD_ROPE_TOP_TEXT = "Add rope: click the rope's top end, where a node on the platform above would sit."
+ADD_ROPE_BOTTOM_TEXT = "Now click its bottom end, where a node on the platform below would sit."
+MINIMAP_NOT_FOUND_TEXT = "Minimap not found yet"
+ROPE_BOX_LABELS = {"x": "x", "top_y": "top y", "bottom_y": "bottom y"}
+
 
 @dataclass
 class MapEditorState:
@@ -84,6 +98,11 @@ class MapEditorState:
     # A rope file was read at load without error, or this editor has written one since. A map with no rope file beside
     # it leaves this false, so saving a map without ropes writes no rope file.
     rope_file_read: bool = False
+    # "Add rope" (Task 3b): `add_rope_armed` is set by the button and cleared by the second click or a load;
+    # `adding_rope` is the first click (the top end), None until it is made. `Optional[Tuple[int, int]]` has no value
+    # for "armed, no click yet", hence the second field.
+    adding_rope: Optional[Tuple[int, int]] = None
+    add_rope_armed: bool = False
 
 
 class MapEditor:
@@ -105,6 +124,10 @@ class MapEditor:
         self._saved_nodes: Dict[int, EditorNode] = {}
         self._saved_rotation: List[int] = []
         self._saved_ropes: List[RopeMark] = []
+
+        # Find ropes (Task 3b): the frames collected so far, None while no collection runs; the ticks done.
+        self._rope_scan_frames: Optional[List[np.ndarray]] = None
+        self._rope_scan_ticks = 0
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -312,10 +335,46 @@ class MapEditor:
             command=self._renderNodes,
         ).grid(row=4, column=0, columnspan=3, sticky='w', padx=PANEL_PADX)
 
+        # Ropes section (H92, D3): Find ropes, Add rope, and for the selected rope its three number boxes and Delete rope.
+        # Its own child frame, like the File section below.
+        ropes_section = tk.Frame(self._panel_frame, bg='lightblue')
+        ropes_section.grid(row=5, column=0, columnspan=3, sticky='ew', padx=PANEL_PADX, pady=(12, 0))
+        tk.Label(
+            ropes_section, text="Ropes",
+            bg='lightblue', fg=SECTION_HEADER_FG, font=self._font_section,
+        ).pack(anchor='w', pady=(0, 4))
+        rope_buttons = tk.Frame(ropes_section, bg='lightblue')
+        rope_buttons.pack(anchor='w')
+        tk.Button(
+            rope_buttons, text="Find ropes", font=self._font_body, command=self._findRopes,
+        ).pack(side=tk.LEFT, padx=(0, 8), pady=2)
+        tk.Button(
+            rope_buttons, text="Add rope", font=self._font_body, command=self._startAddRope,
+        ).pack(side=tk.LEFT, pady=2)
+        rope_boxes = tk.Frame(ropes_section, bg='lightblue')
+        rope_boxes.pack(anchor='w', pady=(4, 0))
+        self._rope_vars = {name: tk.StringVar() for name in ROPE_BOX_LABELS}
+        self._rope_boxes = {}
+        for name, label in ROPE_BOX_LABELS.items():
+            tk.Label(rope_boxes, text=label, bg='lightblue', font=self._font_body).pack(side=tk.LEFT, padx=(8, 2))
+            box = tk.Spinbox(
+                rope_boxes, from_=0, to=ROPE_BOX_MAX, width=5, font=self._font_body,
+                textvariable=self._rope_vars[name], command=lambda n=name: self._applyRopeBox(n),
+            )
+            box.bind('<Return>', lambda e, n=name: self._applyRopeBox(n))
+            box.bind('<FocusOut>', lambda e, n=name: self._applyRopeBox(n))
+            box.pack(side=tk.LEFT)
+            self._rope_boxes[name] = box
+        self._delete_rope_button = tk.Button(
+            rope_boxes, text="Delete rope", font=self._font_body, command=self._deleteSelectedRope,
+        )
+        self._delete_rope_button.pack(side=tk.LEFT, padx=(12, 0))
+        self._refreshRopeBoxes()  # no rope selected yet: the boxes are empty and disabled
+
         # File section is its own child frame so the buttons can pack(fill=tk.X) inside
         # without mixing geometry managers with the panel grid above.
         file_section = tk.Frame(self._panel_frame, bg='lightblue')
-        file_section.grid(row=5, column=0, columnspan=3, sticky='ew', padx=PANEL_PADX, pady=(12, 0))
+        file_section.grid(row=6, column=0, columnspan=3, sticky='ew', padx=PANEL_PADX, pady=(12, 0))
         tk.Label(
             file_section, text="File",
             bg='lightblue', fg=SECTION_HEADER_FG, font=self._font_section,
@@ -357,7 +416,7 @@ class MapEditor:
         )
         self.minimap_canvas.pack(padx=8, pady=8)  # default side=TOP centers horizontally in the frame
         self.minimap_canvas.bind("<Button-1>", self._onCanvasClick)
-        self.window.bind("<Delete>", lambda e: self._deleteSelected())
+        self.window.bind("<Delete>", self._onDeleteKey)
         self._refreshInspector()  # start with empty inspector since no node is selected yet
         self._refreshRotation()
 
@@ -488,18 +547,31 @@ class MapEditor:
         self._status_label.config(text=text)
 
     def _onCanvasClick(self, event):
-        """Left-click on canvas: select an existing node within SELECT_RADIUS_PX, else place a new one,
-        unless that spot is inside a rope's keep-out (H91): then nothing is placed and the status says why.
+        """Left-click on canvas. With "Add rope" armed the click is a rope end (`_addRopeClick`). Otherwise: select an
+        existing node within SELECT_RADIUS_PX; else select a rope whose line is within ROPE_SELECT_PX (`_selectRopeAt`,
+        D3: node first, then rope); else place a new node, unless that spot is inside a rope's keep-out (H91): then
+        nothing is placed and the status says why.
 
         event.x/event.y are in canvas pixels (post-scale); divide by RENDER_SCALE to get
         native minimap coords for storage and hit-testing.
         """
         native_x = event.x // RENDER_SCALE
         native_y = event.y // RENDER_SCALE
+        # A click on the map gives the canvas the keyboard, so a Delete after it reaches `_onDeleteKey` and not a number
+        # box that still holds the focus (ROPE150RR R-I2). Tk's focus record inside this window only.
+        if self.minimap_canvas is not None:
+            self.minimap_canvas.focus_set()
+        if self.state.add_rope_armed:
+            self._addRopeClick(native_x, native_y)
+            return
         hit_id = self._findNodeAt(native_x, native_y)
         if hit_id is not None:
             self.state.selected_id = hit_id
+            self.state.selected_rope = None  # a node and a rope are never selected together
             self._setStatus("")
+            self._recomputeDirty()
+        elif self._selectRopeAt(native_x, native_y):
+            return
         else:
             rope = near_rope_end((native_x, native_y), self.state.ropes)
             if rope is not None:
@@ -514,6 +586,7 @@ class MapEditor:
             self._recomputeDirty()
             self._refreshRotation()
         self._refreshInspector()
+        self._refreshRopeBoxes()
         self._renderNodes()
 
     def _findNodeAt(self, x, y):
@@ -539,6 +612,7 @@ class MapEditor:
         if node.nodetype == "blue_node":
             self.state.rotation_order.append(local_id)
         self.state.selected_id = local_id
+        self.state.selected_rope = None  # a node and a rope are never selected together
 
     def _deleteSelected(self):
         sid = self.state.selected_id
@@ -552,6 +626,176 @@ class MapEditor:
         self._refreshInspector()
         self._renderNodes()
         self._refreshRotation()
+
+    # -- the Ropes panel (H92, plan Task 3b). Every change to `state.ropes` or `state.selected_rope` below ends with the
+    # contract's one rule: `_recomputeDirty()`, then `_renderNodes()`. Status texts go through `_setStatus` only.
+
+    def _onDeleteKey(self, event=None):
+        """The <Delete> key (Hong, QB235): with a rope selected it deletes that rope, as the panel's "Delete rope" does;
+        otherwise `_deleteSelected` does what it always did. The binding is on the window, so a Delete typed in a number
+        box (an Entry or Spinbox, which edits its own text first) reaches it too: it does nothing then (R-I2)."""
+        if isinstance(getattr(event, "widget", None), (tk.Entry, tk.Spinbox, ttk.Entry)):
+            return
+        if self.state.selected_rope is not None:
+            self._deleteSelectedRope()
+        else:
+            self._deleteSelected()
+
+    def _deleteSelectedRope(self):
+        index = self.state.selected_rope
+        if index is None or not 0 <= index < len(self.state.ropes):
+            return
+        del self.state.ropes[index]
+        self.state.selected_rope = None
+        self._setStatus("")
+        self._recomputeDirty()
+        self._refreshRopeBoxes()
+        self._renderNodes()
+
+    def _selectRopeAt(self, x, y) -> bool:
+        """Select the rope whose line is within ROPE_SELECT_PX of native (x, y), the nearest column first, and clear
+        the node selection. Returns False, changing nothing, when no rope is that close. Called only when no node is
+        hit (D3: node first, then rope, so a node next to a rope stays selectable)."""
+        best = None
+        for index, mark in enumerate(self.state.ropes):
+            dx = abs(x - mark.x)
+            if dx <= ROPE_SELECT_PX and mark.top_y - ROPE_SELECT_PX <= y <= mark.bottom_y + ROPE_SELECT_PX:
+                if best is None or dx < best[0]:
+                    best = (dx, index)
+        if best is None:
+            return False
+        self.state.selected_rope = best[1]
+        self.state.selected_id = None
+        self._setStatus("")
+        self._recomputeDirty()
+        self._refreshInspector()
+        self._refreshRopeBoxes()
+        self._renderNodes()
+        return True
+
+    def _refreshRopeBoxes(self):
+        """Sync the number boxes and Delete rope to the selected rope: its values, enabled; with none, empty, disabled."""
+        index = self.state.selected_rope
+        mark = self.state.ropes[index] if index is not None and 0 <= index < len(self.state.ropes) else None
+        for name, var in self._rope_vars.items():
+            var.set("" if mark is None else str(getattr(mark, name)))
+        widget_state = tk.DISABLED if mark is None else tk.NORMAL
+        for box in self._rope_boxes.values():
+            box.config(state=widget_state)
+        self._delete_rope_button.config(state=widget_state)
+
+    def _applyRopeBox(self, field_name):
+        """A number box was committed (Return, leaving the box or its arrows): move the selected rope. A value that is
+        not a whole number of 0 or more, or that would leave top y at or below bottom y, is refused with a status text and
+        the boxes go back to the rope's values (the rope file's reader would refuse such a rope)."""
+        index = self.state.selected_rope
+        if index is None or not 0 <= index < len(self.state.ropes):
+            return
+        mark = self.state.ropes[index]
+        label = ROPE_BOX_LABELS[field_name]
+        text = self._rope_vars[field_name].get().strip()
+        if not (text.isascii() and text.isdigit()):
+            self._setStatus(f"Not changed: {label} must be a whole number, 0 or more.")
+            self._refreshRopeBoxes()
+            return
+        value = int(text)
+        if value == getattr(mark, field_name):
+            self._refreshRopeBoxes()  # nothing to change; tidies the text ("0107" -> "107")
+            return
+        moved = replace(mark, **{field_name: value})
+        if moved.top_y >= moved.bottom_y:
+            self._setStatus(
+                f"Not changed: top y ({moved.top_y}) must be less than bottom y ({moved.bottom_y})."
+            )
+            self._refreshRopeBoxes()
+            return
+        self.state.ropes[index] = moved
+        self._setStatus("")
+        self._recomputeDirty()
+        self._refreshRopeBoxes()
+        self._renderNodes()
+
+    def _startAddRope(self):
+        """The Add rope button: the next two canvas clicks are the rope's top end and bottom end (D3)."""
+        if self.minimap_canvas is None:
+            self._setStatus(MINIMAP_NOT_FOUND_TEXT)
+            return
+        self.state.add_rope_armed = True
+        self.state.adding_rope = None
+        self._setStatus(ADD_ROPE_TOP_TEXT)
+
+    def _addRopeClick(self, x, y):
+        """A canvas click while "Add rope" is armed, in native minimap coordinates as a node click gives them (QB234).
+        The first click stores the top end; the second sets the bottom end and adds the rope, x from the first click.
+        Two clicks at one height add nothing and keep the first."""
+        first = self.state.adding_rope
+        if first is None:
+            self.state.adding_rope = (x, y)
+            self._setStatus(ADD_ROPE_BOTTOM_TEXT)
+            return
+        x1, y1 = first
+        if y == y1:
+            self._setStatus(f"Not added: both ends are at y {y}. Click the bottom end at a different height.")
+            return
+        mark = RopeMark(x1, min(y1, y), max(y1, y))
+        self.state.adding_rope = None
+        self.state.add_rope_armed = False
+        self.state.ropes.append(mark)
+        self.state.selected_rope = len(self.state.ropes) - 1  # selected, so the boxes can correct the clicks
+        self.state.selected_id = None
+        self._setStatus(f"Added the rope at x {mark.x}, from y {mark.top_y} to y {mark.bottom_y}.")
+        self._recomputeDirty()
+        self._refreshInspector()
+        self._refreshRopeBoxes()
+        self._renderNodes()
+
+    def _findRopes(self):
+        """The Find ropes button: collect ROPE_SCAN_FRAMES minimap frames, one every ROPE_SCAN_EVERY_MS through the
+        window's `after`, then find the ropes in their per-pixel median (`_onRopeScanTick`). Pressed while collecting,
+        it does nothing; before the minimap canvas exists it only says so."""
+        if self.minimap_canvas is None:
+            self._setStatus(MINIMAP_NOT_FOUND_TEXT)
+            return
+        if self._rope_scan_frames is not None:
+            return
+        self._rope_scan_frames = []
+        self._rope_scan_ticks = 0
+        self._setStatus(FIND_ROPES_TEXT)
+        self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick)
+
+    def _onRopeScanTick(self):
+        """One step of the collection. The frame is copied under `minimap_frame_lock` into a local and the lock is
+        released before any Tk call (the vision thread writes it; nothing here may hold it across Tk or a sleep)."""
+        frames = self._rope_scan_frames
+        if frames is None or not self.window.winfo_exists():
+            return
+        with self.sharedInfo.minimap_frame_lock:
+            frame = self.sharedInfo.minimap_frame
+            copied = None if frame is None else frame.copy()
+        if copied is not None:
+            frames.append(copied)
+        self._rope_scan_ticks += 1
+        if self._rope_scan_ticks < ROPE_SCAN_FRAMES:
+            self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick)
+            return
+        self._rope_scan_frames = None
+        self._finishRopeScan(frames)
+
+    def _finishRopeScan(self, frames):
+        median = median_frame(frames)
+        if not is_successful(median):
+            self._setStatus(median.failure())
+            return
+        found = find_ropes(median.unwrap())
+        marked = list(self.state.ropes)  # a found rope is skipped only when an earlier mark is that close, not one found now
+        added = [rope for rope in found if all(abs(rope.x - mark.x) > SAME_ROPE_PX for mark in marked)]
+        self.state.ropes.extend(added)
+        if len(found) == 0:
+            self._setStatus("Found no rope")
+        else:
+            self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s"))
+        self._recomputeDirty()
+        self._renderNodes()
 
     def _recomputeDirty(self):
         """Compare current state against the saved baseline; flip dirty + refresh title only if it changed.
@@ -726,9 +970,17 @@ class MapEditor:
         # The rope file beside the CSV (H94). With no ropes marked and a damaged rope file at the target, ask before
         # anything is written (Hong, QB236): Yes removes the file, No leaves it. Either way the CSV is written.
         rope_path = rope_file_for(Path(path))
-        rope_file_damaged = not self.state.ropes and not is_successful(read_ropes(rope_path))
+        rope_file_problem = None  # the reader's message, when the rope file beside the target cannot be read
+        if not self.state.ropes:
+            existing_ropes = read_ropes(rope_path)
+            if not is_successful(existing_ropes):
+                rope_file_problem = existing_ropes.failure()
+        rope_file_damaged = rope_file_problem is not None
+        # Hong's sentence stays as he worded it; the reader's own message follows it, so a rope file from a newer Helix or
+        # one that cannot be opened says why it failed before anyone answers Yes (ROPE152-R3a M1).
         remove_rope_file = rope_file_damaged and messagebox.askyesno(
-            "Rope file damaged", ROPE_FILE_DAMAGED_QUESTION, default=messagebox.NO, parent=self.window,
+            "Rope file damaged", f"{ROPE_FILE_DAMAGED_QUESTION}\n\n{rope_file_problem}",
+            default=messagebox.NO, parent=self.window,
         )
         result = write_editor_nodes(
             path,
@@ -895,6 +1147,8 @@ class MapEditor:
         self.state.rotation_order = list(rotation_order)
         self.state.selected_id = None
         self.state.selected_rope = None
+        self.state.adding_rope = None  # an armed "Add rope" does not survive a load (ROPE148RR N-m1)
+        self.state.add_rope_armed = False
         self.state.next_local_id = (max(self.state.nodes) + 1) if self.state.nodes else 1
         self.state.current_file = path
         if is_successful(rope_result):
@@ -908,6 +1162,7 @@ class MapEditor:
             self.state.rope_file_read = False
         self._snapshotSavedBaseline()
         self._refreshInspector()
+        self._refreshRopeBoxes()
         self._refreshRotation()
         self._renderNodes()
         if not is_successful(rope_result):
