@@ -25,8 +25,9 @@ every move is.
   the launch condition) and, on a hit, the same end, kind `"teleport"`, `injected == (ROPE_GRAB,)`, settle
   `teleport_settle_s`. With `rope_grab_p == 0` nothing is drawn, so a run without grabs is bit-identical.
 - On a rope, `walk` is `none`; `drop` climbs `rope_climb_px` down with no landing draw (x never changes), and when that
-  would reach `bottom_y` it lands on the first surface at or below its y instead and leaves the rope; `teleport` is
-  today's code from the rope's point and leaves the rope when it lands; `jump_off` moves x by `jump_off_px` and lands on
+  would reach `bottom_y`, or the first surface at or below its y (a floor a px above `bottom_y` counts), it lands on
+  that surface instead and leaves the rope; `teleport` is today's code from the rope's point and leaves the rope when it
+  lands; `jump_off` moves x by `jump_off_px` and lands on
   the first surface at or below y (from a platform: at or below y minus the side teleport's rise), with settle
   `jump_air_s` plus the fall, and leaves the rope; a `knockback` that lands leaves the rope. A move that finds no
   surface stays where it is, on the rope if it was.
@@ -291,13 +292,13 @@ class SimWorld:
         return self._shoved(effect)
 
     def _climb(self, rope: int, now_ns: int) -> MoveEffect:
-        """A drop on a rope: down `rope_climb_px`; at the mark's `bottom_y` it stands on the first surface at or below
-        its y and leaves the rope."""
+        """A drop on a rope: down `rope_climb_px`; at the mark's `bottom_y`, or when the climb reaches the first surface at
+        or below its y (a terrain whose floor sits above `bottom_y`), it stands on that surface and leaves the rope."""
         x, y = self.pos
         y_new = y + self.params.rope_climb_px
-        if y_new < self.ropes[rope].bottom_y:
-            return self._shoved(self._record("drop", (x, y_new), now_ns, self.params.drop_settle_s, ()))
         landing = self.terrain.surface_below(x, y)
+        if y_new < self.ropes[rope].bottom_y and (landing is None or y_new < landing[1]):
+            return self._shoved(self._record("drop", (x, y_new), now_ns, self.params.drop_settle_s, ()))
         if landing is None:  # no surface under the rope (cannot happen on FF2): stay on it, like a drop with no landing
             return self._shoved(self._record("drop", self.pos, now_ns, self.params.drop_settle_s, ()))
         self.on_rope = None

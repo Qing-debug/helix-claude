@@ -7,6 +7,7 @@ fixture. A character on a rope reads 1 px left of the rope's column (`ON_ROPE_DX
 
 import dataclasses
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -155,6 +156,30 @@ def test_drops_on_a_rope_climb_down(terrain_path):
     assert world.pos == pytest.approx((x, _floor(terrain, x)))     # at the bottom it stands on the floor
     assert climbs >= 2 and world.rope_grabs == 1
     assert world.pos[1] >= y
+
+
+@TERRAINS
+@pytest.mark.parametrize("rope", [0, 1], ids=["left", "right"])
+def test_the_climb_leaves_the_rope_at_the_first_surface_below_it(terrain_path, rope):
+    """ROPE153-R5 m1: the default terrain's floor at the right rope is 60.0 and `bottom_y` is 61 (left: mid-left 45.0,
+    `bottom_y` 46), so a climb that reaches that surface used to stay on the rope for one more drop."""
+    terrain = _terrain(terrain_path)
+    mark = ROPES[rope]
+    read_x = mark.x + ON_ROPE_DX
+    start = _surface(terrain, "top" if rope == 0 else "mid-right", read_x)
+    world = _world(terrain, (read_x, start), noise=_with(NoiseConfig.off(), rope_grab_depth_px=(5, 5)))
+    world.drop(T_NS)
+    assert world.on_rope == rope and world.pos[1] == mark.top_y + 5
+    y0 = world.pos[1]
+    landing = terrain.surface_below(read_x, y0)
+    assert landing is not None
+    drops = 0
+    while world.on_rope is not None:
+        world.drop(T_NS + drops)
+        drops += 1
+        assert drops < 40
+    assert world.pos == pytest.approx((read_x, landing[1]))
+    assert drops == math.ceil((landing[1] - y0) / SimParams().rope_climb_px)    # no extra drop at the surface
 
 
 # --- 2. getting off the rope ------------------------------------------------------------------------------------
