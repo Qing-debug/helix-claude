@@ -13,7 +13,7 @@ The core of the bot is moving around a map along a route. The route graph exists
    - **Teleport**: arrow + `E`, any of the four directions. Measured reach: 19 px horizontal, 23 px vertical on the minimap (`src/classes/classes.py`, user-measured), **not measured on Fossil Foundry 2**. The user's working assumption is that reach in minimap pixels is the same on every map. That's unverified. Reach is measured on FF2 in the first supervised session, which settles it. Until then, 19/23 is used, and reach stays a single number in one place (`classes.py`), so a different measurement is a one-line change. Per-map reach is built only if the measurement shows it's needed.
    - **Walk**: hold an arrow, for short distances.
    - **Drop through a platform**: `Down` + `Alt`, only where the node has `can_fall = TRUE`.
-   - Teleport-down vs drop is the bot's choice when both are possible.
+   - Going down, the bot teleports whenever a teleport reaches the target platform, and drops only where one cannot (H87, 2026-11-10; before it, teleport-down vs drop was the bot's choice when both were possible).
 3. **The bot works out the terrain from the node layout.** The user will not label slopes, steps, or walk-vs-teleport links, on this map or any other. Where nodes imply a walkable slope or a near-aligned vertical move, the bot must handle it.
 4. It recovers from small errors by itself: overshooting, landing slightly off, a move that didn't happen. It re-plans from where the character actually is.
 5. Lap time and per-leg outcomes are logged (feeds Phase 2's "good rotation" work and Feature D's session log).
@@ -137,6 +137,8 @@ PASS abilities: 994 drops, 1110 teleports down (need both > 0)
 
 Note, 2026-11-07, on the off-graph fix (H84-H86): the laps line above was edited in place to end with `, 0 off map`: the 2026-10-26 run printed no such count, the fix added it to the report. The same command run on the fix's last commit gives exit 0, 7001 of 7001 legs reached, 18093 moves, 1054 silent no-ops (5.83%), 1003 drops, 1121 teleports down, 11945.1853 simulated seconds, both known cases 1000 of 1000, 0 off map and 6 of 6 checks PASS. Those figures differ from the block above because the walk speed became 12.5 px/s (H81) among other changes after it was recorded; the off-graph fix leaves them as they were before it (18093 moves and 1054 no-ops at `1dbb2b4`).
 
+Note, 2026-11-11, on the rope fix (H87-H95): going down always teleports when a teleport reaches (H87), the walker gets off a marked rope (H88, H93), and ropes are marked per map in a rope file (H91, H92, H94). The figures of the commands above on the branch head `p1b-rope-fix`: the default smoke (`--laps 20 --seed 2 --min-single-error-legs 0`) gives 366 moves, 25 no-ops, 0 drops, 44 teleports down, 237.9668 simulated seconds, 6 of 6 checks PASS (before: 21 drops, 23 teleports down, 241.7168 s); the 1000-lap target run gives exit 0, 7001 of 7001 legs reached, 18093 moves, 1054 silent no-ops (5.83%), 0 drops, 2124 teleports down, 11755.6853 simulated seconds, both known cases 1000 of 1000, 0 off map and 6 of 6 checks PASS (before: 1003 drops, 1121 teleports down, 11945.1853 s); `--real-ground` gives 364 moves, 23 no-ops, 0 drops, 46 teleports down, 241.6268 simulated seconds, 2 knockbacks, 4 rope grabs, 2 rope moves and 0 off map, 6 of 6 PASS. Moves and no-ops of the default runs are the same as before: the drops became teleports down.
+
 **Detection run** (plan task B18, 2026-10-26; exit 0):
 
 ```
@@ -161,7 +163,7 @@ PASS
 The code is `src/route/`. Its layout, seams, frozen files, commands and traps are in `src/route/CLAUDE.md`, and the one-paragraph summary is in the root `CLAUDE.md`. Two choices a reader of the spec might not expect:
 
 - Terrain inference sits in its own layer (`RouteGraph.build`) on top of the unchanged `PathGraph` (PB-D1), so the map editor's edge preview does not show the slope and near-vertical links the bot uses.
-- When teleport-down and drop are both possible and cost within 30% of each other, the planner picks one at random (PB-D3, `ability_mix_band` in `src/route/params.py`). Both abilities are used in the simulator on the FF2 map: the simulator run above has 994 drops and 1110 teleports down.
+- When teleport-down and drop are both possible and cost within 30% of each other, the planner picks one at random (PB-D3, `ability_mix_band` in `src/route/params.py`). Both abilities are used in the simulator on the FF2 map: the simulator run above has 994 drops and 1110 teleports down. Since H87 (2026-11-10) the planner no longer picks: a down move is a teleport whenever one reaches and a drop only when none does, so no FF2 simulator run drops and `ability_mix_band` is read by nothing (kept because saved step-log headers carry it); the simulator's `abilities` check needs drops only when a drop-only DOWN edge lies on a rotation leg's cheapest path.
 
 ### Deviations from the spec and the plan
 

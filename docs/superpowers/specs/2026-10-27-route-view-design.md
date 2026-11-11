@@ -324,6 +324,7 @@ A new pure function computes, for a logged position and target, what the planner
 2. **First move**: the same P4/P5 rules (`planner.py:220-247`), with no random draw: where `next_move` would toss a
    coin between teleporting down and dropping (`planner.py:171-178`), the preview returns both options. In a live or
    recorded step the first move is not predicted at all: the logged `planned` event is drawn, marked "sent".
+   (2026-11-11, H87: `next_move` no longer tosses that coin, so the preview gives one option for a down move; two options remain only for runs recorded before.)
 3. **Later hops**: the path is split into hops the way the planner walks it, each assuming the move before landed
    where it aimed. Each hop's result carries that assumed landing point (x, y) with its move and `toward`, because
    check S3b plans again from it:
@@ -335,6 +336,7 @@ A new pure function computes, for a logged position and target, what the planner
    - an up or down edge: first the walk or teleports to its launch x (`_launch_x`, `planner.py:135-152`), then
      "teleport up (Up+E)", or for down the options of `down_options` with the coin-flip band (`planner.py:168-181`):
      "drop (Down+Alt)", "teleport down (Down+E)", or "drop or teleport down, 50/50".
+     (2026-11-11, H87: the coin flip no longer happens; a down move is a teleport whenever one reaches, so a new run shows only "teleport down (Down+E)" for it, and "drop (Down+Alt)" where a teleport cannot reach; the 50/50 words stay for runs recorded before. The `planner.py` lines cited here have moved.)
 4. **Keys** for each hop come from the table in section 3.3; for the sent move they come from the logged schedule.
 
 Because the first move of a live or recorded step is the logged one, what the view adds is the route line and hops

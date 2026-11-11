@@ -2694,6 +2694,8 @@ Cost if wrong: the walker no longer varies between a drop and a teleport going d
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/DBG146.md` (the cause), `ROPE146.md`, `ROPE146R.md` (m-4); question bank QB225; Hong's words in `ledger.md:35` (orch 146).
 
+As built (2026-11-11, ROPE T1, T6 and T7; Claude's record of the commits, not a new decision; figures measured on the branch head `p1b-rope-fix`, `HELIX_NO_ELEVATE=1`): `_go_down` and `route_graph._edge_cost` follow this rule on every map. Fossil Foundry 2 no longer drops in any simulator run: `$SMOKE` (`python -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0`) 366 moves, 25 no-ops, 0 drops, 44 teleports down, 237.9668 simulated seconds, 6/6 PASS (before: 21 drops, 23 teleports down, 241.7168 s); the 1000-lap run (`--laps 1000 --seed 1`, both known cases) 18093 moves, 1054 no-ops, 0 drops, 2124 teleports down, 11755.6853 s, 7001/7001 legs, 6/6 PASS (before: 1003 drops, 1121 teleports down, 11945.1853 s); `--real-ground` is under H88. The `abilities` check as built (ruling ROPE151-T1-D1 = A, orchestrator, not Hong's words; it replaces the count-every-DOWN-edge rule of ROPE146-D2 above): it needs teleports down > 0, and drops > 0 only when a drop-only DOWN edge (dy beyond a teleport's reach) lies on a rotation leg's cheapest path (`SimReport.drop_only_edges`, `_drop_only_edges_used`, `src/route/sim/run.py:276`). Fossil Foundry 2 has one DOWN edge past a teleport's reach, (42, 28) -> (37, 60), 32 px, on no rotation leg, so its count is 0.
+
 ## H88 (2026-11-10): When the walker is on a rope it gets off: blink to the nearer platform, else jump off with Alt and an arrow key, else end the run (Hong's QB226; amends H85)
 
 The same walk showed the walker has no idea what a rope is. Hong, in chat that day: "being able to get off a rope is something you should be able to do". Also in chat, on how a character leaves a rope: "To get our of being on the rope you can either fully climb down or up (use arrow keys), use alt annd the left or right arow key to jump off it or you can blink up or down, and asssuming the top and bottom platform is cclose enough, you will teleport to it".
@@ -2709,6 +2711,8 @@ Affects: `src/route/planner.py` (`rope_move`, `MoveKind.JUMP_OFF`), `params.py` 
 Cost if wrong: a new key pattern (Alt plus an arrow) the live game has not yet seen in a run. Undo: Hong says so, or revert the Task 4 to 7 commits; H85's behaviour returns for rope reads.
 
 Pointer: `notes/DBG146.md`, `notes/OUTLINE147.md`; question bank QB226; Hong's words in `ledger.md:35`.
+
+As built (2026-11-11, ROPE T4 to T7; Claude's record of the commits, not a new decision): `InputLayer.jump_off(direction, stimulus_ns)` plays Alt plus Left or Right (no new timing distribution), and `MoveKind.JUMP_OFF`, `planner.rope_move` and `moves.execute` carry it; the walker's rope rule is `walker.py:246-260`, with the zones from the map's rope file (`session._load_route`, `src/route/ropes.py`); the simulator grabs a rope from a drop, or from a teleport down with probability `rope_grab_p` (0.2 under `--real-ground`). `--real-ground` (`python -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0 --real-ground`) gives 364 moves, 23 no-ops, 0 drops, 46 teleports down, 241.6268 simulated seconds, 2 knockbacks, 4 rope grabs, 2 rope moves (both teleport up, so 0 jump offs) and 0 off map, 6/6 PASS; before the rope rule the same grabs ended the run `off_map` (Task 5's strict xfail), and before H87 the run was 352 moves, 22 no-ops, 19 drops, 23 teleports down, 241.2692 s, 8 knockbacks. `$SMOKE` and the 1000-lap run have no rope grabs and are as under H87. Known limit, held for Hong, not built: a rope read the map places (within 3 px of a platform line) is planned as a platform read, and a walk planned from it does nothing on the rope; the leg times out and the grab can repeat on every later leg (`src/route/CLAUDE.md`, plan C10).
 
 ## H89 (2026-11-10): The walker keeps lining up on a node's x before going up or down (Hong's QB227)
 
@@ -2751,6 +2755,8 @@ Cost if wrong: nodes the keep-out refuses might have been fine; a constant and i
 
 Pointer: `ledger-ROPE.md:36`; `notes/OUTLINE147.md`; the plan's "Provisional values" section.
 
+Ruling [spec-text] (ROPE148R-D2 = A, orchestrator, 2026-11-11; not Hong's words): the keep-out Hong picked (QB231) is unchanged; the refusal text and the Save-blocked list now name the free x's ("place it at x 100 or less, or 112 or more" for the rope at x 107), because the old text ("at least 6 px left or right of a rope") did not match the rule, which is centred one px left of the drawn rope.
+
 ## H92 (2026-11-11): The editor suggests the ropes from the minimap, and Hong keeps, moves, deletes or adds them (Hong's QB228 and his pick on ROPE147P-D3)
 
 Hong was asked whether the map editor should find the ropes for him first. He chose "Editor suggests (Recommended)" (the other option was marking them all by hand). In plain words: the editor finds ropes on the live minimap (a "Find ropes" button, which collects 3 seconds of frames while the character moves); Hong keeps, moves, deletes or adds ropes, with number boxes for a rope's x and its two ends.
@@ -2784,6 +2790,8 @@ Cost if wrong: a later move of the ropes into the map file (one loader change). 
 Pointer: `ledger-ROPE.md:34`; `notes/OUTLINE147.md`.
 
 Update (2026-11-11, Hong, QB236): on ruling ROPE148R-D1 = A (the editor opens a map with a bad rope file, its nodes and no ropes), Hong said in chat "nott all maps have ropes", and was asked with AskUserQuestion what a save with no ropes should do while the map's rope file is damaged. He chose "Ask, then remove (Recommended)". In plain words: the editor asks "This map's rope file is damaged and no ropes are marked. Save with no ropes and remove the rope file?"; Yes removes the rope file (the map then works with no ropes), No leaves it (the walk still refuses it). This replaces the ruling's old save rule, "a save with none writes the CSV and leaves the bad file"; a save with at least one rope still replaces the damaged file. Affects: `src/gui/map_editor.py` (`_writeTo`), the plan (Task 3a). Pointer: question bank QB236; `ledger-ROPE.md` (orch 150).
+
+Amended (ruling ROPE148R-D1 = A, orchestrator, 2026-11-11; not Hong's words): the map editor opens a map whose rope file is bad with its nodes and no ropes, shows the reader's message and "Mark the ropes again and save to replace the file"; the bad file is replaced by a save with at least one rope marked, and what a save with none does is Hong's QB236 above (the editor asks, and Yes removes the rope file, No leaves it); the walk still refuses a bad rope file. (Written with QB236's save rule, which replaced the ruling's own, "a save with none writes the CSV and leaves the bad file"; ROPE155-T8, from review note m-R3a-4.)
 
 ## H95 (2026-11-11): With ropes marked, the position decides; the platform-or-rope question for a still read 4 to 6 px under a line is dropped (ruling OUTLINE147-D4; not Hong's words)
 
