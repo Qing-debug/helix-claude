@@ -558,6 +558,10 @@ class MapEditor:
         event.x/event.y are in canvas pixels (post-scale); divide by RENDER_SCALE to get
         native minimap coords for storage and hit-testing.
         """
+        # A value typed in a number box and not committed is committed before the click acts on the old selection: the
+        # click's `focus_set()` below only queues the box's FocusOut, and a click that changes the selection refreshes the
+        # boxes first, which would overwrite the typed value (ROPE153-R3bRR n-m1).
+        self._commitRopeBoxes()
         native_x = event.x // RENDER_SCALE
         native_y = event.y // RENDER_SCALE
         # A click on the map gives the canvas the keyboard, so a Delete after it reaches `_onDeleteKey` and not a number

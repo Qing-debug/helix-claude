@@ -1015,3 +1015,31 @@ def test_a_find_after_a_load_runs_one_collection(make_editor, tmp_path):
 
     assert run_scan(rig) == map_editor.ROPE_SCAN_FRAMES and lock.taken == taken + map_editor.ROPE_SCAN_FRAMES
     assert editor.state.ropes == [ROPE_46, ROPE_107] and status(editor) == "Found 2 ropes"
+
+
+# -- end minors sweep B (ROPE153-R3bRR n-m1) ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("click_at, selected_rope, selected_id", [
+    pytest.param((46, 38), 1, None, id="another rope"),
+    pytest.param((20, 20), None, 1, id="a node"),
+    pytest.param((90, 20), None, 2, id="empty ground places a node"),
+])
+def test_a_click_on_the_map_that_changes_the_selection_keeps_a_value_typed_in_a_number_box(
+        make_editor, tmp_path, click_at, selected_rope, selected_id):
+    # A click on the map takes the keyboard from the box, but Tk only queues the box's FocusOut and the click refreshes
+    # the boxes first, so the typed value used to be overwritten before anything committed it (n-m1).
+    rig = make_editor()
+    editor = rig.editor
+    csv_path = write_map(tmp_path / "m.csv", [(20, 20)])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107, ROPE_46), (FRAME_W, FRAME_H), {}))
+    load(rig, csv_path)
+    click(editor, 107, 52)
+    assert editor.state.selected_rope == 0
+    editor._rope_vars["x"].set("108")  # typed, no Return, the box not left
+    assert editor.state.ropes == [ROPE_107, ROPE_46] and not editor.state.dirty
+
+    click(editor, *click_at)
+
+    assert editor.state.ropes == [RopeMark(108, 43, 61), ROPE_46]
+    assert editor.state.dirty and editor.window.title().startswith("* ")
+    assert editor.state.selected_rope == selected_rope and editor.state.selected_id == selected_id
