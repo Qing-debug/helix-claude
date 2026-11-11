@@ -17,8 +17,9 @@ from test_walker_standing import Rec
 from src.classes.classes import Kanna
 from src.controller.rope_file import ON_ROPE_DX, read_ropes, rope_file_for
 from src.input.input_layer import InputLayer
-from src.input.protocol import Key
+from src.input.protocol import Key, Step
 from src.input.timing import TimingModel
+import src.route.sim.run as sim_run
 from src.route.sim.link import SimClock, SimLink
 from src.route.sim.run import REAL_GROUND_NOISE, REAL_GROUND_SIM, judge, run_sim
 from src.route.sim.world import (
@@ -143,7 +144,7 @@ def test_a_drop_from_a_platform_that_is_not_the_rope_top_never_grabs(terrain_pat
 def test_drops_on_a_rope_climb_down(terrain_path):
     terrain = _terrain(terrain_path)
     world = _grabbed(terrain)
-    x, y = world.pos
+    x = world.pos[0]
     climbs = 0
     while world.on_rope is not None:
         before = world.pos
@@ -155,7 +156,6 @@ def test_drops_on_a_rope_climb_down(terrain_path):
             assert world.pos == (x, before[1] + SimParams().rope_climb_px)
     assert world.pos == pytest.approx((x, _floor(terrain, x)))     # at the bottom it stands on the floor
     assert climbs >= 2 and world.rope_grabs == 1
-    assert world.pos[1] >= y
 
 
 @TERRAINS
@@ -244,7 +244,9 @@ def test_jump_off_from_a_platform_lands_on_the_first_surface_at_or_below_six_up(
 def test_jump_off_with_no_surface_stays():
     terrain = _terrain(DEFAULT_TERRAIN)
     world = _world(terrain, (113, _surface(terrain, "top", 113)))      # the right end of the top platform
-    world.pos = (200.0, 23.0)        # nothing at x 204 or 196 on any platform: no landing
+    # Set directly on purpose: no public move leaves the character off every platform, and the constructor's start check
+    # refuses such a point. Nothing at x 204 or 196 on any platform, so a jump off has no landing.
+    world.pos = (200.0, 23.0)
     effect = world.jump_off(Key.RIGHT, T_NS)
     assert effect.kind == "jump_off" and world.pos == (200.0, 23.0)
 
@@ -333,12 +335,34 @@ def test_link_decodes_jump_off(key, dx):
     assert world.pos == pytest.approx((READ_X + dx, _surface(terrain, "mid-right", READ_X + dx)))
 
 
-def test_link_still_reads_a_drop_and_a_plain_arrow_as_before():
+def test_link_still_reads_a_drop_as_before():
     terrain = _terrain(DEFAULT_TERRAIN)
     world = _above_rope(terrain)
     layer = InputLayer(SimLink(world, SimClock(), SimParams()), TimingModel(np.random.default_rng(3)))
     assert is_successful(layer.drop())
     assert [e.kind for e in world.effects] == ["drop"] and world.on_rope == 1
+
+
+def _press(first: Key, second: Key) -> list[Step]:
+    """`first` down, then `second` joins it, then both up: the two keys' first downs are in that order."""
+    return [Step(10, first), Step(10, first | second), Step(10, Key(0))]
+
+
+@pytest.mark.parametrize("steps, kind", [
+    (_press(Key.RIGHT, Key.ALT), "jump_off"),     # the control: the arrow first is a jump off
+    (_press(Key.ALT, Key.RIGHT), "none"),         # ROPE153-R5 m2: Alt first is not
+    (_press(Key.ALT, Key.LEFT), "none"),
+    (_press(Key.UP, Key.ALT), "none"),            # Up+Alt is not a jump off, in either order
+    (_press(Key.ALT, Key.UP), "none"),
+], ids=["right-then-alt", "alt-then-right", "alt-then-left", "up-then-alt", "alt-then-up"])
+def test_link_reads_only_an_arrow_then_alt_as_a_jump_off(steps, kind):
+    terrain = _terrain(DEFAULT_TERRAIN)
+    world = _above_rope(terrain)
+    before = world.pos
+    link = SimLink(world, SimClock(), SimParams())
+    assert is_successful(link.play(steps))
+    assert [e.kind for e in world.effects] == [kind]
+    assert (world.pos != before) == (kind == "jump_off") and world.on_rope is None
 
 
 # --- 5. run_sim -------------------------------------------------------------------------------------------------
@@ -389,6 +413,28 @@ def test_node_offsets_do_not_move_the_marks():
     result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2, noise=NoiseConfig(node_offset_px=2, rope_grab_p=0.5))
     assert is_successful(result), result
     assert result.unwrap().rope_grabs >= 1
+
+
+def test_a_recovery_replay_that_starts_on_a_rope_is_not_recovered_and_not_a_crash(monkeypatch):
+    """ROPE154-R6 m2: with node offsets of 2 px and the grab knob at 1.0 (the mix the test above says times out), a leg
+    ends with the character still on a rope, and the next leg's noise-off replay starts there. A world cannot start off
+    every platform surface, so that replay used to raise ValueError out of `run_sim`. Now it has no replay, and its leg
+    counts as a leg with errors that did not recover."""
+    replays = []
+    real = sim_run._replay_moves
+
+    def spy(*args):
+        replays.append(real(*args))
+        return replays[-1]
+
+    monkeypatch.setattr(sim_run, "_replay_moves", spy)
+    result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2, noise=NoiseConfig(node_offset_px=2, rope_grab_p=1.0))
+    assert is_successful(result), result
+    report = result.unwrap()
+    assert replays.count(None) >= 1
+    not_recovered = ((report.single_error_legs - report.single_error_within_3)
+                     + (report.multi_error_legs - report.multi_error_within_bound))
+    assert not_recovered >= replays.count(None)
 
 
 # --- 6. the rope rule on a run: the walker gets off the rope it grabbed -------------------------------------------

@@ -231,11 +231,16 @@ def _leg_nodes(rotation: Sequence[Node], rec: LegRecord) -> tuple[Node | None, N
 
 
 def _replay_moves(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim_params: SimParams,
-                  rec: LegRecord, number: int, start: tuple[float, float], ropes: Sequence[RopeMark]) -> int:
-    """The moves the leg takes in a fresh noise-off world from `start` (the nominal count)."""
+                  rec: LegRecord, number: int, start: tuple[float, float], ropes: Sequence[RopeMark]) -> int | None:
+    """The moves the leg takes in a fresh noise-off world from `start` (the nominal count); None when `start` is on no
+    platform surface, which is where the previous leg left the character hanging on a rope: a world cannot start there,
+    so the leg has no replay (ROPE R6 m2)."""
     rng_timing, rng_planner, rng_world, rng_positions = _rngs(number)
     off = NoiseConfig.off()
-    world = SimWorld(terrain, rg.reach_h, rg.reach_v, sim_params, off, rng_world, start, ropes)
+    try:
+        world = SimWorld(terrain, rg.reach_h, rg.reach_v, sim_params, off, rng_world, start, ropes)
+    except ValueError:    # the only one the constructor raises: start is not on a platform surface
+        return None
     clock = SimClock()
     layer = InputLayer(SimLink(world, clock, sim_params), TimingModel(rng_timing))
     positions = SimPositionSource(world, clock, off.miss_p, rng_positions)
@@ -263,13 +268,15 @@ def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim
         if errors == 0:
             continue
         began = sink.ends[i - 1] if i else start
-        extra = len(rec.moves) - _replay_moves(rg, rotation, terrain, sim_params, rec, i, began, ropes)
+        nominal = _replay_moves(rg, rotation, terrain, sim_params, rec, i, began, ropes)
+        # a leg with no replay counts as a leg with errors that did not recover
+        extra = None if nominal is None else len(rec.moves) - nominal
         if errors == 1:
             single += 1
-            single_within += extra <= _EXTRA_PER_ERROR
+            single_within += extra is not None and extra <= _EXTRA_PER_ERROR
         else:
             multi += 1
-            multi_within += extra <= _EXTRA_PER_ERROR * errors
+            multi_within += extra is not None and extra <= _EXTRA_PER_ERROR * errors
     return _Recovery(single, single_within, multi, multi_within)
 
 
