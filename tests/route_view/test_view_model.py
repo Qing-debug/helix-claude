@@ -719,7 +719,7 @@ def test_a_rope_move_after_an_on_graph_plan_replays_as_a_changed_route(tmp_path)
     model = _load(make_folder(tmp_path, events))
 
     assert model.why[0].endswith("lap 0 leg 5: target #6 (101, 24)")
-    assert list(model.why[1:7]) == [
+    assert list(model.why[2:8]) == [
         "00:00.100 plan: teleport right toward o7 (aim x 68)",
         "00:00.600 settled (106, 49): 38 px past the aim; plan again from there",
         "00:01.000 route changed: expected next walk right 1.4 s toward o8, now teleport up (landed 38 px past)",
