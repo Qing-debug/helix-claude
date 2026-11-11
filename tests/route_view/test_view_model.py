@@ -707,6 +707,28 @@ def test_a_jump_off_step_replays_as_jump_off_with_alt(tmp_path):
     assert (right.step(1).hops[0].text, right.step(1).hops[0].keys) == ("jump off right", "Right+Alt")
 
 
+def test_a_rope_move_after_an_on_graph_plan_replays_as_a_changed_route(tmp_path):
+    """ROPE155-R7 m2, pinned as it is (no code change): a plan from the graph has a preview; the teleport lands on the
+    rope, off the graph, and the rope move planned from that read is not the preview's next move, so its why line is
+    `route changed: ... now teleport up`, then the off-graph lines. The lines never say "on a rope"."""
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)),
+              ("planned", 1.1, (49, 28), "teleport", "RIGHT", None, 5.175, (66, 28)),
+              ("settled", 1.6, (106, 49), False),
+              ("planned", 2.0, (106, 49), "teleport", "UP", None, 0.0, None),
+              ("settled", 2.5, (106, 49), False)]
+    model = _load(make_folder(tmp_path, events))
+
+    assert model.why[0].endswith("lap 0 leg 5: target #6 (101, 24)")
+    assert list(model.why[1:7]) == [
+        "00:00.100 plan: teleport right toward o7 (aim x 68)",
+        "00:00.600 settled (106, 49): 38 px past the aim; plan again from there",
+        "00:01.000 route changed: expected next walk right 1.4 s toward o8, now teleport up (landed 38 px past)",
+        "00:01.000 at (106, 49) off the graph; off-graph: (106, 49)",
+        "00:01.000 plan: teleport up",
+        "00:01.500 settled (106, 49); plan again from there"]
+    assert all(render_text(model, model.step(k)) for k in range(len(model.events)))
+
+
 def test_a_header_without_the_rope_params_still_opens(tmp_path):
     """Review Focus 6: a run saved before the three rope fields (`rope_still_s`, `rope_zone_half_px`,
     `rope_blink_tries`) has a header `params` without them; `MovementParams(**params)` fills the defaults."""
