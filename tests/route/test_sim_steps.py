@@ -56,6 +56,7 @@ PINNED_REPORT = dict(
     off_map=0,     # the field OFFP141 T7 added (legs that ended off_map); none in these runs
     drop_only_edges=0,  # the field ROPE T1 added (H87); no rotation leg needs a drop
     rope_grabs=0,       # the field ROPE T5 added (H88); no grab noise in these runs and no drop over a rope
+    jump_offs=0,        # the field ROPE T7 added (H88); no rope grab in these runs, so nothing to jump off
 )
 # H87 (ROPE T1): always teleport down when a teleport reaches. Before it this run had drops 25, teleport_downs 16,
 # sim_seconds 233.5318 and mean_lap_s 11.67659.

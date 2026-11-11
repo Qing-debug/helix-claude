@@ -27,9 +27,9 @@ Where the plan is silent:
 - "Seeded from the leg's number": a replay's rngs are `SeedSequence(i).spawn(4)` (timing, planner, world, positions,
   as the run's), where i is the leg's index in the run's leg log (0 is the approach leg). Every leg is replayed
   whatever its outcome, the approach leg included.
-- `moves`, `drops` and `teleport_downs` count the walker's moves (its `MoveEntry`s, one world effect each); `no_ops`
-  counts the world effects with a NO_OP. `sim_seconds` is the virtual time from the run's start to its end and
-  `mean_lap_s` the mean lap duration (0.0 with no lap).
+- `moves`, `drops`, `jump_offs` and `teleport_downs` count the walker's moves (its `MoveEntry`s, one world effect
+  each); `no_ops` counts the world effects with a NO_OP. `sim_seconds` is the virtual time from the run's start to
+  its end and `mean_lap_s` the mean lap duration (0.0 with no lap).
 - `noise` fails when no move was made (0/0).
 - The marks of the map's rope file (`read_ropes(rope_file_for(map_csv))`, none when there is no file; a bad file is the
   run's `Failure`) go to the world and to the recovery replays' worlds, read from the `--map` file itself: the node-offset
@@ -132,6 +132,7 @@ class SimReport:
     off_map: int = 0                         # legs that ended `off_map`: stood 0.5 s more than 6 px from every platform
     drop_only_edges: int = 0                 # drop-only DOWN edges (dy > reach_v) on a rotation leg's cheapest path (H87)
     rope_grabs: int = 0                      # times the character grabbed a rope (the map's rope file; H88)
+    jump_offs: int = 0                       # the walker's moves of kind `jump_off` (Alt+Left/Right off a rope; H88)
 
 
 @dataclass(frozen=True)
@@ -469,6 +470,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         off_map=sum(rec.outcome == LegOutcome.OFF_MAP for rec in legs),
         drop_only_edges=_drop_only_edges_used(rg, rotation),
         rope_grabs=world.rope_grabs,
+        jump_offs=sum(m.kind == MoveKind.JUMP_OFF for m in entries),
     ))
 
 

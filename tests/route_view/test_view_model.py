@@ -13,7 +13,9 @@ from datetime import datetime
 import pytest
 from returns.pipeline import is_successful
 from returns.result import Failure
-from view_runs import FF2, G, GIT_HEAD, REPO_ROOT, default_header, event_lines, make_folder, make_legs_folder, ns
+from view_runs import (
+    FF2, G, G_PARAMS, GIT_HEAD, REPO_ROOT, default_header, event_lines, make_folder, make_legs_folder, ns,
+)
 
 from src.input.protocol import Key
 from src.route.params import MovementParams
@@ -673,6 +675,51 @@ def test_10_no_line_when_the_plan_follows_a_reached_or_a_missed_plan(tmp_path):
               ("no_plan", 1.5, (49, 28), "boom"), ("settled", 1.6, (68, 27), False),
               ("planned", 2.0, (68, 27), "walk", "LEFT", 800.0, 4.0, (66, 28))]
     assert not any("route changed" in line for line in _load(make_folder(tmp_path, events)).why)
+
+
+# the rope move (rope fix Task 7, H88, H93) ----------------------------------------------------------------------
+#
+# The pre-H87 run whose logged DROP the replay flags `route_changed` (ROPE146R m-5, known and left as it is) is pinned by
+# `test_10_only_the_two_changed_plans_of_g_get_a_route_changed_line` (G's step 20, a `drop`): Task 1 renamed that test.
+
+
+def test_a_jump_off_step_replays_as_jump_off_with_alt(tmp_path):
+    """A `planned` jump off logged from a read on the rope (off the graph, `toward` None) loads: its hop reads `jump off
+    left`, `Left+Alt`, the preview for that read is empty, and the plan after it opens too."""
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)),
+              ("planned", 1.1, (106, 49), "jump_off", "LEFT", None, 0.0, None),
+              ("settled", 2.0, (100, 46), False),
+              ("planned", 2.1, (100, 46), "walk", "LEFT", 800.0, 4.0, (66, 28))]
+    model = _load(make_folder(tmp_path, events))
+
+    view = model.step(1)
+
+    hop = view.hops[0]
+    assert (hop.text, hop.keys, hop.sent) == ("jump off left", "Left+Alt", True)
+    assert view.aim is None and view.route == ()
+    lines = render_text(model, view).splitlines()
+    assert "  1 jump off left   Left+Alt   SENT" in lines
+    assert "why: 00:00.100 plan: jump off left" in lines
+    assert [line for line in model.why if "route changed" in line] == []
+    assert all(render_text(model, model.step(k)) for k in range(len(model.events)))
+    (tmp_path / "r").mkdir()
+    right = _load(make_folder(tmp_path / "r", [events[0], ("planned", 1.1, (106, 49), "jump_off", "RIGHT", None, 0.0, None)]))
+    assert (right.step(1).hops[0].text, right.step(1).hops[0].keys) == ("jump off right", "Right+Alt")
+
+
+def test_a_header_without_the_rope_params_still_opens(tmp_path):
+    """Review Focus 6: a run saved before the three rope fields (`rope_still_s`, `rope_zone_half_px`,
+    `rope_blink_tries`) has a header `params` without them; `MovementParams(**params)` fills the defaults."""
+    new = ("rope_still_s", "rope_zone_half_px", "rope_blink_tries")
+    old = {k: v for k, v in G_PARAMS.items() if k not in new}
+    assert len(old) == len(G_PARAMS) - 3
+
+    model = _load(make_folder(tmp_path, header=default_header(params=old)))
+
+    assert model.rg is not None and model.warnings == ()
+    assert (model.rg.params.rope_still_s, model.rg.params.rope_zone_half_px, model.rg.params.rope_blink_tries) == (
+        MovementParams().rope_still_s, MovementParams().rope_zone_half_px, MovementParams().rope_blink_tries)
+    assert render_text(model, model.step(1))
 
 
 # 11 --------------------------------------------------------------------------------------------------------------

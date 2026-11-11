@@ -98,8 +98,9 @@ class HopView:
     n: int  # 1-based
     from_pos: Pos
     landing: Pos
-    text: str  # "teleport right" | "walk right 1.4 s" | "drop" | "teleport down" | "drop or teleport down, 50/50"
-    keys: str  # "Right+E", "Up+E", "hold Right", "Down+Alt", "Down+Alt or Down+E"
+    text: str  # "teleport right" | "walk right 1.4 s" | "drop" | "teleport down" | "drop or teleport down, 50/50" |
+    #            "jump off left"
+    keys: str  # "Right+E", "Up+E", "hold Right", "Down+Alt", "Down+Alt or Down+E", "Left+Alt"
     sent: bool  # True for hop 1 of a logged plan
 
 
@@ -158,6 +159,8 @@ def _move_text(move: Move) -> str:
         return f"walk {_dir(move.direction)} {(move.walk_ms or 0.0) / 1000:.1f} s"
     if move.kind is MoveKind.TELEPORT:
         return f"teleport {_dir(move.direction)}"
+    if move.kind is MoveKind.JUMP_OFF:
+        return f"jump off {_dir(move.direction)}"
     return "drop"
 
 
@@ -165,6 +168,8 @@ def _move_keys(move: Move) -> str:
     if move.kind is MoveKind.DROP:
         return "Down+Alt"
     name = _cap(move.direction) if move.direction is not None else "?"
+    if move.kind is MoveKind.JUMP_OFF:
+        return f"{name}+Alt"
     return f"hold {name}" if move.kind is MoveKind.WALK else f"{name}+E"
 
 

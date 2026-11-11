@@ -425,3 +425,17 @@ def test_rope_grab_run_recovers():
     assert report.off_map == 0
     assert [e for e in rec.of("leg_end") if e[2] == "off_map"] == []
     assert [e for e in rec.of("planned") if e[7] is None]
+
+
+def test_jump_offs_are_the_walkers_jump_off_moves():
+    """Task 7: `SimReport.jump_offs` counts the walker's moves of kind `jump_off`. Half the moves doing nothing makes a
+    blink up from a rope fail twice now and then, so the order reaches its jump off (seed 1: 1 grab, 1 jump off); the count
+    equals the observer's `planned` events of that kind, and the quiet default run has none."""
+    rec = Rec()
+    result = run_sim(CSV, DEFAULT_TERRAIN, 5, 1, noise=NoiseConfig(no_op_p=0.5, rope_grab_p=0.5), observer=rec)
+    assert is_successful(result), result
+    report = result.unwrap()
+    assert (report.rope_grabs, report.jump_offs, report.off_map, report.laps_completed) == (1, 1, 0, 5)
+    assert report.jump_offs == len([e for e in rec.of("planned") if e[3] == "jump_off"])
+    quiet = run_sim(CSV, DEFAULT_TERRAIN, 2, 1).unwrap()
+    assert quiet.jump_offs == 0

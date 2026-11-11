@@ -56,6 +56,23 @@ def test_real_ground_run_passes():
     assert report.rope_grabs > 0 and report.off_map == 0
 
 
+@pytest.mark.slow
+def test_real_ground_run_gets_off_ropes():
+    """Rope fix Task 7 (H88, H93): on the real ground the sim grabs rope 107 (`rope_grab_p` 0.2) and the walker gets off
+    it: 6/6 checks, no leg ends `off_map`, and the figures Task 6 recorded (seed 2, 20 laps), pinned exactly. The 4 grabs
+    gave 2 rope moves, both blinks up (`teleport up`), so `jump_offs` is 0 here: the other 2 grabs were moved by the
+    planner or placed by `attach` (Task 6's report)."""
+    result = run_sim(CSV, REAL_GROUND_TERRAIN, 20, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
+    assert is_successful(result), result
+    report = result.unwrap()
+    checks = judge(report, 0)
+    assert len(checks) == 6 and all(check.ok for check in checks), [check for check in checks if not check.ok]
+    assert report.rope_grabs >= 1 and report.off_map == 0
+    assert report.jump_offs == 0
+    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (364, 23, 0, 46)
+    assert (report.knockbacks, report.rope_grabs, round(report.sim_seconds, 4)) == (2, 4, 241.6268)
+
+
 def test_report_counts_the_knockbacks():
     old_terrain = FIXTURES / "ff2_terrain.json"
     quiet = run_sim(CSV, old_terrain, 1, 2, noise=NoiseConfig(knockback_p=0.0)).unwrap()
