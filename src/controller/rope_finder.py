@@ -28,10 +28,10 @@ def median_frame(frames: Sequence[np.ndarray]) -> Result[np.ndarray, str]:
 
 
 def find_ropes(frame: np.ndarray) -> list[RopeMark]:
-    """C12's rule on one RGB frame, sorted by x. A column pixel is rope when its blue is at least ROPE_BLUE_DROP below
-    the blue of both horizontal neighbours and both neighbours are background. A rope is a run of at least
-    MIN_ROPE_ROWS such rows in one column whose run meets a platform above and below (a row whose neighbours are both
-    at least GROUND_GREY_MIN grey). The top platform row is the top of its bright band, the bottom one the band's top
+    """C12's rule on one RGB frame, sorted by x, then top_y. A column pixel is rope when its blue is at least
+    ROPE_BLUE_DROP below the blue of both horizontal neighbours and both neighbours are background. A rope is a run of
+    at least MIN_ROPE_ROWS such rows in one column whose run meets a platform above and below (a row whose neighbours
+    are both at least GROUND_GREY_MIN grey). The top platform row is the top of its bright band, the bottom one the band's top
     where the walk down first meets it; top_y and bottom_y are those rows minus NODE_ABOVE_GROUND_PX (top_y at least 0).
     Columns within SAME_ROPE_PX are one rope when their rows overlap; ropes stacked in a column stay separate."""
     blue = frame[:, :, 2].astype(np.int32)
@@ -72,6 +72,9 @@ def find_ropes(frame: np.ndarray) -> list[RopeMark]:
     for group in groups:
         x, top_y, bottom_y, _ = min(group, key=lambda c: (c[3], c[0]))   # the darkest column is the rope's x
         ropes.append(RopeMark(x, top_y, bottom_y))
+    # The groups come out in the order of their first column, but a mark's x is its darkest column, which can be a
+    # later one: stacked two-column ropes with the darker column on opposite sides would come out out of order (N-2).
+    ropes.sort(key=lambda rope: (rope.x, rope.top_y))
     return ropes
 
 

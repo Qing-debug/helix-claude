@@ -76,6 +76,15 @@ def test_two_ropes_stacked_in_one_column_are_two_ropes():
     assert find_ropes(frame) == [RopeMark(20, 7, 27), RopeMark(20, 27, 41)]
 
 
+def test_the_marks_come_out_sorted_by_x_even_for_stacked_two_column_ropes():
+    # Each rope is two dark columns two apart; the darker one (the mark's x) is the right column in the upper rope and the
+    # left column in the lower one. Both ropes' first column is 20, so grouping by first member alone gives x 22 then x 20.
+    upper = [(20, TOP + 1, MID - 1, ROPE), (22, TOP + 1, MID - 1, DARKER_ROPE)]
+    lower = [(20, MID + 1, FLOOR - 1, DARKER_ROPE), (22, MID + 1, FLOOR - 1, ROPE)]
+    frame = _frame((TOP, MID, FLOOR), upper + lower)
+    assert find_ropes(frame) == [RopeMark(20, 27, 41), RopeMark(22, 7, 27)]
+
+
 def test_dark_columns_two_apart_with_one_clear_column_between_are_one_rope():
     frame = _frame((TOP, MID), [(20, TOP + 1, MID - 1, DARKER_ROPE), (22, TOP + 1, MID - 1, ROPE)])
     assert find_ropes(frame) == [RopeMark(20, 7, 27)]
