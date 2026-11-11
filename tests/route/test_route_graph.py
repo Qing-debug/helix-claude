@@ -111,6 +111,31 @@ def test_ff2_down_edge_from_101_24_to_105_42_costs_teleport_plus_walk(ff2):
     assert is_successful(cost) and cost.unwrap() == pytest.approx(expected)
 
 
+def _down_edge(points, can_fall):
+    """The (u, v) DOWN edge's attributes of a two-node RouteGraph over `points`, or None when there is no such edge."""
+    nodes = {i: Node("blue_node", xy, can_fall, False, False, False) for i, xy in enumerate(points)}
+    pg = _path_graph(nodes)
+    assert is_successful(pg.buildGraph())
+    rg = RouteGraph.build(pg, MovementParams()).unwrap()
+    return rg, rg.graph.get_edge_data(nodes[0], nodes[1])
+
+
+def test_down_cost_follows_d1():
+    """H87: a DOWN edge costs the teleport's when a teleport reaches (even if a drop is cheaper), else the drop's."""
+    rg, edge = _down_edge([(10, 10), (13, 16)], can_fall=True)  # dy 6, dx 3, within reach: a drop would be 0.45 + dx/v
+    assert edge["kind"] == EdgeKind.DOWN
+    assert edge["cost_s"] == pytest.approx(P.teleport_s + 3 / P.walk_px_per_s)
+    assert edge["cost_s"] > P.drop_base_s + 6 / P.fall_px_per_s + 3 / P.walk_px_per_s
+
+    rg, edge = _down_edge([(10, 10), (13, 16 + rg.reach_v)], can_fall=True)  # dy beyond reach_v: only a drop
+    dy = 6 + rg.reach_v
+    assert edge["kind"] == EdgeKind.DOWN
+    assert edge["cost_s"] == pytest.approx(P.drop_base_s + dy / P.fall_px_per_s + 3 / P.walk_px_per_s)
+
+    _, edge = _down_edge([(10, 10), (13, 16 + rg.reach_v)], can_fall=False)  # beyond reach_v and cannot fall: no edge
+    assert edge is None
+
+
 def test_ff2_every_rotation_leg_has_a_path(ff2):
     agent, rg = ff2
     order = agent.map_rotation_order

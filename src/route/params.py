@@ -18,7 +18,7 @@ class MovementParams:
     drop_base_s: float = 0.35      # ESTIMATE: keys + start of a drop
     fall_px_per_s: float = 60.0    # ESTIMATE
     max_walk_ms: float = 4000.0    # one walk is at most this; longer distances are re-planned
-    ability_mix_band: float = 0.3  # PB-D3; 0 makes the down choice deterministic
+    ability_mix_band: float = 0.3  # PB-D3; not read since H87 (kept: saved step-log headers carry it)
     progress_eps_s: float = 0.05   # a new best cost-to-go must beat the old by more than this
     stall_s: float = 10.0          # specB:L64
     poll_s: float = 0.05           # position poll interval while settling or waiting

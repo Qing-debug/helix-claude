@@ -87,7 +87,7 @@ GOLDEN = {
     17: ["title: planned lap 0 leg 6 -> #7", "warnings: none", "target: #7", "character: 101,24", "aim: 105,24",
          "route: 101,24 105,24 105,42", "recent: 49,28>68,27 68,27>80,24",
          "Target  #7 (105, 42)", "Position (101, 24), on #6", "Route   you -> #7   1.1 s", "Hops",
-         "  1 walk right 0.5 s   hold Right   SENT", "  2 drop or teleport down, 50/50   Down+Alt or Down+E",
+         "  1 walk right 0.5 s   hold Right   SENT", "  2 teleport down   Down+E",
          "why: 00:06.200 plan: walk right 0.5 s toward #7 (aim x 105)", "frame: none"],
     20: ["title: planned lap 0 leg 6 -> #7", "warnings: none", "target: #7", "character: 105,24", "aim: 105,42",
          "route: 105,24 105,42", "recent: 49,28>68,27 68,27>80,24 101,24>105,24",
@@ -100,6 +100,11 @@ GOLDEN = {
          "why: 00:08.000 run ended: max_laps (exit code 0)", "frame: none"],
 }
 
+# H87 (ROPE T1): G is a run saved before the change, and its step 20 logged a drop at (105, 24). The planner now always
+# teleports down there (one option, where it had a coin flip of drop and teleport down), so the viewer, which plans again
+# with the current planner, shows the logged drop as a changed route (the `route changed` line at index 23). Before H87
+# that line was not there and the last six entries of LAST_LINE were one lower. (ROPE146R m-5: Task 7 decides what a
+# replay of an old run should say.)
 WHY_G = [
     "00:00.000 lap 0 leg 5: target #6 (101, 24)",
     "00:00.100 at (49, 28) on #5; start #5 (5.17 s); route #5 o7 o8 o9 #6",
@@ -125,6 +130,7 @@ WHY_G = [
     "00:06.200 plan: walk right 0.5 s toward #7 (aim x 105)",
     "00:06.400 sent: Right down, Right up +500 ms (waited 196 ms)",
     "00:06.950 settled (105, 24): on the aim; plan again from there",
+    "00:07.000 route changed: expected next teleport down toward #7, now drop toward #7 (on the aim)",
     "00:07.000 at (105, 24) on #6-o10; start #6 (1.55 s; via o10 1.55 s); route #6 #7",
     "00:07.000 plan: drop toward #7 (aim x 105)",
     "00:07.100 sent: Down down, Alt down +30 ms, Alt up +110 ms, Down up +135 ms (waited 148 ms)",
@@ -135,7 +141,7 @@ WHY_G = [
 ]
 
 # the index into WHY_G of each step's last line
-LAST_LINE = [0, 2, 3, 4, 6, 7, 8, 11, 12, 13, 14, 14, 14, 15, 16, 17, 18, 20, 21, 22, 24, 25, 26, 27, 28, 29]
+LAST_LINE = [0, 2, 3, 4, 6, 7, 8, 11, 12, 13, 14, 14, 14, 15, 16, 17, 18, 20, 21, 22, 25, 26, 27, 28, 29, 30]
 
 
 # 1 ---------------------------------------------------------------------------------------------------------------
@@ -620,8 +626,9 @@ def test_10_a_preview_with_one_hop_always_changes(model):
     assert route_changed(one, Move(MoveKind.WALK, Key.RIGHT, 500.0), None, None) is True
 
 
-def test_10_only_the_one_changed_plan_of_g_gets_a_route_changed_line(model):
-    assert [line for line in model.why if "route changed" in line] == [WHY_G[9]]
+def test_10_only_the_two_changed_plans_of_g_get_a_route_changed_line(model):
+    # step 7's landing 1 px past, and (H87) step 20's logged drop where the planner now teleports down
+    assert [line for line in model.why if "route changed" in line] == [WHY_G[9], WHY_G[23]]
 
 
 def _two_plans(tmp_path, settle, second):

@@ -242,5 +242,6 @@ def test_defaults_change_nothing():
     result = run_sim(CSV, OLD_TERRAIN, 20, 2)
     assert is_successful(result), result
     report = result.unwrap()
-    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (366, 25, 21, 23)
-    assert round(report.sim_seconds, 4) == 241.7168
+    # H87 (ROPE T1): no drops, every down move a teleport; was (366, 25, 21, 23) and 241.7168 s
+    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (366, 25, 0, 44)
+    assert round(report.sim_seconds, 4) == 237.9668

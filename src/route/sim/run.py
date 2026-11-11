@@ -75,8 +75,8 @@ from src.input.protocol import Key
 from src.input.timing import TimingModel
 from src.route.leg_log import JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink, MemorySink
 from src.route.params import MovementParams, validate
-from src.route.planner import MoveKind
-from src.route.route_graph import RouteGraph
+from src.route.planner import MoveKind, _offered
+from src.route.route_graph import EdgeKind, RouteGraph
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
 from src.route.sim.world import InjectedError, MoveEffect, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain
 from src.route.step_log import MAP_COPY, STEPS_FILE, RunHeader, StepLog
@@ -121,6 +121,7 @@ class SimReport:
     mean_lap_s: float
     knockbacks: int = 0                      # world effects with a mob knockback (`--real-ground` turns them on)
     off_map: int = 0                         # legs that ended `off_map`: stood 0.5 s more than 6 px from every platform
+    drop_only_edges: int = 0                 # drop-only DOWN edges (dy > reach_v) on a rotation leg's cheapest path (H87)
 
 
 @dataclass(frozen=True)
@@ -258,6 +259,24 @@ def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim
             multi += 1
             multi_within += extra <= _EXTRA_PER_ERROR * errors
     return _Recovery(single, single_within, multi, multi_within)
+
+
+def _drop_only_edges_used(rg: RouteGraph, rotation: Sequence[Node]) -> int:
+    """How many distinct DOWN edges with dy > `rg.reach_v` (only a drop makes them, H87) lie on the cheapest path, in the
+    graph the planner uses (`_offered`), of a rotation leg: the drops this run's route needs. Fossil Foundry 2's map has
+    one such edge that no rotation leg uses, so it is not counted (ROPE151-T1-D1, provisional)."""
+    offered = _offered(rg)
+    used: set[tuple[Node, Node]] = set()
+    for src, dst in zip(rotation, (*rotation[1:], rotation[0])):
+        path = offered.path(src, dst)
+        if not is_successful(path):
+            continue
+        hops = path.unwrap()
+        used.update(
+            (u, v) for u, v in zip(hops, hops[1:])
+            if offered.graph[u][v]["kind"] == EdgeKind.DOWN
+            and abs(v.minimap_position[1] - u.minimap_position[1]) > rg.reach_v)
+    return len(used)
 
 
 def _known_cases(legs: Sequence[LegRecord], csv_rotation: Sequence[tuple[int, int]],
@@ -432,6 +451,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         mean_lap_s=sum(lap_seconds) / len(lap_seconds) if lap_seconds else 0.0,
         knockbacks=sum(InjectedError.KNOCKBACK in e.injected for e in world.effects),
         off_map=sum(rec.outcome == LegOutcome.OFF_MAP for rec in legs),
+        drop_only_edges=_drop_only_edges_used(rg, rotation),
     ))
 
 
@@ -469,8 +489,9 @@ def judge(report: SimReport, min_single_error_legs: int = 100) -> list[Check]:
     no_op_share = r.no_ops / r.moves if r.moves else 0.0
     checks.append(Check("noise", r.moves > 0 and no_op_share >= _MIN_NO_OP_SHARE,
                         f"{r.no_ops}/{r.moves} moves were no-ops ({no_op_share:.2%}, need >= {_MIN_NO_OP_SHARE:.0%})"))
-    checks.append(Check("abilities", r.drops > 0 and r.teleport_downs > 0,
-                        f"{r.drops} drops, {r.teleport_downs} teleports down (need both > 0)"))
+    checks.append(Check("abilities", r.teleport_downs > 0 and (r.drops > 0 or r.drop_only_edges == 0),
+                        f"{r.drops} drops, {r.teleport_downs} teleports down (need teleports > 0, and drops > 0 when "
+                        f"{r.drop_only_edges} drop-only edges > 0)"))
     return checks
 
 

@@ -1,4 +1,5 @@
-"""Tests for src.route.planner (plan contract C7): FF2 move choices for rules P1-P5, the mix band, and rng use."""
+"""Tests for src.route.planner (plan contract C7): FF2 move choices for rules P1-P5, the down choice (H87: always
+teleport down when a teleport reaches, drop only when it cannot) and rng use (none)."""
 
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from src.controller.node import Node
 from src.input.protocol import Key
 from src.route.locate import attach
 from src.route.params import MovementParams
-from src.route.planner import Decision, Move, MoveKind, next_move
+from src.route.planner import Decision, Move, MoveKind, _go_down, next_move
 from src.route.route_graph import EdgeKind, RouteGraph
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "fossil_foundry_2.csv"
@@ -182,29 +183,37 @@ def test_up_edge_teleports_up(ff2):
     assert decision.toward is _node(agent, (48, 45))
 
 
-def test_mix_band_splits_teleport_and_drop_evenly_and_never_else(ff2):
+class _NoDraw:
+    """Stands in for `np.random.Generator`: any draw raises, so a pass proves `_go_down` drew nothing (H87)."""
+
+    def random(self):
+        raise AssertionError("_go_down drew from the generator")
+
+
+def test_down_in_reach_always_teleports(ff2):
     agent, rg = ff2
-    target = _node(agent, (105, 42))
-    rng = np.random.default_rng(1)
-    moves = [_decide(rg, (105, 23), target, rng).move for _ in range(2000)]  # teleport 0.55, drop 0.65 <= 0.715
-    assert set(moves) == {TELEPORT_DOWN, DROP}
-    assert 0.45 <= moves.count(DROP) / len(moves) <= 0.55
+    g, h = _node(agent, (105, 42)), _node(agent, (105, 60))  # 18 px down, within reach_v; g can fall
+    assert g.can_fall and rg.graph[g][h]["kind"] == EdgeKind.DOWN
+    assert abs(h.minimap_position[1] - g.minimap_position[1]) <= rg.reach_v
+    for seed in range(200):
+        assert _go_down(rg, g, h, np.random.default_rng(seed)) == TELEPORT_DOWN
+    assert _go_down(rg, g, h, _NoDraw()) == TELEPORT_DOWN  # type: ignore[arg-type]
 
 
-def test_band_zero_never_drops(ff2):
+def test_down_beyond_reach_drops():
+    nodes, rg = _synthetic([(10, 10), (10, 40)], can_fall=True)  # 30 px down, beyond reach_v (23)
+    assert rg.graph.edges[nodes[0], nodes[1]]["kind"] == EdgeKind.DOWN
+    assert 40 - 10 > rg.reach_v
+    assert _go_down(rg, nodes[0], nodes[1], _NoDraw()) == DROP  # type: ignore[arg-type]
+    assert _decide(rg, (10, 10), nodes[1], _NoDraw()).move == DROP  # type: ignore[arg-type]
+
+
+def test_a_teleport_that_costs_more_than_the_drop_is_still_chosen_in_reach(ff2):
     agent, _ = ff2
-    rg = _rebuild(agent, ability_mix_band=0)
+    rg = _rebuild(agent, teleport_s=0.9)  # teleport 0.9 > drop 0.65 by more than the old band (H87: reach decides)
     target = _node(agent, (105, 42))
     rng = np.random.default_rng(1)
-    assert all(_decide(rg, (105, 23), target, rng).move == TELEPORT_DOWN for _ in range(200))
-
-
-def test_cheaper_drop_outside_the_band_is_chosen_every_time(ff2):
-    agent, _ = ff2
-    rg = _rebuild(agent, ability_mix_band=0, teleport_s=0.9)  # teleport 0.9 > drop 0.65 by more than the band
-    target = _node(agent, (105, 42))
-    rng = np.random.default_rng(1)
-    assert all(_decide(rg, (105, 23), target, rng).move == DROP for _ in range(50))
+    assert all(_decide(rg, (105, 23), target, rng).move == TELEPORT_DOWN for _ in range(50))
 
 
 def test_a_node_that_cannot_fall_always_teleports_down():
@@ -214,14 +223,13 @@ def test_a_node_that_cannot_fall_always_teleports_down():
     assert all(_decide(rg, (10, 10), nodes[1], rng).move == TELEPORT_DOWN for _ in range(200))
     rng = np.random.default_rng(0)
     _decide(rg, (10, 10), nodes[1], rng)
-    assert _rng_untouched(rng)  # a single option needs no draw
+    assert _rng_untouched(rng)
 
 
-def test_a_node_that_can_fall_with_both_options_inside_the_band_mixes():
+def test_a_node_that_can_fall_still_teleports_down_in_reach():
     nodes, rg = _synthetic([(10, 10), (10, 28)], can_fall=True)
     rng = np.random.default_rng(1)
-    moves = {_decide(rg, (10, 10), nodes[1], rng).move for _ in range(200)}
-    assert moves == {TELEPORT_DOWN, DROP}
+    assert all(_decide(rg, (10, 10), nodes[1], rng).move == TELEPORT_DOWN for _ in range(200))
 
 
 def test_off_graph_position_is_a_failure(ff2):
@@ -293,15 +301,15 @@ def test_no_path_to_the_target_is_a_failure():
     assert result.failure() == "no path from (10, 10) to (100, 10)"
 
 
-# ---- rng use (test 9) ----
+# ---- rng use (test 9; after H87 the planner draws nothing) ----
 
 @pytest.mark.parametrize(
     "pos, target_xy, params",
     [
         ((104, 43), (105, 42), {}),
-        ((105, 23), (105, 42), {"ability_mix_band": 0}),  # two options, outside the band: the cheaper one
+        ((105, 23), (105, 42), {}),  # the DOWN edge, with a drop also possible: no coin flip (H87)
         ((101, 24), (105, 42), {}),  # the walk to the launch x of the DOWN edge
-        ((101, 42), (105, 42), {"ability_mix_band": 0}),
+        ((101, 42), (105, 42), {}),
         ((49, 28), (101, 24), {}),
         ((66, 28), (101, 24), {}),
         ((72, 26), (101, 24), {}),
@@ -318,19 +326,12 @@ def test_no_path_to_the_target_is_a_failure():
         ((48, 64), (58, 46), {}),
     ],
 )
-def test_rng_is_untouched_outside_the_in_band_down_choice(ff2, pos, target_xy, params):
+def test_rng_is_never_drawn_from(ff2, pos, target_xy, params):
     agent, _ = ff2
     rg = _rebuild(agent, **params)
     rng = np.random.default_rng(0)
     next_move(rg, pos, _node(agent, target_xy), rng)
     assert _rng_untouched(rng)
-
-
-def test_rng_is_used_for_the_in_band_down_choice(ff2):
-    agent, rg = ff2
-    rng = np.random.default_rng(0)
-    next_move(rg, (105, 23), _node(agent, (105, 42)), rng)
-    assert not _rng_untouched(rng)
 
 
 # ---- P5 WALK edge at a slope-segment start (test 10) ----

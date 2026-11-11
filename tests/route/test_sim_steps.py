@@ -50,18 +50,22 @@ BOTH_NOISES = pytest.mark.parametrize("noise", [NoiseConfig(), OFFSETS], ids=["p
 PINNED_REPORT = dict(
     laps_requested=20, laps_completed=20, legs=141, legs_reached=141, stalls=0, timeouts=0, link_down=0,
     known_cases={}, single_error_legs=37, single_error_within_3=37, multi_error_legs=8, multi_error_within_bound=8,
-    moves=355, no_ops=17, drops=25, teleport_downs=16,
-    sim_seconds=pytest.approx(233.5318, rel=1e-9), mean_lap_s=pytest.approx(11.67659, rel=1e-9),
+    moves=355, no_ops=17, drops=0, teleport_downs=41,
+    sim_seconds=pytest.approx(228.6318, rel=1e-9), mean_lap_s=pytest.approx(11.43159, rel=1e-9),
     knockbacks=0,  # the field OFFP141 T3 added to the report; no knockback noise in these runs
     off_map=0,     # the field OFFP141 T7 added (legs that ended off_map); none in these runs
+    drop_only_edges=0,  # the field ROPE T1 added (H87); no rotation leg needs a drop
 )
+# H87 (ROPE T1): always teleport down when a teleport reaches. Before it this run had drops 25, teleport_downs 16,
+# sim_seconds 233.5318 and mean_lap_s 11.67659.
 # The same for NoiseConfig(node_offset_px=2): the shifted copy's draws must not move (moves 350 is the count RV-5 uses;
 # it was 356 at 8 px/s, with single_error_legs 42, multi_error_legs 4, no_ops 19, drops 23, teleport_downs 19,
-# sim_seconds 314.927 and mean_lap_s 15.74635).
+# sim_seconds 314.927 and mean_lap_s 15.74635). Before H87 (ROPE T1) at 12.5 px/s it had drops 21, teleport_downs 19,
+# sim_seconds 253.9981 and mean_lap_s 12.699905.
 PINNED_OFFSET_REPORT = dict(
     PINNED_REPORT, single_error_legs=38, single_error_within_3=38, multi_error_legs=5, multi_error_within_bound=5,
-    moves=350, no_ops=20, drops=21, teleport_downs=19,
-    sim_seconds=pytest.approx(253.9981, rel=1e-9), mean_lap_s=pytest.approx(12.699905, rel=1e-9),
+    moves=350, no_ops=20, drops=0, teleport_downs=40,
+    sim_seconds=pytest.approx(249.8481, rel=1e-9), mean_lap_s=pytest.approx(12.492405, rel=1e-9),
 )
 
 

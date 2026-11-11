@@ -166,26 +166,21 @@ def _offered(rg: RouteGraph) -> RouteGraph:
 
 
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:
-    """P5's DOWN edge: teleport down or drop. Within `ability_mix_band` of each other the two are a coin flip."""
+    """P5's DOWN edge (H87): teleport down whenever a teleport reaches the target platform; drop only when it cannot.
+    Nothing is drawn from `rng`, which stays in the signature for `route_preview`'s call. `_offered` and the graph
+    cost have already left out an edge with no option, so a move that is not a teleport here is a drop."""
     options = down_options(abs(h.minimap_position[1] - g.minimap_position[1]), bool(g.can_fall), rg.reach_v, rg.params)
-    if len(options) == 1:
-        choice = next(iter(options))
-    else:
-        cheap, dear = sorted(options, key=options.__getitem__)  # a tie keeps "teleport" first
-        if options[dear] <= options[cheap] * (1 + rg.params.ability_mix_band):
-            choice = "drop" if rng.random() < 0.5 else "teleport"
-        else:
-            choice = cheap
-    if choice == "drop":
-        return Move(MoveKind.DROP, None, None)
-    return Move(MoveKind.TELEPORT, Key.DOWN, None)
+    if "teleport" in options:
+        return Move(MoveKind.TELEPORT, Key.DOWN, None)
+    return Move(MoveKind.DROP, None, None)
 
 
 def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random.Generator) -> Result[Decision, str]:
     """The next move from `pos` toward `target`, or `Decision(None, 0.0, None)` when the character is at `target`.
 
     `Failure` when `target` is not in the route graph, `pos` is off the graph (`attach`'s message, unchanged), or no
-    path leads to `target`. `rng` is drawn from only to choose between teleporting down and dropping.
+    path leads to `target`. `rng` is no longer drawn from (H87: a down move teleports when a teleport reaches, else
+    drops); the parameter stays for the walker, the simulator and the route preview.
     """
     if target not in rg.graph:
         return Failure(f"target {target.minimap_position!r} is not in the route graph")

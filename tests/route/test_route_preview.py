@@ -35,7 +35,6 @@ TP_L = Move(MoveKind.TELEPORT, Key.LEFT, None)
 TP_UP = Move(MoveKind.TELEPORT, Key.UP, None)
 TP_DOWN = Move(MoveKind.TELEPORT, Key.DOWN, None)
 DROP = Move(MoveKind.DROP, None, None)
-COIN = (DROP, TP_DOWN)  # a coin-flip down hop's two options, in V4's order
 
 
 def walk(direction, ms):
@@ -114,7 +113,7 @@ CASES = [
     ])),
     ("T3", FF2, (101, 24), (105, 42), (0.87, [
         (walk(R, 320), (105, 42), (105, 24)),
-        (COIN, (105, 42), (105, 42)),
+        (TP_DOWN, (105, 42), (105, 42)),  # was COIN (DROP, TP_DOWN) before H87: a teleport in reach is always taken
     ])),
     ("T4", FF2, (104, 43), (105, 42), ARRIVED),
     ("T5", FF2, (105, 45), (105, 42), ARRIVED),
@@ -124,8 +123,8 @@ CASES = [
     ("T7", syn([(10, 10), (10, 28)], can_fall=True, ability_mix_band=0), (10, 10), 1, (0.55, [
         (TP_DOWN, 1, (10, 28)),
     ])),
-    ("T8", ff2(ability_mix_band=0, teleport_s=0.9), (105, 23), (105, 42), (1.29, [
-        (DROP, (105, 42), (105, 42)),
+    ("T8", ff2(teleport_s=0.9), (105, 23), (105, 42), (1.54, [
+        (TP_DOWN, (105, 42), (105, 42)),  # was DROP at 1.29 s: with H87 the teleport in reach wins although it costs more
     ])),
     ("T9", ff2(('"(79, 24)"', '"(79, 22)"')), (77, 25), (101, 24), (1.92, [
         (TP_R, (101, 24), (96, 24)),
@@ -205,7 +204,7 @@ CASES = [
     # `next_move`, not derived by hand (added for review finding WALKSPD-R m1).
     ("D2", FF2, (105, 42), (58, 46), (4.37, [
         (walk(L, 320), (101, 24), (101, 42)),
-        (COIN, (99, 60), (101, 60)),
+        (TP_DOWN, (99, 60), (101, 60)),  # was COIN (DROP, TP_DOWN) before H87
         (TP_L, (48, 45), (82, 60)),
         (TP_L, (48, 45), (63, 60)),
         (TP_L, (48, 45), (44, 61)),
@@ -313,8 +312,15 @@ def test_s3_the_first_hop_equals_next_move_exactly(built, case_id):
     assert _first_hop_problems(case.rg, case.pos, case.target) == []
 
 
-def test_s3_the_table_has_two_option_hops_for_the_seed_check(built):
-    assert [k for k, hop in enumerate(_preview(built["T3"]).hops) if len(hop.options) == 2] == [1]
+def test_s3_no_hop_of_the_table_has_two_options_after_h87(built):
+    # a hop with two options was the coin flip; `_first_hop_problems`' seed check only runs on such a hop
+    found = []
+    for case_id in IDS:
+        case = built[case_id]
+        result = preview(case.rg, case.pos, case.target)
+        hops = result.unwrap().hops if is_successful(result) else ()
+        found += [(case_id, k) for k, hop in enumerate(hops) if len(hop.options) == 2]
+    assert found == []
 
 
 # ---- 2. the table's literals ----
@@ -351,11 +357,11 @@ def test_the_table_literals(built, case_id):
 
 _BRANCH_LINES = {
     152: "return None",
-    172: "choice = next(iter(options))",
-    178: "choice = cheap",
-    201: "return Failure(anchor_result.failure())",
-    213: 'return Failure(f"no path from ',
-    243: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    174: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
+    175: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
+    196: "return Failure(anchor_result.failure())",
+    208: 'return Failure(f"no path from ',
+    238: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
 }
 
 
@@ -363,7 +369,7 @@ def test_s3_the_table_takes_the_six_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 213:
+        if number != 208:
             assert lines[number - 1].strip() == text, (number, lines[number - 1])
 
     planner_file = planner.__file__
@@ -477,13 +483,15 @@ def test_preview_is_repeatable_and_leaves_the_route_graph_unchanged(built):
     assert {key: snapshot(rg) for key, rg in graphs.items()} == before
 
 
-# ---- 7. the coin flip's options ----
+# ---- 7. a down hop's options (the coin flip until H87) ----
 
-def test_the_coin_flip_gives_both_options_drop_first_and_a_clear_choice_one(built):
-    assert _preview(built["T3"]).hops[1].options == (DROP, TP_DOWN)
+def test_a_down_hop_has_one_option_a_teleport_in_reach_else_a_drop(built):
+    # H87: there is no coin flip, so no hop offers (DROP, TP_DOWN); T3 and T8 held the flip and a dear teleport before
+    assert _preview(built["T3"]).hops[1].options == (TP_DOWN,)
     assert _preview(built["T2"]).hops[1].options == (TP_DOWN,)
     assert [hop.options for hop in _preview(built["T7"]).hops] == [(TP_DOWN,)]
-    assert [hop.options for hop in _preview(built["T8"]).hops] == [(DROP,)]
+    assert [hop.options for hop in _preview(built["T8"]).hops] == [(TP_DOWN,)]
+    assert _preview(built["T11"]).hops[2].options == (DROP,)  # 35 px down, beyond a teleport's reach
 
 
 # ---- 8. the landing rule, case by case ----

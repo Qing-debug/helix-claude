@@ -123,10 +123,12 @@ class RouteGraph:
             return dx / p.walk_px_per_s
         if kind == EdgeKind.UP:
             return p.teleport_s + dx / p.walk_px_per_s
-        options = down_options(dy, bool(u.can_fall), self.reach_v, p)
-        if not options:
-            return None
-        return min(options.values()) + dx / p.walk_px_per_s
+        options = down_options(dy, bool(u.can_fall), self.reach_v, p)  # H87: the teleport's cost when it reaches
+        if "teleport" in options:
+            return options["teleport"] + dx / p.walk_px_per_s
+        if "drop" in options:
+            return options["drop"] + dx / p.walk_px_per_s
+        return None
 
     def _add_edge(self, u: Node, v: Node, kind: EdgeKind) -> None:
         cost = self._edge_cost(u, v, kind)
