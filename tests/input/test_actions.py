@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from returns.pipeline import is_successful
 
-from src.input.actions import Plan, drop, jump, sequence, tap, teleport, walk
+from src.input.actions import Plan, drop, jump, jump_off, sequence, tap, teleport, walk
 from src.input.protocol import Key, Step, transitions, validate_schedule
 from src.input.timing import TimingModel, TimingType
 
@@ -141,6 +141,29 @@ def test_drop_is_down_then_alt():
         TimingType.HOLD,
         TimingType.RELEASE_LAG,
     ]
+    assert_plan_ok(p)
+
+
+@pytest.mark.parametrize("direction", [Key.LEFT, Key.RIGHT])
+def test_jump_off_is_arrow_then_alt_with_release_lag(direction):
+    m = StubModel(start_draws=3, chord_offset=25.0, hold=110.0, release_lag=12.5)
+    p = jump_off(m, direction)
+    assert p.name == "jump_off"
+    assert p.steps == (
+        Step(0, direction),
+        Step(250, direction | Key.ALT),
+        Step(1100, direction),
+        Step(125, Key(0)),
+    )
+    assert [s.type for s in p.samples] == [
+        TimingType.CHORD_OFFSET,
+        TimingType.HOLD,
+        TimingType.RELEASE_LAG,
+    ]
+    assert [s.ms for s in p.samples] == [25.0, 110.0, 12.5]
+    assert [s.index for s in p.samples] == [3, 4, 5]
+    assert [(s.step_from, s.step_to) for s in p.samples] == [(0, 1), (1, 2), (2, 3)]
+    assert m.draws == 6
     assert_plan_ok(p)
 
 
@@ -359,7 +382,7 @@ def test_sequences_over_three_keys_validate_with_every_hold_and_gap_at_its_extre
 # ---------------------------------------------------------------- property tests, real model
 
 
-@pytest.mark.parametrize("name", ["tap", "teleport", "drop", "jump"])
+@pytest.mark.parametrize("name", ["tap", "teleport", "drop", "jump", "jump_off"])
 def test_fixed_actions_validate_for_1000_seeds(name):
     for seed in SEEDS:
         m = TimingModel(np.random.default_rng(seed))
@@ -368,6 +391,7 @@ def test_fixed_actions_validate_for_1000_seeds(name):
             "teleport": lambda: teleport(m, ALL_KEYS[seed % 4]),
             "drop": lambda: drop(m),
             "jump": lambda: jump(m),
+            "jump_off": lambda: jump_off(m, ALL_KEYS[seed % 2]),
         }[name]()
         assert_plan_ok(p)
         assert m.draws == len(p.samples)

@@ -67,6 +67,9 @@ class InputLayer:
     def jump(self, stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
         return self._act(actions.jump(self._model), stimulus_ns)
 
+    def jump_off(self, direction: Key, stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
+        return self._act(actions.jump_off(self._model, direction), stimulus_ns)
+
     def sequence(self, keys: Sequence[Key], stimulus_ns: int | None = None) -> Result[ActionRecord, InputError]:
         # Any builder Failure (more than 8 keys, no key, or a malformed key) is TOO_LONG, before any wait
         # (C3, PA-rev m2).

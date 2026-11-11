@@ -91,6 +91,7 @@ METHODS = [
     ("teleport", lambda L, **kw: L.teleport(Key.UP, **kw), lambda m: actions.teleport(m, Key.UP)),
     ("drop", lambda L, **kw: L.drop(**kw), lambda m: actions.drop(m)),
     ("jump", lambda L, **kw: L.jump(**kw), lambda m: actions.jump(m)),
+    ("jump_off", lambda L, **kw: L.jump_off(Key.LEFT, **kw), lambda m: actions.jump_off(m, Key.LEFT)),
     ("sequence", lambda L, **kw: L.sequence([Key.LEFT, Key.E, Key.ALT], **kw),
      lambda m: actions.sequence(m, [Key.LEFT, Key.E, Key.ALT]).unwrap()),
 ]

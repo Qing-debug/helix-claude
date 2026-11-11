@@ -114,6 +114,10 @@ def drop(model: TimingModel) -> Plan:
     return _chord_plan("drop", model, Key.DOWN, Key.ALT)
 
 
+def jump_off(model: TimingModel, direction: Key) -> Plan:
+    return _chord_plan("jump_off", model, direction, Key.ALT)
+
+
 def walk(model: TimingModel, direction: Key, intended_ms: float) -> Result[Plan, str]:
     # TimingModel.walk raises ValueError on these (A-P2); a builder returns a Failure instead.
     if not (math.isfinite(intended_ms) and intended_ms >= 0):
