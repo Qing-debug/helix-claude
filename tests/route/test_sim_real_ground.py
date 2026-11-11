@@ -1,9 +1,11 @@
 """Tests for the real-ground simulator run (off-graph fix plan, Tasks 3-4, OFFP141): the preset `--real-ground` stands
-for (Fossil Foundry 2's real ground, the dot 3 px above the foot, the live teleport length, mob knockback), and the run
-the walker passes under it. Task 3 built the run and proved, with a strict xfail, that the walker froze on the top slope
-(at x 68, leg (49, 28) -> (101, 24)); Task 4's 3 px shift lifted the freeze, so the run is a plain test now.
+for (Fossil Foundry 2's real ground, the dot 3 px above the foot, the live teleport length, mob knockback and, since
+rope fix Task 6, rope grabs), and the run the walker passes under it. Task 3 built the run and proved, with a strict
+xfail, that the walker froze on the top slope (at x 68, leg (49, 28) -> (101, 24)); Task 4's 3 px shift lifted the
+freeze, so the run is a plain test now.
 """
 
+import dataclasses
 import json
 import statistics
 from pathlib import Path
@@ -35,6 +37,7 @@ def test_preset_teleport_matches_the_recordings():
         "unshifted code, so the run would never have shown the freeze on the slope (Task 3)")
     assert REAL_GROUND_SIM.dot_above_foot_px == 3
     assert REAL_GROUND_NOISE.knockback_p == 0.02
+    assert REAL_GROUND_NOISE.rope_grab_p == 0.2
     assert REAL_GROUND_TERRAIN == FIXTURES / "ff2_real_ground.json"
     assert REAL_GROUND_TERRAIN.is_file()
 
@@ -48,7 +51,9 @@ def test_real_ground_run_passes():
     report = result.unwrap()
     checks = judge(report, 0)
     assert all(check.ok for check in checks), [check for check in checks if not check.ok]
-    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 8 on seed 2"
+    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 2 on seed 2"
+    # the preset's rope knob (Task 6): the sim grabs only rope 107, and the walker gets off it (4 grabs on seed 2)
+    assert report.rope_grabs > 0 and report.off_map == 0
 
 
 def test_report_counts_the_knockbacks():
@@ -95,7 +100,8 @@ def test_an_off_map_leg_in_the_middle_of_a_lap_is_counted(tmp_path):
     lowered = tmp_path / "lowered.json"
     lowered.write_text(json.dumps(terrain), encoding="utf-8")
 
-    result = run_sim(CSV, lowered, 1, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
+    quiet_ropes = dataclasses.replace(REAL_GROUND_NOISE, rope_grab_p=0.0)  # the scenario is about the ground, not ropes
+    result = run_sim(CSV, lowered, 1, 2, noise=quiet_ropes, sim_params=REAL_GROUND_SIM)
 
     assert is_successful(result), result
     report = result.unwrap()

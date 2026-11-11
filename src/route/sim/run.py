@@ -10,8 +10,8 @@ report into six pass/fail checks, and `main` is the CLI:
         [--known-case X1,Y1:X2,Y2]... [--min-single-error-legs K] [--class kanna]
 
 `--real-ground` runs Fossil Foundry 2 on the ground the live runs showed (`REAL_GROUND_TERRAIN`), with the dot 3 px
-above the foot, the live teleport length and mob knockback (`REAL_GROUND_SIM`, `REAL_GROUND_NOISE`). It is for the FF2
-map only: `--terrain` or another `--map` with it is a usage error (exit 2).
+above the foot, the live teleport length, mob knockback and rope grabs (`REAL_GROUND_SIM`, `REAL_GROUND_NOISE`). It is
+for the FF2 map only: `--terrain` or another `--map` with it is a usage error (exit 2).
 
 With `out_dir` (`--out`) the run writes `legs.jsonl` and `laps.jsonl` (the leg log), `map.csv` and `steps.jsonl` (the
 step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end`
@@ -33,7 +33,9 @@ Where the plan is silent:
 - `noise` fails when no move was made (0/0).
 - The marks of the map's rope file (`read_ropes(rope_file_for(map_csv))`, none when there is no file; a bad file is the
   run's `Failure`) go to the world and to the recovery replays' worlds, read from the `--map` file itself: the node-offset
-  copy shifts nodes only, so the marks stay where they were measured. `rope_grabs` counts the world's grabs.
+  copy shifts nodes only, so the marks stay where they were measured. `rope_grabs` counts the world's grabs. The run's
+  walker also gets them, as `RopeZones.build(ropes, params)`, so it gets off a rope it grabbed (H88, H93); the replays'
+  walkers get none, because a noise-off world never grabs a rope.
 - With node offsets the original CSV is loaded first (it gives the unshifted rotation positions), then one offset is
   drawn per CSV data row, in file order, before the world's first draw.
 - The CSV parser's progress prints during `loadMap` are swallowed, so the CLI prints only the report and the checks.
@@ -80,6 +82,7 @@ from src.input.timing import TimingModel
 from src.route.leg_log import JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink, MemorySink
 from src.route.params import MovementParams, validate
 from src.route.planner import MoveKind, _offered
+from src.route.ropes import RopeZones
 from src.route.route_graph import EdgeKind, RouteGraph
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
 from src.route.sim.world import InjectedError, MoveEffect, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain
@@ -100,7 +103,9 @@ REAL_GROUND_TERRAIN = _REPO / "tests" / "fixtures" / "ff2_real_ground.json"
 # above the node line. Live sideways teleports went a median of 20 px (`ff2_live_reads.json`), 1 px beyond the
 # character's reach: `test_preset_teleport_matches_the_recordings` pins the 1.0 against the recordings.
 REAL_GROUND_SIM = SimParams(dot_above_foot_px=3, side_teleport_extra_px=1.0)
-REAL_GROUND_NOISE = NoiseConfig(knockback_p=0.02)  # the other noise stays at its defaults
+# Mob knockback and rope grabs are on: a teleport down over a rope's column grabs it 1 time in 5 (the marks of the map's
+# rope file, H88; the walker gets off it, H93). The other noise stays at its defaults.
+REAL_GROUND_NOISE = NoiseConfig(knockback_p=0.02, rope_grab_p=0.2)
 
 
 @dataclass(frozen=True)
@@ -419,7 +424,8 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
     sink = _MarkingSink(MemorySink() if log is None else log, world)
     config = WalkerConfig(use_stimulus=False, leg_timeout_s=_LEG_TIMEOUT_S, max_laps=laps)
     walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config,
-                         observer=observer if step_log is None else step_log)
+                         observer=observer if step_log is None else step_log,
+                         ropes=RopeZones.build(ropes, params))
     began_ns = clock.now_ns()
     ran: Result[RunSummary, str] = Failure("the run raised")  # what the finally sees if `run` raises
     try:

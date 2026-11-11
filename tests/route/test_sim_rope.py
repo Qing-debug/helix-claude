@@ -1,18 +1,18 @@
-"""Tests for the simulator's ropes (rope fix plan, Task 5, H88): the rope physics in `SimWorld`, the `jump_off` decode in
-`SimLink`, the rope file read by `run_sim`, and the before-proof that today's walker ends a rope grab off the map.
+"""Tests for the simulator's ropes (rope fix plan, Tasks 5-6, H88, H93): the rope physics in `SimWorld`, the `jump_off`
+decode in `SimLink`, the rope file read by `run_sim`, and the run in which the walker gets off the rope it grabbed.
 
 The ropes are Fossil Foundry 2's two, read from `tests/fixtures/fossil_foundry_2.ropes.json` (Task 2), on each terrain
 fixture. A character on a rope reads 1 px left of the rope's column (`ON_ROPE_DX`), so the right rope is at x 106.
 """
 
 import dataclasses
-import json
 import math
 from pathlib import Path
 
 import numpy as np
 import pytest
 from returns.pipeline import is_successful
+from test_walker_standing import Rec
 
 from src.classes.classes import Kanna
 from src.controller.rope_file import ON_ROPE_DX, read_ropes, rope_file_for
@@ -353,12 +353,14 @@ def _figures(report):
 
 
 def test_defaults_change_nothing_here(tmp_path):
-    """The rope file is present and the knobs are off: Task 1's figures, no grab. The same with the file hidden."""
+    """The rope file is present and the knobs are off: Task 1's figures, no grab, though the walker now knows the zones.
+    The same with the file hidden. The real ground's preset has the rope knob on since Task 6 (its own figures are
+    pinned in `test_sim_real_ground.py`), so its half of this test turns the knob off."""
     result = run_sim(CSV, DEFAULT_TERRAIN, 20, 2)
     assert is_successful(result), result
     assert _figures(result.unwrap()) == SMOKE and result.unwrap().rope_grabs == 0
 
-    real = run_sim(CSV, REAL_TERRAIN, 20, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
+    real = run_sim(CSV, REAL_TERRAIN, 20, 2, noise=_with(REAL_GROUND_NOISE, rope_grab_p=0.0), sim_params=REAL_GROUND_SIM)
     assert is_successful(real), real
     assert _figures(real.unwrap()) == REAL and real.unwrap().rope_grabs == 0
 
@@ -381,21 +383,25 @@ def test_a_bad_rope_file_is_the_runs_failure(tmp_path):
 
 def test_node_offsets_do_not_move_the_marks():
     """The offset copy of the map is made in a temporary folder with no rope file: the marks still come from the original
-    map's file, where they were measured, so a sure grab still happens on a run with node offsets."""
-    result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2, noise=NoiseConfig(node_offset_px=2, rope_grab_p=1.0))
+    map's file, where they were measured, so a grab still happens on a run with node offsets. The knob is 0.5, not 1.0
+    (Task 5's value): with 1.0 and offsets of 2 px, `next_move` places a rope read at (106, 48) on the map, the zones
+    are never asked, the planned walk does nothing on a rope, and the leg times out."""
+    result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2, noise=NoiseConfig(node_offset_px=2, rope_grab_p=0.5))
     assert is_successful(result), result
     assert result.unwrap().rope_grabs >= 1
 
 
-# --- 6. the before-proof: today's walker ends a rope grab off the map ----------------------------------------------
+# --- 6. the rope rule on a run: the walker gets off the rope it grabbed -------------------------------------------
+
+
+GRAB_SEED = 3     # seed 2 (Task 5's) grabs 5 times and walks every leg, but its draws give 16/360 no-ops: 4.44%, under the 5% bar
 
 
 def _grab_run(**kwargs):
-    return run_sim(CSV, DEFAULT_TERRAIN, 20, 2, noise=NoiseConfig(rope_grab_p=0.2), **kwargs)
+    return run_sim(CSV, DEFAULT_TERRAIN, 20, GRAB_SEED, noise=NoiseConfig(rope_grab_p=0.2), **kwargs)
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(strict=True, reason="today's walker ends a rope grab off_map; Task 6 removes this mark")
 def test_rope_grab_run_passes():
     result = _grab_run()
     assert is_successful(result), result
@@ -406,16 +412,16 @@ def test_rope_grab_run_passes():
 
 
 @pytest.mark.slow
-def test_today_ends_a_rope_grab_off_map(tmp_path):
-    """Deleted in Task 6. The first leg that is not reached ends `off_map`: with no rope known, a walker that reads the
-    character on a rope more than 6 px from every platform line waits 0.5 s and ends the run. Seed 2 at the default
-    terrain: 4 grabs. Three end at y 46, 46 and 48, within 6 px of the mid-right line: the walker attaches them to it and
-    teleports down again, which leaves the rope. The 4th, in lap 14 on leg 6, (105, 42) -> (113, 60), ends at (106, 52)
-    and the leg is `off_map`."""
-    out = tmp_path / "run"
-    result = _grab_run(out_dir=out)
+def test_rope_grab_run_recovers():
+    """Task 5's before-proof, turned round: with no rope known, a grab that ended more than 6 px from every platform line
+    (Task 5's seed 2: the 4th, in lap 14 on leg 6, (105, 42) -> (113, 60), at (106, 52)) ended its leg `off_map`. Now the
+    walker knows the rope: no leg ends `off_map`, and at least one move is a rope move, a `planned` event with `toward`
+    None (a rope read is off the graph, so there is no hop to aim at)."""
+    rec = Rec()
+    result = _grab_run(observer=rec)
     assert is_successful(result), result
-    assert result.unwrap().rope_grabs >= 1
-    legs = [json.loads(line) for line in (out / "legs.jsonl").read_text(encoding="utf-8").splitlines()]
-    outcomes = [leg["outcome"] for leg in legs if leg["outcome"] != "reached"]
-    assert outcomes and outcomes[0] == "off_map"
+    report = result.unwrap()
+    assert report.rope_grabs >= 1
+    assert report.off_map == 0
+    assert [e for e in rec.of("leg_end") if e[2] == "off_map"] == []
+    assert [e for e in rec.of("planned") if e[7] is None]
