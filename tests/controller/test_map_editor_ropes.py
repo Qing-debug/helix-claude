@@ -59,7 +59,7 @@ def make_editor(monkeypatch):
     dialogs = SimpleNamespace(errors=[], infos=[], questions=[], yes_answer=True, open_path="", save_path="")
     scheduled = []
 
-    monkeypatch.setattr(tk.Misc, "after", lambda self, ms, func=None, *args: scheduled.append((ms, func)))
+    monkeypatch.setattr(tk.Misc, "after", lambda self, ms, func=None, *args: scheduled.append((ms, func, args)))
     monkeypatch.setattr(map_editor.messagebox, "showerror", lambda title, message, **kw: dialogs.errors.append((title, message)))
     monkeypatch.setattr(map_editor.messagebox, "showinfo", lambda title, message, **kw: dialogs.infos.append((title, message)))
     monkeypatch.setattr(map_editor.messagebox, "askokcancel", lambda title, message, **kw: True)
@@ -512,17 +512,19 @@ def rope_frame(*, rope_46=True, rope_107=True) -> np.ndarray:
     return frame
 
 
-def run_scan(rig) -> int:
-    """Run the recorded Find-ropes ticks by hand, one at a time, until none is pending. Returns how many ran."""
+def run_scan(rig, limit=None) -> int:
+    """Run the recorded Find-ropes ticks by hand, oldest first, until none is pending (or `limit` have run), each with the
+    arguments it was scheduled with. Returns how many ran."""
     ran = 0
-    while True:
+    while limit is None or ran < limit:
         pending = [item for item in rig.scheduled if item[1] == rig.editor._onRopeScanTick]
         if not pending:
-            return ran
+            break
         rig.scheduled.remove(pending[0])
         assert pending[0][0] == map_editor.ROPE_SCAN_EVERY_MS
-        pending[0][1]()
+        pending[0][1](*pending[0][2])
         ran += 1
+    return ran
 
 
 def status(editor) -> str:
@@ -547,20 +549,49 @@ def type_in_box(editor, name, text):
     editor._applyRopeBox(name)
 
 
-def press_delete(editor, widget=None):
-    """A real <Delete> key event, delivered the way Tk delivers a key: to the widget that has the keyboard (by default the
-    one the editor's window last gave it to: the canvas after a click on the map), so it runs the widget's own bindings and
-    then the window's `<Delete>` binding (`_onDeleteKey`). Tk hands a generated key event to the display's focus window
-    and drops it when the application has none. Inside one pytest process only the first Tk window the process opens gets
-    the keyboard from Windows (measured: the editor's second window onwards has `focus` empty, so a plain `event_generate`
-    does nothing there; run alone, the first test works), so the widget is given the focus with `focus_force` first and the
-    helper fails loudly if that did not take."""
+def assert_delete_chain(editor, widget):
+    """What Tk runs for a <Delete> typed in `widget`, checked without sending a key: the window's binding is `_onDeleteKey`,
+    the window's bindtag comes after the widget's own and its class's (so the widget edits its text first), and a text
+    box's class binding does not `break` (a `break` would stop the window's binding, and the Delete key with it)."""
     window = editor.window
-    widget = widget if widget is not None else window.focus_lastfor()
-    widget.focus_force()
+    assert "_onDeleteKey" in window.bind("<Delete>")
+    tags = list(widget.bindtags())
+    assert tags[0] == str(widget) and tags.index(widget.winfo_class()) < tags.index(str(window))
+    if isinstance(widget, tk.Spinbox):
+        assert widget.bind_class("Spinbox", "<Delete>") and "break" not in widget.bind_class("Spinbox", "<Delete>").split()
+
+
+def press_delete(editor, widget=None):
+    """A <Delete> key for `widget` (by default the map canvas, which a click on the map gives the keyboard), through the
+    widget's own bindings and then the window's (`_onDeleteKey`).
+
+    Never `focus_force`: that asks Windows for the foreground (Tk's `focus -force` ends in `SetForegroundWindow`), and a
+    test run must not take the keyboard from the game or a walk (the board's keys go to the window in front; ROPE152-R3b
+    I1). `focus_set` asks Windows for nothing. Tk hands a generated key event to the display's focus window and drops it
+    when the application has none, and inside one pytest process only the first Tk window the process opens gets the
+    keyboard from Windows (measured: later windows have an empty `focus`). So: when Tk's focus is the widget after
+    `focus_set`, send the real key event. Otherwise check the chain Tk would run (`assert_delete_chain`) and run both its
+    ends by hand: a text box's own Delete (it removes the character after the cursor) and `_onDeleteKey` with the box as
+    `event.widget`. Returns "key" or "call", for the test that wants to know which."""
+    window = editor.window
+    window.update()  # maps the window first: measured, a canvas click's `focus_set` before the first update left `focus -lastfor` at the window
+    widget = widget if widget is not None else editor.minimap_canvas
+    widget.focus_set()
     window.update()
-    assert str(window.tk.call("focus")) == str(widget), "the editor window has no keyboard focus in Tk"
-    widget.event_generate("<Delete>")
+    if str(window.tk.call("focus")) == str(widget):
+        widget.event_generate("<Delete>")
+        return "key"
+    assert_delete_chain(editor, widget)
+    if isinstance(widget, tk.Spinbox):
+        widget.delete(widget.index("insert"))  # the Spinbox class binding; the tests leave no selection in a box
+    editor._onDeleteKey(SimpleNamespace(widget=widget))
+    return "call"
+
+
+def test_the_delete_binding_runs_after_a_boxs_own_and_is_not_stopped(make_editor):
+    editor = make_editor().editor
+    for widget in (*editor._rope_boxes.values(), editor.minimap_canvas):
+        assert_delete_chain(editor, widget)
 
 
 def test_find_ropes_adds_the_ropes_in_the_frames(make_editor):
@@ -797,8 +828,8 @@ def test_delete_in_a_number_box_edits_the_text_and_leaves_the_ropes(make_editor)
     assert rope_lines(editor) == 2
 
     editor._rope_vars["x"].set("107")  # undo the typing, so leaving the box has no edit to commit
-    click(editor, 107, 52)  # a click on the map gives the canvas the keyboard back
-    assert str(editor.window.tk.call("focus")) == str(editor.minimap_canvas)
+    click(editor, 107, 52)  # a click on the map gives the canvas the keyboard back (Tk's record: `lastfor` holds when the
+    assert editor.window.focus_lastfor() is editor.minimap_canvas  # application itself has no keyboard focus here)
     press_delete(editor)
     assert editor.state.ropes == [ROPE_46] and editor.state.selected_rope is None
 
@@ -824,3 +855,163 @@ def test_load_clears_an_armed_add_rope(make_editor, tmp_path):
     assert not editor.state.add_rope_armed
     click(editor, 90, 40)
     assert editor.state.ropes == [] and len(editor.state.nodes) == 2
+
+
+# -- fix round 1 (ROPE152-R3b I2 and m1) ------------------------------------------------------------------------------------
+
+def pending_ticks(rig) -> list:
+    return [item for item in rig.scheduled if item[1] == rig.editor._onRopeScanTick]
+
+
+def saved_ropes(csv_path) -> tuple:
+    return read_ropes(rope_file_for(Path(csv_path))).unwrap().ropes
+
+
+def typed_but_not_committed(rig, tmp_path, name="x", text="108") -> Path:
+    """A saved map with rope 107 selected and `text` typed in a number box without Return and without leaving the box.
+    That is the state when the user then clicks a button: a button click does not take the keyboard from the box, so the
+    box's leave binding never fires."""
+    csv_path = write_map(tmp_path / "m.csv", [(20, 20)])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107,), (FRAME_W, FRAME_H), {}))
+    load(rig, csv_path)
+    click(rig.editor, 107, 52)
+    rig.editor._rope_vars[name].set(text)
+    assert rig.editor.state.ropes == [ROPE_107] and not rig.editor.state.dirty  # nothing committed yet
+    return csv_path
+
+
+@pytest.mark.parametrize("name, text, expected", [
+    ("x", "108", RopeMark(108, 43, 61)),
+    ("top_y", "40", RopeMark(107, 40, 61)),
+    ("bottom_y", "65", RopeMark(107, 43, 65)),
+])
+def test_save_writes_a_value_typed_in_a_number_box_and_not_committed(make_editor, tmp_path, name, text, expected):
+    rig = make_editor()
+    csv_path = typed_but_not_committed(rig, tmp_path, name, text)
+
+    rig.editor._save()
+
+    assert saved_ropes(csv_path) == (expected,)
+    assert rig.editor.state.ropes == [expected] and not rig.editor.state.dirty
+    assert box_values(rig.editor) == [str(expected.x), str(expected.top_y), str(expected.bottom_y)]
+
+
+def test_save_as_writes_a_value_typed_in_a_number_box_and_not_committed(make_editor, tmp_path):
+    rig = make_editor()
+    typed_but_not_committed(rig, tmp_path)
+    other = tmp_path / "other.csv"
+    rig.dialogs.save_path = str(other)
+
+    rig.editor._saveAs()
+
+    assert saved_ropes(other) == (RopeMark(108, 43, 61),)
+    assert not rig.editor.state.dirty
+
+
+def test_save_checks_the_keep_out_against_a_typed_value(make_editor, tmp_path):
+    rig = make_editor()
+    csv_path = write_map(tmp_path / "m.csv", [(20, 20), (60, 43)])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107,), (FRAME_W, FRAME_H), {}))
+    load(rig, csv_path)
+    click(rig.editor, 107, 52)
+    rig.editor._rope_vars["x"].set("61")  # the rope moves to x 61, next to the node at (60, 43), where it meets the platform
+
+    rig.editor._save()
+
+    assert rig.dialogs.errors and rig.dialogs.errors[-1][0] == "Cannot save"
+    assert saved_ropes(csv_path) == (ROPE_107,) and rig.editor.state.ropes == [RopeMark(61, 43, 61)]
+
+
+def test_save_refuses_a_bad_typed_value_as_leaving_the_box_does(make_editor, tmp_path):
+    rig = make_editor()
+    csv_path = typed_but_not_committed(rig, tmp_path, "x", "abc")
+
+    rig.editor._save()
+
+    assert saved_ropes(csv_path) == (ROPE_107,) and not rig.editor.state.dirty
+    assert status(rig.editor) == "Not changed: x must be a whole number, 0 or more."
+    assert box_values(rig.editor) == ["107", "43", "61"]
+
+
+@pytest.mark.parametrize("answer, closes, saves", [(None, False, False), (False, True, False), (True, True, True)])
+def test_close_counts_a_value_typed_in_a_number_box_as_unsaved(make_editor, tmp_path, monkeypatch, answer, closes, saves):
+    rig = make_editor()
+    csv_path = typed_but_not_committed(rig, tmp_path)
+    asked = []
+
+    def ask(title, message, **kw):
+        asked.append((title, message))
+        return answer
+
+    monkeypatch.setattr(map_editor.messagebox, "askyesnocancel", ask)
+
+    assert rig.editor._okToClose() is closes
+
+    assert asked == [("Unsaved changes", "You have unsaved changes to m.csv.\nSave before closing?")]
+    assert saved_ropes(csv_path) == ((RopeMark(108, 43, 61),) if saves else (ROPE_107,))
+
+
+def test_close_with_nothing_typed_still_closes_without_asking(make_editor, tmp_path, monkeypatch):
+    rig = make_editor()
+    typed_but_not_committed(rig, tmp_path, "x", "107")  # the text is the rope's own value
+    monkeypatch.setattr(map_editor.messagebox, "askyesnocancel", lambda *a, **kw: pytest.fail("asked with nothing unsaved"))
+
+    assert rig.editor._okToClose() is True
+
+
+def test_load_counts_a_value_typed_in_a_number_box_as_unsaved(make_editor, tmp_path, monkeypatch):
+    rig = make_editor()
+    csv_path = typed_but_not_committed(rig, tmp_path)
+    asked = []
+    monkeypatch.setattr(map_editor.messagebox, "askyesnocancel", lambda title, message, **kw: asked.append(message))
+
+    load(rig, write_map(tmp_path / "other.csv", [(30, 30)]))  # the box answers Cancel (None)
+
+    assert asked == ["You have unsaved changes to m.csv.\nSave before loading?"]
+    assert rig.editor.state.current_file == str(csv_path) and rig.editor.state.ropes == [RopeMark(108, 43, 61)]
+
+
+def test_a_load_cancels_a_find_scan_in_flight(make_editor, tmp_path):
+    rig = make_editor(rope_frame())
+    editor = rig.editor
+    editor._findRopes()
+    assert run_scan(rig, limit=5) == 5 and status(editor) == map_editor.FIND_ROPES_TEXT
+
+    load(rig, write_map(tmp_path / "m.csv", [(20, 20)]))  # the live minimap's ropes must not land on this map
+    assert status(editor) == ""
+    assert run_scan(rig) == 1  # the pending tick fires, finds its collection gone and schedules nothing
+
+    assert editor.state.ropes == [] and not editor.state.dirty and pending_ticks(rig) == []
+
+
+def test_a_refused_load_leaves_a_find_scan_running(make_editor, tmp_path):
+    rig = make_editor(rope_frame())
+    editor = rig.editor
+    editor._findRopes()
+    run_scan(rig, limit=5)
+
+    rig.dialogs.open_path = ""  # the file dialog is cancelled: the editor is unchanged, so is the collection
+    editor._load()
+
+    assert status(editor) == map_editor.FIND_ROPES_TEXT
+    run_scan(rig)
+    assert editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+def test_a_find_after_a_load_runs_one_collection(make_editor, tmp_path):
+    rig = make_editor(rope_frame())
+    editor = rig.editor
+    lock = RecordingLock()
+    editor.sharedInfo.minimap_frame_lock = lock
+    editor._findRopes()
+    run_scan(rig, limit=5)
+    load(rig, write_map(tmp_path / "m.csv", [(20, 20)]))
+    taken = lock.taken
+
+    editor._findRopes()  # pressed again before the cancelled collection's tick has fired
+    assert len(pending_ticks(rig)) == 2
+    assert run_scan(rig, limit=1) == 1  # the old collection's tick: no frame taken, none scheduled
+    assert lock.taken == taken and len(pending_ticks(rig)) == 1
+
+    assert run_scan(rig) == map_editor.ROPE_SCAN_FRAMES and lock.taken == taken + map_editor.ROPE_SCAN_FRAMES
+    assert editor.state.ropes == [ROPE_46, ROPE_107] and status(editor) == "Found 2 ropes"

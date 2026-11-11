@@ -126,8 +126,11 @@ class MapEditor:
         self._saved_ropes: List[RopeMark] = []
 
         # Find ropes (Task 3b): the frames collected so far, None while no collection runs; the ticks done.
+        # The generation numbers the collections: each `after` tick carries its collection's number and stops when it is
+        # no longer the current one, so a collection cancelled by `_load` cannot keep running beside a new one.
         self._rope_scan_frames: Optional[List[np.ndarray]] = None
         self._rope_scan_ticks = 0
+        self._rope_scan_generation = 0
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -715,6 +718,22 @@ class MapEditor:
         self._refreshRopeBoxes()
         self._renderNodes()
 
+    def _commitRopeBoxes(self):
+        """Commit a number box whose text was typed but not committed yet. The boxes commit on Return, on leaving the box
+        and on their arrows, but a click on a button (Save, Save As, Load Map, the window's close) does not take the
+        keyboard from a box, so no leave event fires and the typed value would be neither saved nor counted as unsaved
+        (ROPE152-R3b I2). `_save`, `_saveAs`, `_okToClose` and `_load` call this first. Only a box whose text differs from
+        the selected rope is applied, because applying one resets all three boxes to the rope's values; the boxes commit
+        when the user leaves them, so at most one differs. A refused value is refused as it is when leaving the box."""
+        index = self.state.selected_rope
+        if index is None or not 0 <= index < len(self.state.ropes):
+            return
+        mark = self.state.ropes[index]
+        for name in ROPE_BOX_LABELS:
+            if self._rope_vars[name].get() != str(getattr(mark, name)):
+                self._applyRopeBox(name)
+                return
+
     def _startAddRope(self):
         """The Add rope button: the next two canvas clicks are the rope's top end and bottom end (D3)."""
         if self.minimap_canvas is None:
@@ -758,16 +777,18 @@ class MapEditor:
             return
         if self._rope_scan_frames is not None:
             return
+        self._rope_scan_generation += 1
         self._rope_scan_frames = []
         self._rope_scan_ticks = 0
         self._setStatus(FIND_ROPES_TEXT)
-        self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick)
+        self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, self._rope_scan_generation)
 
-    def _onRopeScanTick(self):
-        """One step of the collection. The frame is copied under `minimap_frame_lock` into a local and the lock is
-        released before any Tk call (the vision thread writes it; nothing here may hold it across Tk or a sleep)."""
+    def _onRopeScanTick(self, generation):
+        """One step of the collection numbered `generation`. The frame is copied under `minimap_frame_lock` into a local
+        and the lock is released before any Tk call (the vision thread writes it; nothing here may hold it across Tk or a
+        sleep). A tick of an older collection (one `_load` cancelled) does nothing and does not schedule another."""
         frames = self._rope_scan_frames
-        if frames is None or not self.window.winfo_exists():
+        if generation != self._rope_scan_generation or frames is None or not self.window.winfo_exists():
             return
         with self.sharedInfo.minimap_frame_lock:
             frame = self.sharedInfo.minimap_frame
@@ -776,7 +797,7 @@ class MapEditor:
             frames.append(copied)
         self._rope_scan_ticks += 1
         if self._rope_scan_ticks < ROPE_SCAN_FRAMES:
-            self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick)
+            self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, generation)
             return
         self._rope_scan_frames = None
         self._finishRopeScan(frames)
@@ -825,6 +846,7 @@ class MapEditor:
         Pre-save validation runs BEFORE any file dialog so the user isn't asked to pick
         a filename for a save that will be rejected.
         """
+        self._commitRopeBoxes()
         if not self._okToSave():
             return
         if self.state.current_file is None:
@@ -837,6 +859,7 @@ class MapEditor:
 
         Pre-save validation runs BEFORE the file dialog opens.
         """
+        self._commitRopeBoxes()
         if not self._okToSave():
             return
         self._promptAndWrite()
@@ -1050,7 +1073,10 @@ class MapEditor:
             else Save As). Afterwards, if state is still dirty (Save As cancelled OR
             write_editor_nodes failed), abort the load. Otherwise proceed.
           - Discard: fall through to the load dialog, abandoning unsaved changes.
+        A Find ropes collection still running is cancelled once the load goes ahead (not when it is refused or cancelled:
+        the editor state is unchanged then, and so is the collection).
         """
+        self._commitRopeBoxes()  # a typed number box counts as an unsaved change
         if self.state.dirty:
             name = Path(self.state.current_file).name if self.state.current_file else "untitled"
             resp = messagebox.askyesnocancel(
@@ -1143,6 +1169,9 @@ class MapEditor:
         rope_file_existed = rope_path.exists()  # before the read: a missing file reads as Success with no ropes
         rope_result = read_ropes(rope_path)
 
+        if self._rope_scan_frames is not None:  # its frames are of the live minimap and must not add ropes to this map
+            self._rope_scan_frames = None  # the pending tick of this collection sees that and stops
+            self._setStatus("")  # "Finding ropes: ..." no longer says what is happening
         self.state.nodes = {n.local_id: n for n in nodes_list}
         self.state.rotation_order = list(rotation_order)
         self.state.selected_id = None
@@ -1180,6 +1209,7 @@ class MapEditor:
         the standard save flow; if state is still dirty after (Save As cancelled OR write
         failed), treat as a cancel and keep the window open.
         """
+        self._commitRopeBoxes()  # a typed number box counts as an unsaved change
         if not self.state.dirty:
             return True
         name = Path(self.state.current_file).name if self.state.current_file else "untitled"
