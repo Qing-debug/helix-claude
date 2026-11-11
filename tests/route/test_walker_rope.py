@@ -164,6 +164,26 @@ def test_rope_count_restarts_on_a_placed_read(ff2):
     assert any(e[7] is not None for e in rig.rec.of("planned"))   # the placed read had moves of its own in between
 
 
+def test_rope_count_restarts_after_the_h85_snap(ff2):
+    """ROPE154-R6 m1: UP, UP, then a 0.5 s still read off the rope that H85 snaps onto a platform line (the character
+    stands on a platform, so it is off the rope), then the rope again: the order starts from the blinks (H88, H93), so two
+    more UPs come before the jump off (a count kept across the snap would jump off at once)."""
+    snap_read = (82, 55)   # in no zone, 5 px over a floor line outside every rope zone: H85's loose attach
+    assert ZONES.at(snap_read) is None and not is_successful(attach(ff2.rg, snap_read))
+    rig = _rig(ff2, steps((0, Success(RIGHT_ROPE_READ)), (0.5, Success(snap_read)), (1.5, Success(RIGHT_ROPE_READ))),
+               leg_timeout_s=30.0)
+
+    record = _leg(ff2, rig, FLOOR_RIGHT)
+
+    assert record.outcome == LegOutcome.OFF_MAP
+    assert rig.layer.keys == [("teleport", "UP"), ("teleport", "UP"),
+                              ("teleport", "RIGHT"),                      # H85's snap to (82, 60), the planner's move
+                              ("teleport", "UP"), ("teleport", "UP"), ("jump_off", "RIGHT")]
+    assert [(kind, direction) for _, kind, direction in _rope_moves(rig)] == [
+        ("teleport", "UP"), ("teleport", "UP"), ("teleport", "UP"), ("teleport", "UP"), ("jump_off", "RIGHT")]
+    assert rig.lines == [ROPE_LINE.format(x=107, px=106, py=49)]
+
+
 class CountingZones(RopeZones):
     """The real zones that count every `at` call."""
 

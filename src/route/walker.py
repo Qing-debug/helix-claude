@@ -270,6 +270,7 @@ class RouteWalker:
                         outcome = LegOutcome.OFF_MAP
                         break
                     pos = snapped.unwrap()
+                    rope_at, rope_tries = None, 0  # standing on a platform line: off the rope, so its order starts again
                     planned = next_move(self._rg, pos, dst, self._rng)
                     if not is_successful(planned):
                         clock.sleep(params.poll_s)
