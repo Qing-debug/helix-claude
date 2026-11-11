@@ -3,13 +3,13 @@ plan contract V4).
 
 `preview(rg, pos, target)` gives the candidate starts with their costs, the chosen start, the minimum-cost path and
 the hops: hop 0 is the move `next_move` makes from `pos`, and hop k the move it makes from the point where hop k-1 is
-assumed to land (the landing rule, V4). It draws nothing: where `next_move` would toss a coin between a drop and a
-teleport down, the hop holds both options.
+assumed to land (the landing rule, V4). It draws nothing. Since H87 `next_move` takes no draw (a down move is a teleport when one reaches, a drop only when
+none does), so every hop holds one option; the two-option branch of the old drop-or-teleport coin flip stays, unreached.
 
-`_plan` is this module's copy of `next_move`'s rules P1-P5 (`planner.py:190-247`), statement for statement, and calls
+`_plan` is this module's copy of `next_move`'s rules P1-P5 (`planner.py:200-264`), statement for statement, and calls
 the planner's private helpers (RV1-D4 A, H53; RV-11 notes the seam in `src/route/CLAUDE.md`); `planner.py` is never
 edited. It differs only in what it returns (the options, `toward`, the total, the starts, the path and the move's
-aim) and in the coin flip, where it calls `_go_down` with two stub generators (RV3-D4 A).
+aim) and in the old coin flip, where it calls `_go_down` with two stub generators (RV3-D4 A; one move since H87).
 `tests/route/test_route_preview.py` pins it against `next_move` (checks S3 and S3b).
 
 Where the plan is silent (each decided here):
@@ -56,12 +56,12 @@ from src.route.route_graph import EdgeKind, RouteGraph
 @dataclass(frozen=True)
 class StartOption:
     node: Node
-    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (planner.py:206-210)
+    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (planner.py:224-227)
 
 
 @dataclass(frozen=True)
 class Hop:
-    options: tuple[Move, ...]  # one Move; two for a coin-flip down: (Move(DROP), Move(TELEPORT, DOWN)), in that order
+    options: tuple[Move, ...]  # one Move (two, DROP then TELEPORT DOWN, only for the coin flip H87 removed)
     toward: Node  # Decision.toward for this move
     from_pos: tuple[int, int]  # the position this hop is planned from (pos, or the previous hop's landing)
     landing: tuple[int, int]  # the position the preview assumes after it (the landing rule)
@@ -95,8 +95,8 @@ class _DrawHigh:
         return 0.99
 
 
-_LOW = cast(np.random.Generator, _DrawLow())  # a coin flip gives "drop" (planner.py:176)
-_HIGH = cast(np.random.Generator, _DrawHigh())  # a coin flip gives "teleport"
+_LOW = cast(np.random.Generator, _DrawLow())  # the old coin flip's low draw (`_go_down` draws nothing since H87, planner.py:170)
+_HIGH = cast(np.random.Generator, _DrawHigh())  # the old coin flip's high draw
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ class _Plan:
 
 
 def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | None, str]:
-    """`next_move` at `pos` (`planner.py:190-247`, statement for statement), or None when arrived (P1)."""
+    """`next_move` at `pos` (`planner.py:200-264`, statement for statement), or None when arrived (P1)."""
     if target not in rg.graph:
         return Failure(f"target {target.minimap_position!r} is not in the route graph")
     px, py = pos
@@ -195,7 +195,7 @@ def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | 
         return planned((_run(rg, px, g_next.minimap_position[0]),), g_next, _Across(g_next.minimap_position[0], g_next))
     if kind == EdgeKind.UP:
         return planned((Move(MoveKind.TELEPORT, Key.UP, None),), h, _Edge(g, h))
-    # the coin flip without a draw: equal when `_go_down` takes no draw, (DROP, TELEPORT DOWN) when it would toss
+    # `_go_down` takes no draw since H87, so low == high and the hop has one option; two (DROP, TELEPORT DOWN) is the old flip
     low, high = _go_down(rg, g, h, _LOW), _go_down(rg, g, h, _HIGH)
     return planned((low,) if low == high else (low, high), h, _Edge(g, h))
 

@@ -176,7 +176,7 @@ def _move_keys(move: Move) -> str:
 def _options_words(options: tuple[Move, ...]) -> tuple[str, str]:
     if len(options) == 1:
         return _move_text(options[0]), _move_keys(options[0])
-    return _COIN_TEXT, _COIN_KEYS  # V4: two options are always (DROP, TELEPORT DOWN)
+    return _COIN_TEXT, _COIN_KEYS  # two options only in a run recorded before H87: (DROP, TELEPORT DOWN)
 
 
 def _logged_move(data: Any) -> Move | None:

@@ -11,7 +11,7 @@ ROPE_BLUE_DROP = 10          # a rope pixel is at least this much bluer-dark tha
 BACKGROUND_GREY_MAX = 120    # ... and both neighbours are background (grey below this)
 GROUND_GREY_MIN = 180        # a platform's row: both neighbours at least this grey (tools/derive_real_ground.py:54)
 MIN_ROPE_ROWS = 6            # a rope is a run of at least this many rows in one column
-SAME_ROPE_PX = 2             # columns this close, or closer, are one rope
+SAME_ROPE_PX = 2             # columns this close, or closer, are one rope when their row ranges overlap
 _SIZE_CHANGED = "the minimap changed size while ropes were being found; try again"
 _NO_FRAMES = "no minimap frames were collected, so ropes cannot be found; try again"
 
