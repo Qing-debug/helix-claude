@@ -547,14 +547,20 @@ def type_in_box(editor, name, text):
     editor._applyRopeBox(name)
 
 
-def press_delete(editor):
-    """The window's <Delete> handler as Tk calls it: with event.widget set to the widget that has the focus in the editor's
-    window (the canvas after a click on the map, a number box after a click in it). HANDOFF NOTE (ROPE153): a real key
-    event (`focus_lastfor().event_generate("<Delete>")`) is not used because Tk's display-wide focus record leaks between
-    the roots of different tests and the event then goes nowhere (seen: passes alone, fails inside tests/controller).
-    So the binding itself (`window.bind("<Delete>")` -> `_onDeleteKey`) is not covered by a test yet."""
-    editor.window.update()
-    editor._onDeleteKey(SimpleNamespace(widget=editor.window.focus_lastfor()))
+def press_delete(editor, widget=None):
+    """A real <Delete> key event, delivered the way Tk delivers a key: to the widget that has the keyboard (by default the
+    one the editor's window last gave it to: the canvas after a click on the map), so it runs the widget's own bindings and
+    then the window's `<Delete>` binding (`_onDeleteKey`). Tk hands a generated key event to the display's focus window
+    and drops it when the application has none. Inside one pytest process only the first Tk window the process opens gets
+    the keyboard from Windows (measured: the editor's second window onwards has `focus` empty, so a plain `event_generate`
+    does nothing there; run alone, the first test works), so the widget is given the focus with `focus_force` first and the
+    helper fails loudly if that did not take."""
+    window = editor.window
+    widget = widget if widget is not None else window.focus_lastfor()
+    widget.focus_force()
+    window.update()
+    assert str(window.tk.call("focus")) == str(widget), "the editor window has no keyboard focus in Tk"
+    widget.event_generate("<Delete>")
 
 
 def test_find_ropes_adds_the_ropes_in_the_frames(make_editor):
@@ -781,16 +787,18 @@ def test_delete_in_a_number_box_edits_the_text_and_leaves_the_ropes(make_editor)
     click(editor, 107, 52)
     assert editor.state.selected_rope == 0
 
-    # The window's handler as Tk calls it for a Delete typed in a number box: event.widget is the box (a Spinbox).
-    # HANDOFF NOTE (ROPE153): a real key event on the focused box, `box.focus_set(); press_delete(editor)`, edits the text
-    # ("107" -> "07") and leaves the ropes when this test runs alone, but not after the Delete-key test in the same
-    # process (Tk's display-wide focus record leaks between roots); that half is not asserted until it is made robust.
-    for name in ("x", "top_y", "bottom_y"):
-        editor._onDeleteKey(SimpleNamespace(widget=editor._rope_boxes[name]))
+    # A real Delete in the x box (cursor before the "1"): the Spinbox's own binding removes the character, then the window's
+    # binding runs with event.widget = the box and `_onDeleteKey` leaves the ropes alone.
+    box = editor._rope_boxes["x"]
+    box.icursor(0)
+    press_delete(editor, box)
+    assert editor._rope_vars["x"].get() == "07"
     assert editor.state.ropes == [ROPE_107, ROPE_46] and editor.state.selected_rope == 0
     assert rope_lines(editor) == 2
 
+    editor._rope_vars["x"].set("107")  # undo the typing, so leaving the box has no edit to commit
     click(editor, 107, 52)  # a click on the map gives the canvas the keyboard back
+    assert str(editor.window.tk.call("focus")) == str(editor.minimap_canvas)
     press_delete(editor)
     assert editor.state.ropes == [ROPE_46] and editor.state.selected_rope is None
 
