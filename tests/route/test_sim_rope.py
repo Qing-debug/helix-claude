@@ -437,6 +437,23 @@ def test_a_recovery_replay_that_starts_on_a_rope_is_not_recovered_and_not_a_cras
     assert not_recovered >= replays.count(None)
 
 
+def test_every_recovery_replay_walker_gets_the_rope_zones_as_the_run_walker_does(monkeypatch):
+    """ROPE156-FR M6: a replay's noise-off world grabs a rope when a drop starts over it (the live mechanic, not noise),
+    so its walker needs the zones as the run's walker has them. A walker is built for the run and one per replayed leg."""
+    built = []
+    real = sim_run.RouteWalker
+
+    def spy(*args, **kwargs):
+        built.append(kwargs.get("ropes"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sim_run, "RouteWalker", spy)
+    result = run_sim(CSV, DEFAULT_TERRAIN, 2, 2)
+    assert is_successful(result), result
+    assert len(built) >= 2, "the run's walker and at least one replay's"
+    assert all(zones is not None and zones.at((READ_X, RIGHT_ROPE.bottom_y)) == 1 for zones in built)
+
+
 # --- 6. the rope rule on a run: the walker gets off the rope it grabbed -------------------------------------------
 
 

@@ -34,8 +34,8 @@ Where the plan is silent:
 - The marks of the map's rope file (`read_ropes(rope_file_for(map_csv))`, none when there is no file; a bad file is the
   run's `Failure`) go to the world and to the recovery replays' worlds, read from the `--map` file itself: the node-offset
   copy shifts nodes only, so the marks stay where they were measured. `rope_grabs` counts the world's grabs. The run's
-  walker also gets them, as `RopeZones.build(ropes, params)`, so it gets off a rope it grabbed (H88, H93); the replays'
-  walkers get none, because a noise-off world never grabs a rope.
+  walker and the replays' walkers also get them, as `RopeZones.build(ropes, params)`, so each gets off a rope it grabbed
+  (H88, H93): a drop in a noise-off world grabs one too, the live mechanic and not noise (ROPE156-FR M6).
 - With node offsets the original CSV is loaded first (it gives the unshifted rotation positions), then one offset is
   drawn per CSV data row, in file order, before the world's first draw.
 - The CSV parser's progress prints during `loadMap` are swallowed, so the CLI prints only the report and the checks.
@@ -245,7 +245,8 @@ def _replay_moves(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain,
     layer = InputLayer(SimLink(world, clock, sim_params), TimingModel(rng_timing))
     positions = SimPositionSource(world, clock, off.miss_p, rng_positions)
     config = WalkerConfig(use_stimulus=False, leg_timeout_s=_LEG_TIMEOUT_S)
-    walker = RouteWalker(rg, rotation, layer, positions, clock, MemorySink(), rng_planner, config)
+    walker = RouteWalker(rg, rotation, layer, positions, clock, MemorySink(), rng_planner, config,
+                         ropes=RopeZones.build(ropes, rg.params))
     src, dst = _leg_nodes(rotation, rec)
     return len(walker.walk_leg(rec.lap, rec.leg, src, dst).moves)
 
