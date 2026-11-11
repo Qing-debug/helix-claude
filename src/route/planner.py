@@ -14,6 +14,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.controller.node import Node
+from src.controller.rope_file import RopeMark
 from src.input.protocol import Key
 from src.route.locate import Anchor, attach
 from src.route.route_graph import EdgeKind, RouteGraph, down_options, horizontal_cost_s
@@ -23,12 +24,13 @@ class MoveKind(StrEnum):
     WALK = "walk"
     TELEPORT = "teleport"
     DROP = "drop"
+    JUMP_OFF = "jump_off"
 
 
 @dataclass(frozen=True)
 class Move:
     kind: MoveKind
-    direction: Key | None  # Key.LEFT/RIGHT for WALK; LEFT/RIGHT/UP/DOWN for TELEPORT; None for DROP
+    direction: Key | None  # Key.LEFT/RIGHT for WALK and JUMP_OFF; LEFT/RIGHT/UP/DOWN for TELEPORT; None for DROP
     walk_ms: float | None  # only for WALK
 
 
@@ -173,6 +175,26 @@ def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move
     if "teleport" in options:
         return Move(MoveKind.TELEPORT, Key.DOWN, None)
     return Move(MoveKind.DROP, None, None)
+
+
+def rope_move(mark: RopeMark, pos: tuple[int, int], target: Node, tries: int, reach_v: float,
+              blink_tries: int) -> Move | None:
+    """The `tries`-th move of the rope rule (H88, H93) for a character read at `pos` on `mark`'s rope, or None when the
+    order is used up. Pure: no rng, no graph.
+
+    When a blink is in reach (`gap <= reach_v`), the order is `blink_tries` blinks toward the closer platform
+    (`TELEPORT DOWN`, or `TELEPORT UP` when the platform above is strictly closer, a tie goes down) and then one
+    `JUMP_OFF` toward the target's x (C3: right when level); with no blink in reach it is the one `JUMP_OFF`.
+    The gaps are `pos.y - mark.top_y` up and `mark.bottom_y - pos.y` down.
+    """
+    up, down = pos[1] - mark.top_y, mark.bottom_y - pos[1]
+    direction, gap = (Key.UP, up) if up < down else (Key.DOWN, down)
+    blinks = blink_tries if gap <= reach_v else 0
+    if tries < blinks:
+        return Move(MoveKind.TELEPORT, direction, None)
+    if tries == blinks:
+        return Move(MoveKind.JUMP_OFF, Key.LEFT if target.minimap_position[0] < pos[0] else Key.RIGHT, None)
+    return None
 
 
 def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random.Generator) -> Result[Decision, str]:

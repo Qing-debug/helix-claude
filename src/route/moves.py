@@ -1,5 +1,7 @@
 """Move executor: play one planned move through the input layer (plan contract C8)."""
 
+from typing import assert_never
+
 from returns.result import Result
 
 from src.input.input_layer import ActionRecord, InputLayer
@@ -17,4 +19,9 @@ def execute(layer: InputLayer, move: Move, stimulus_ns: int | None) -> Result[Ac
         return layer.walk(move.direction, move.walk_ms, stimulus_ns)
     if move.kind is MoveKind.TELEPORT:
         return layer.teleport(move.direction, stimulus_ns)
-    return layer.drop(stimulus_ns)
+    if move.kind is MoveKind.DROP:
+        return layer.drop(stimulus_ns)
+    if move.kind is MoveKind.JUMP_OFF:
+        assert move.direction is not None  # `rope_move` gives LEFT or RIGHT; basedpyright cannot see that
+        return layer.jump_off(move.direction, stimulus_ns)
+    assert_never(move.kind)  # a kind added later cannot fall into the drop's keys (ROPE146R m-6)

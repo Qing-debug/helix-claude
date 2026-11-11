@@ -15,6 +15,7 @@ from src.route.planner import Move, MoveKind
 WALK = Move(MoveKind.WALK, Key.LEFT, 750.0)
 TELEPORT_UP = Move(MoveKind.TELEPORT, Key.UP, None)
 DROP = Move(MoveKind.DROP, None, None)
+JUMP_OFF = Move(MoveKind.JUMP_OFF, Key.LEFT, None)
 
 
 # Copies of the helpers in tests/input/test_input_layer.py (plan G16); copied, not imported.
@@ -83,7 +84,7 @@ class RecordingLayer:
     def __init__(self):
         self.calls = []
         self.sentinels = {"walk": Success("walk result"), "teleport": Success("teleport result"),
-                          "drop": Success("drop result")}
+                          "drop": Success("drop result"), "jump_off": Success("jump_off result")}
 
     def walk(self, direction, intended_ms, stimulus_ns=None):
         self.calls.append(("walk", direction, intended_ms, stimulus_ns))
@@ -97,6 +98,10 @@ class RecordingLayer:
         self.calls.append(("drop", stimulus_ns))
         return self.sentinels["drop"]
 
+    def jump_off(self, direction, stimulus_ns=None):
+        self.calls.append(("jump_off", direction, stimulus_ns))
+        return self.sentinels["jump_off"]
+
 
 @pytest.mark.parametrize("stimulus_ns", [123, None])
 @pytest.mark.parametrize(
@@ -105,8 +110,9 @@ class RecordingLayer:
         (WALK, lambda s: ("walk", Key.LEFT, 750.0, s)),
         (TELEPORT_UP, lambda s: ("teleport", Key.UP, s)),
         (DROP, lambda s: ("drop", s)),
+        (JUMP_OFF, lambda s: ("jump_off", Key.LEFT, s)),
     ],
-    ids=["walk", "teleport", "drop"],
+    ids=["walk", "teleport", "drop", "jump_off"],
 )
 def test_each_kind_makes_exactly_one_call_with_its_arguments(move, expected, stimulus_ns):
     layer = RecordingLayer()
@@ -116,8 +122,9 @@ def test_each_kind_makes_exactly_one_call_with_its_arguments(move, expected, sti
     assert layer.calls == [expected(stimulus_ns)]
 
 
-@pytest.mark.parametrize("move, name", [(WALK, "walk"), (TELEPORT_UP, "teleport"), (DROP, "drop")],
-                         ids=["walk", "teleport", "drop"])
+@pytest.mark.parametrize("move, name", [(WALK, "walk"), (TELEPORT_UP, "teleport"), (DROP, "drop"),
+                                        (JUMP_OFF, "jump_off")],
+                         ids=["walk", "teleport", "drop", "jump_off"])
 def test_returns_the_layers_result_object(move, name):
     layer = RecordingLayer()
 
@@ -126,7 +133,7 @@ def test_returns_the_layers_result_object(move, name):
     assert result is layer.sentinels[name]
 
 
-@pytest.mark.parametrize("move", [WALK, TELEPORT_UP, DROP], ids=["walk", "teleport", "drop"])
+@pytest.mark.parametrize("move", [WALK, TELEPORT_UP, DROP, JUMP_OFF], ids=["walk", "teleport", "drop", "jump_off"])
 def test_real_layer_link_lost_comes_back_as_the_failure(move):
     link = FakeLink()
     link.play_result = Failure(InputError.LINK_LOST)
@@ -136,3 +143,22 @@ def test_real_layer_link_lost_comes_back_as_the_failure(move):
 
     assert result == Failure(InputError.LINK_LOST)
     assert [e[0] for e in link.calls] == ["play"]
+
+
+def test_a_kind_execute_does_not_list_presses_nothing():
+    """ROPE146R m-6: the old last line was `layer.drop`, so an unlisted kind pressed Down+Alt."""
+    layer = RecordingLayer()
+
+    with pytest.raises(AssertionError):
+        execute(layer, Move("sit", None, None), 123)  # type: ignore[arg-type]
+
+    assert layer.calls == []
+
+
+def test_jump_off_and_drop_are_each_one_layer_call_of_their_own():
+    layer = RecordingLayer()
+
+    execute(layer, JUMP_OFF, 5)
+    execute(layer, DROP, 6)
+
+    assert layer.calls == [("jump_off", Key.LEFT, 5), ("drop", 6)]

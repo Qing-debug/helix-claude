@@ -27,6 +27,9 @@ def test_defaults_match_contract_c3():
     assert p.poll_s == 0.05
     assert p.min_settle_s == 0.15
     assert p.settle_timeout_s == 2.0
+    assert p.rope_still_s == 0.1        # C9 (H88)
+    assert p.rope_zone_half_px == 2     # C1
+    assert p.rope_blink_tries == 2      # C2
 
 
 def test_validate_defaults_returns_same_object():
@@ -58,6 +61,15 @@ def test_validate_defaults_returns_same_object():
         ("ability_mix_band", {"ability_mix_band": float("nan")}),
         ("max_walk_ms", {"max_walk_ms": 5001.0}),
         ("min_settle_s", {"min_settle_s": 2.0, "settle_timeout_s": 2.0}),
+        ("rope_still_s", {"rope_still_s": 0.0}),
+        ("rope_still_s", {"rope_still_s": float("nan")}),
+        ("rope_still_s", {"rope_still_s": True}),
+        ("rope_zone_half_px", {"rope_zone_half_px": 0}),
+        ("rope_zone_half_px", {"rope_zone_half_px": 1.5}),
+        ("rope_zone_half_px", {"rope_zone_half_px": True}),
+        ("rope_blink_tries", {"rope_blink_tries": 0}),
+        ("rope_blink_tries", {"rope_blink_tries": 2.0}),
+        ("rope_blink_tries", {"rope_blink_tries": False}),
     ],
 )
 def test_validate_rejects_bad_field_and_names_it(field, kwargs):
@@ -73,6 +85,16 @@ def test_ability_mix_band_zero_is_valid():
 def test_slope_max_grade_one_and_max_walk_5000_are_valid():
     assert is_successful(validate(MovementParams(slope_max_grade=1.0)))
     assert is_successful(validate(MovementParams(max_walk_ms=5000.0)))
+
+
+def test_an_old_header_without_the_rope_fields_loads_with_the_defaults():
+    """The route view builds `MovementParams(**header.params)` from a saved run (`route_view/model.py:274`)."""
+    rope_fields = {"rope_still_s", "rope_zone_half_px", "rope_blink_tries"}
+    old_header = {k: v for k, v in dataclasses.asdict(MovementParams()).items() if k not in rope_fields}
+    assert not rope_fields & old_header.keys()
+    loaded = MovementParams(**old_header)
+    assert loaded == MovementParams()
+    assert is_successful(validate(loaded))
 
 
 def test_params_are_frozen():

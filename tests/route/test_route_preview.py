@@ -356,12 +356,12 @@ def test_the_table_literals(built, case_id):
 # ---- 3. the six planner branches are really taken (spec S3) ----
 
 _BRANCH_LINES = {
-    152: "return None",
-    174: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
-    175: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
-    196: "return Failure(anchor_result.failure())",
-    208: 'return Failure(f"no path from ',
-    238: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    154: "return None",
+    176: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
+    177: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
+    218: "return Failure(anchor_result.failure())",
+    230: 'return Failure(f"no path from ',
+    260: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
 }
 
 
@@ -369,7 +369,7 @@ def test_s3_the_table_takes_the_six_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 208:
+        if number != 230:
             assert lines[number - 1].strip() == text, (number, lines[number - 1])
 
     planner_file = planner.__file__

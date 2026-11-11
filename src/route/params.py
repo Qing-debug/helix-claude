@@ -26,6 +26,9 @@ class MovementParams:
     settle_timeout_s: float = 2.0
     standing_s: float = 0.5         # QB213: read still this long = standing
     standing_band_px: int = 6       # QB213: a standing character attaches to a platform line this close, above or below
+    rope_still_s: float = 0.1       # C9 (H88): a read in a rope zone held this long is the character on the rope
+    rope_zone_half_px: int = 2      # C1 (H88): a rope zone reaches this far either side of the rope's read column
+    rope_blink_tries: int = 2       # C2 (H88): blinks toward the nearer platform before the one jump off
 
 
 _MAX_WALK_MS_LIMIT = 5000.0  # a WALK draw at T = 5000 has SD ~210 ms, far below the 6553.5 ms per-step cap (G12/G14)
