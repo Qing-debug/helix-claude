@@ -2757,6 +2757,8 @@ Pointer: `ledger-ROPE.md:36`; `notes/OUTLINE147.md`; the plan's "Provisional val
 
 Ruling [spec-text] (ROPE148R-D2 = A, orchestrator, 2026-11-11; not Hong's words): the keep-out Hong picked (QB231) is unchanged; the refusal text and the Save-blocked list now name the free x's ("place it at x 100 or less, or 112 or more" for the rope at x 107), because the old text ("at least 6 px left or right of a rope") did not match the rule, which is centred one px left of the drawn rope.
 
+Question-bank ids (added 2026-11-11, ROPE156-FRF, from the final review's M5; Claude's note, not Hong's words, and the picks above are unchanged): the pick on ROPE147P-D1 (how near is "near") is QB231, and the pick on ROPE147P-D2 (refuse and block Save) is QB232 (question bank entries QB231 and QB232; the ledger records both as "all = the plan's provisional values, no plan change").
+
 ## H92 (2026-11-11): The editor suggests the ropes from the minimap, and Hong keeps, moves, deletes or adds them (Hong's QB228 and his pick on ROPE147P-D3)
 
 Hong was asked whether the map editor should find the ropes for him first. He chose "Editor suggests (Recommended)" (the other option was marking them all by hand). In plain words: the editor finds ropes on the live minimap (a "Find ropes" button, which collects 3 seconds of frames while the character moves); Hong keeps, moves, deletes or adds ropes, with number boxes for a rope's x and its two ends.
@@ -2768,6 +2770,8 @@ Affects: `src/controller/rope_finder.py`, `src/gui/map_editor.py` (the rope sect
 Cost if wrong: a wrong suggestion Hong does not check ends up in the rope file; the walker then trusts it. Undo: Hong deletes the mark, or the editor's rope controls change.
 
 Pointer: question bank QB228; the plan's "Provisional values" section.
+
+Question-bank id (added 2026-11-11, ROPE156-FRF, from the final review's M5; Claude's note, not Hong's words, and the pick above is unchanged): the pick on ROPE147P-D3 ("Marked at once") is QB233 (question bank entry QB233); QB228 is the earlier question that Hong answered "Editor suggests".
 
 ## H93 (2026-11-11): The walker uses the marked ropes to know at once that it is on a rope (Hong's QB229)
 
