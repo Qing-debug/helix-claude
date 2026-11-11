@@ -6,7 +6,7 @@ This file records Hong's design decisions and rulings that touch interfaces, dat
 
 Facts and principles Hong would give the same way every time (his answer to Q7, H28, 2026-10-26). Agents and orchestrators check this list before they ask him anything: a question it answers is not sent. Follow it and log `Ruling [standing fact]`. The list grows only with his yes. (The last two sentences are rules of the orchestrator skill, not his words.)
 
-- Maps never use ropes or ladders. Kanna teleports only to a pixel exactly above or below.
+- Routes never use ropes or ladders. A map may mark its ropes, as hazards only, so the editor keeps nodes away from them and the bot can get off one it lands on. Kanna teleports only to a pixel exactly above or below. (Reworded 2026-11-11 with Hong's yes, H91; it read "Maps never use ropes or ladders.")
 - People build maps in Hong's map editor, not by editing files.
 - Hong's keyboard and mouse are wired. The minimap finder works on his client.
 - Fix real problems, not ones we don't know will happen. Make checks only as strict as they need to be.
@@ -2664,6 +2664,8 @@ Cost if wrong: a character read up to 6 px under a line is attached to the platf
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/OFFD140.md` (the design and the replay table), question bank QB213 and QB215, Hong's words in `.superpowers/sdd/2026-10-31-route-tab/progress.md` (lines 802-806).
 
+Amended by H88 (2026-11-10): a still read inside a marked rope's zone no longer ends the run at once; the walker gets off the rope first. H85 holds for every other read and for a map with no rope file.
+
 ## H86 (2026-11-03): The route simulator is upgraded to catch this class of bug, and it was built before the fix (Hong's QB214)
 
 Hong was asked whether to upgrade the simulator so that it fails on today's walker first and the fix is then proven against it. He answered "Yes, upgrade it (Recommended)": a real-ground fixture from his recordings, the dot offset and a knockback injector; the simulator first, then the fix.
@@ -2677,3 +2679,116 @@ Affects: `src/route/sim/` (`world.py`, `link.py`, `run.py`), `tools/derive_real_
 Cost if wrong: simulator work that a second map would not need. Undo: Hong says so; the knobs are off by default.
 
 Pointer: question bank QB214; `.superpowers/orchestrator/2026-10-21-phase1/notes/OFFG-T1.md` (the x = 68 measurements), `OFFG-T3.md` (the failing run).
+
+## H87 (2026-11-10): Going down, the walker always teleports when a teleport reaches, and drops only when it cannot (Hong's QB225)
+
+Hong's 10-lap walk on Fossil Foundry 2 ended `off_map` on lap 5 (run 213130Z): a drop from node 7 (105, 42) landed on the rope that hangs under it at minimap column 107, and the planner chose between a drop and a teleport (blink) down by coin flip (PB-D3). The debug unit (DBG146) found that every drop launched from read x 106 or 107 grabbed the rope (11 of 11), and that a teleport down from the rope cleared it every time it was tried.
+
+Hong was asked how to stop the grab at node 7 and chose "Code: always blink when in reach" (the other two options were to set `can_fall` FALSE on the nodes above ropes in the map, and to move node 7 left). In plain words: going down, the walker never drops when a teleport down reaches the target platform; it drops only when a teleport cannot reach. This replaces the drop/teleport coin flip in `_go_down` (`src/route/planner.py:168-181`) on every map, not only Fossil Foundry 2. Every other human-timing variety stays. The cost of a DOWN edge in the route graph follows the same rule (the teleport's cost when a teleport reaches, else the drop's).
+
+Ruling [spec-text, ROPE146-D2 = A, orchestrator, 2026-11-10; not Hong's words]: the simulator's `abilities` check needs drops only when the route graph has a drop-only DOWN edge (one a teleport cannot reach; Fossil Foundry 2 has none). It counts every DOWN edge, not only the ones the planner offers, on purpose: a drop-only edge no path uses makes the check fail, never pass falsely. After this change no Fossil Foundry 2 simulator run exercises the walker's drop path; unit tests cover it. Cost if wrong: a simulator check too lax on a map that needs drops. Undo: the plan's C4 and Task 1.
+
+Affects: `src/route/planner.py` (`_go_down`, `next_move`'s docstring), `src/route/route_graph.py` (`_edge_cost`), the simulator's `abilities` check, `MovementParams.ability_mix_band` (kept, now read by nothing, because saved step-log headers carry it); the plan `docs/superpowers/plans/2026-11-10-rope-fix.md` (Task 1). Fossil Foundry 2's walks no longer drop at all.
+
+Cost if wrong: the walker no longer varies between a drop and a teleport going down. Undo: Hong says so, or revert the Task 1 commit.
+
+Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/DBG146.md` (the cause), `ROPE146.md`, `ROPE146R.md` (m-4); question bank QB225; Hong's words in `ledger.md:35` (orch 146).
+
+## H88 (2026-11-10): When the walker is on a rope it gets off: blink to the nearer platform, else jump off with Alt and an arrow key, else end the run (Hong's QB226; amends H85)
+
+The same walk showed the walker has no idea what a rope is. Hong, in chat that day: "being able to get off a rope is something you should be able to do". Also in chat, on how a character leaves a rope: "To get our of being on the rope you can either fully climb down or up (use arrow keys), use alt annd the left or right arow key to jump off it or you can blink up or down, and asssuming the top and bottom platform is cclose enough, you will teleport to it".
+
+He was asked what the walker should do when it finds itself on a rope anyway (today it ends the run as off the map) and chose "Detect it, blink off (Recommended)" (the other options were marking ropes in the map, and climbing fully up or down). In plain words: when the walker detects it is on a rope, it blinks down, or up if that platform is closer and in reach; if neither platform is in reach, it jumps off with Alt plus Left or Right; it ends the run `off_map` only if that fails. Choices of the plan, not Hong's words: at one rope two blinks are tried before the jump off (a blink can be a no-op), and the jump goes toward the leg target's x.
+
+How it detects the rope: the option's own text said "off-graph, x not changing, between two platform lines". The marks of H91 to H93 replace that guess: the walker knows from the map's rope file that a still read, which the map cannot place, lies on a marked rope (H93). The order of moves stands.
+
+Amends H85: H85's "nothing within 6 px ends the run at once" no longer applies to a still read inside a marked rope's zone, where the walker first gets off the rope (and waits 0.1 s there, not 0.5 s). H85 holds unchanged for every other still read the map cannot place, and for a map with no rope file.
+
+Affects: `src/route/planner.py` (`rope_move`, `MoveKind.JUMP_OFF`), `params.py` (three new fields with defaults), `moves.py`, `walker.py`, `session.py`; `src/input/` (`actions.jump_off`, `InputLayer.jump_off`: Alt plus Left or Right built from the existing timing draws, with the reaction wait; no new timing distribution); `src/route/sim/` (rope grabs and jump offs), `src/route_view/` (names the jump off); the plan (Tasks 4 to 7). Opens the frozen files `params.py`, `moves.py`, `walker.py`, `planner.py` (Hong's pick).
+
+Cost if wrong: a new key pattern (Alt plus an arrow) the live game has not yet seen in a run. Undo: Hong says so, or revert the Task 4 to 7 commits; H85's behaviour returns for rope reads.
+
+Pointer: `notes/DBG146.md`, `notes/OUTLINE147.md`; question bank QB226; Hong's words in `ledger.md:35`.
+
+## H89 (2026-11-10): The walker keeps lining up on a node's x before going up or down (Hong's QB227)
+
+Hong was asked whether his orange-node rule (H90) should also stop orange nodes from steering the walker where it lines up on a node's x before an up or down move. He chose "No, keep lining up (Recommended)". In plain words: no change to lining up on the target node's x before UP and DOWN moves (`src/route/planner.py:223-232`).
+
+Affects: nothing in code; the plan lists it as a limit ("no change to lining up").
+
+Cost if wrong: none (nothing changes). Undo: Hong says so.
+
+Pointer: `notes/DBG146.md`; question bank QB227.
+
+## H90 (2026-11-10): The walker must visit blue nodes, not orange ones (Hong's chat)
+
+Hong, in chat: "You must visit the blue nodes, but you dont have to visit the orange node. That is, if you're traversing from one blue node to another with a orannge nodee as that inntermediary node, if you blinnk past it, you dont have to navigate to it if you're still on route to the blue node. so say youre moving left to right, if you skip past thee middle orange node, you dont then have to go to it and blink right, you could just continnue walking right or blink right. whicheever gets you to the bluee node quickers".
+
+The debug unit (DBG146, part B) checked the code and found it already does this on a platform: it does not go back for a passed orange node. No code change. The one place an orange node still steers the walker is the line-up before an up or down move, which Hong kept (H89).
+
+Affects: nothing in code. The rule binds later route work.
+
+Cost if wrong: none. Undo: Hong says so.
+
+Pointer: `notes/DBG146.md` (B); Hong's words in `ledger.md:35`.
+
+## H91 (2026-11-11): Ropes are marked per map in the map editor, and the editor refuses nodes near where a rope meets a platform; the standing fact on ropes is reworded (Hong's chat, and his picks on ROPE147P-D1 and D2)
+
+After seeing why node 7 caused the grab, Hong said in chat: "i'dd be happy to add a way for the user t pick out where the ropes are so we arent allowed to put nodes near whre those nodes connnect vvvertically". In plain words: a map may record where its ropes are, picked out in the map editor, and the editor does not let anyone place a node near where a rope meets a platform. Ropes are hazards the route avoids and the walker can recover from; routes never use them.
+
+Hong's standing fact "Maps never use ropes or ladders. Kanna teleports only to a pixel exactly above or below." is now "Routes never use ropes or ladders. A map may mark its ropes, as hazards only, so the editor keeps nodes away from them and the bot can get off one it lands on. Kanna teleports only to a pixel exactly above or below." (His yes to the rewording is the chat message above; edited in "Hong's standing facts" at the top of this file.)
+
+Hong then confirmed two values of the plan (2026-11-11, asked with AskUserQuestion):
+
+- How near is "near" (ROPE147P-D1): he chose "5 px sideways, 6 up/down (Recommended)". A node is refused when it is within 5 px of the rope's read x and within 6 px of either end of the rope. On Fossil Foundry 2's current map that refuses five nodes: blue (105, 42) and (49, 28), orange (105, 60), (42, 28) and (48, 45).
+- What the editor does when it refuses (ROPE147P-D2): he chose "Refuse and block Save (Recommended)". A click that would place a node there places nothing and says why on a status line; nodes already there (from a load, or after a rope is added or moved) are drawn with a red ring, and Save is blocked, with a list of them, like an empty rotation. The texts are in the plan's "Provisional values" section.
+
+Not Hong's words: the runtime does not refuse a map whose nodes are near a rope; that is the editor's rule (the simulator's fixture keeps node 7 there on purpose, to prove recovery). Hong's own Fossil Foundry 2 map needs about five nodes moved after he marks the ropes.
+
+Affects: `src/controller/rope_file.py` (the keep-out constants and test), `src/gui/map_editor.py` (the rope tools and the keep-out); "Hong's standing facts" above; the root `CLAUDE.md` standing-fact paragraph if it repeats it; the plan (Tasks 2, 3, 8).
+
+Cost if wrong: nodes the keep-out refuses might have been fine; a constant and its test change. Undo: Hong says so.
+
+Pointer: `ledger-ROPE.md:36`; `notes/OUTLINE147.md`; the plan's "Provisional values" section.
+
+## H92 (2026-11-11): The editor suggests the ropes from the minimap, and Hong keeps, moves, deletes or adds them (Hong's QB228 and his pick on ROPE147P-D3)
+
+Hong was asked whether the map editor should find the ropes for him first. He chose "Editor suggests (Recommended)" (the other option was marking them all by hand). In plain words: the editor finds ropes on the live minimap (a "Find ropes" button, which collects 3 seconds of frames while the character moves); Hong keeps, moves, deletes or adds ropes, with number boxes for a rope's x and its two ends.
+
+Then, on how found ropes appear (ROPE147P-D3, 2026-11-11, asked with AskUserQuestion): he chose "Marked at once (Recommended)". Found ropes become yellow marks on the map at once; Hong deletes or edits a wrong one and adds one that was missed (a found rope within 2 px of an existing mark is skipped).
+
+Affects: `src/controller/rope_finder.py`, `src/gui/map_editor.py` (the rope section of the panel); the plan (Tasks 2, 3).
+
+Cost if wrong: a wrong suggestion Hong does not check ends up in the rope file; the walker then trusts it. Undo: Hong deletes the mark, or the editor's rope controls change.
+
+Pointer: question bank QB228; the plan's "Provisional values" section.
+
+## H93 (2026-11-11): The walker uses the marked ropes to know at once that it is on a rope (Hong's QB229)
+
+Hong was asked whether the bot should use the rope marks to know it is on a rope when it lands on one anyway (as opposed to the editor rule only, with the walker keeping its guess). He chose "Yes, bot uses them (Recommended)". In plain words: a still read the map cannot place, inside a marked rope's zone, is a character on that rope; the walker then blinks off (H88) instead of waiting for H85's 0.5 s and a guess.
+
+Affects: `src/route/ropes.py` (a lookup table built when the run starts; one dict lookup per off-graph read, nothing on a read the map places), `walker.py`, `session.py` (loads the rope file); the plan (Task 6). Makes the 6 px question of H95 moot.
+
+Cost if wrong: a wrong or missing mark means the walker falls back to H85. Undo: Hong says so.
+
+Pointer: question bank QB229; `notes/OUTLINE147.md` (3.2 and 3.3: the zone and the timing).
+
+## H94 (2026-11-11): Ropes live in a separate file next to the map CSV (ruling OUTLINE147-D2; not Hong's words)
+
+Ruling [summary, orchestrator 147]: each map's ropes are stored in `<map stem>.ropes.json` beside the map CSV, not in the CSV. Reason: the editor rewrites the CSV with only its `# minimap_size` line (`src/controller/map_csv.py:120-131`), so extra lines in the CSV would be dropped on the next save, and a separate file leaves the editor's CSV writer and both CSV readers unchanged. A map with no rope file works exactly as today. A bad rope file is refused where a bad map is refused, naming the file, each bad rope and how to fix it. The file's format keeps room for a platform outline later.
+
+Affects: `src/controller/rope_file.py`, `src/gui/map_editor.py`, `src/route/session.py`, `src/route/sim/`; the plan (Task 2, constraints C8 and C11).
+
+Cost if wrong: a later move of the ropes into the map file (one loader change). Undo: that loader task.
+
+Pointer: `ledger-ROPE.md:34`; `notes/OUTLINE147.md`.
+
+## H95 (2026-11-11): With ropes marked, the position decides; the platform-or-rope question for a still read 4 to 6 px under a line is dropped (ruling OUTLINE147-D4; not Hong's words)
+
+Ruling [spec-text, orchestrator 147]: the open question ROPE146-D1, whether a still read 4 to 6 px under a platform line should be taken as the platform first or the rope first, is dropped. It existed only because a rope could not be told from ground; with ropes marked (H91 to H93) a read inside a rope's zone is the rope's and any other is H85's. This also removes four findings of the plan's first review, including its critical one. The ground stays today's node lines: there is no platform outline now (Hong's picks H92 and H93 did not choose one; the rope file leaves room to add it).
+
+Affects: the plan (no 4 to 6 px rule; the rope zone is a lookup); no code outside it.
+
+Cost if wrong: none (the question can be asked again). Undo: re-ask.
+
+Pointer: `ledger-ROPE.md:34,38`; `notes/ROPE146R.md`.
