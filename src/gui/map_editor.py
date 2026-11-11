@@ -19,6 +19,7 @@ from PIL import Image, ImageTk
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
+from src.controller.rope_file import RopeFile, RopeMark, free_x, near_rope_end, read_ropes, rope_file_for, write_ropes
 from returns.pipeline import is_successful
 
 
@@ -51,18 +52,38 @@ CANVAS_TAG_SELECTED = "editor_selected"
 CANVAS_TAG_EDGE = "editor_edge"
 CANVAS_TAG_BAND = "editor_band"
 CANVAS_TAG_ORPHAN = "editor_orphan"
+CANVAS_TAG_ROPE = "editor_rope"
+CANVAS_TAG_KEEPOUT = "rope_keepout"
+
+ROPE_LINE_WIDTH = 1            # screen px; a mark is a yellow line from (x, top_y) to (x, bottom_y)
+ROPE_SELECTED_LINE_WIDTH = 3
+KEEPOUT_RING_EXTRA_PX = 3      # screen px added to the node dot's radius for the red keep-out ring
+
+# Hong's wording (QB236, 2026-11-11); the question a save asks when the map's rope file is damaged and no rope is marked.
+ROPE_FILE_DAMAGED_QUESTION = ("This map's rope file is damaged and no ropes are marked. "
+                              "Save with no ropes and remove the rope file?")
+ROPE_FILE_NOT_LOADED_TEXT = ("The map's nodes were loaded without its ropes. "
+                             "Mark the ropes again and save to replace the file.")
 
 
 @dataclass
 class MapEditorState:
     """Holds the editor's mutable state, isolated from the runtime PathGraph."""
-    nodes: Dict[int, EditorNode] = field(default_factory=dict) 
+    nodes: Dict[int, EditorNode] = field(default_factory=dict)
     rotation_order: List[int] = field(default_factory=list)  # blue_node local_ids
     selected_id: Optional[int] = None
     next_local_id: int = 1                                   # monotonic
     placement_nodetype: str = "orange_node"                  # default for new placements
     current_file: Optional[str] = None
     dirty: bool = False                                      # any unsaved mutation since last save/load
+    # Ropes (H91, H94): marks in map coordinates. After any change to `ropes` or `selected_rope`, call
+    # `_recomputeDirty()` then `_renderNodes()`; the dirty flag, the red rings and the Save block follow from `ropes`.
+    ropes: List[RopeMark] = field(default_factory=list)
+    selected_rope: Optional[int] = None                      # index into `ropes`, drawn thicker
+    rope_extra: Dict[str, object] = field(default_factory=dict)  # the loaded rope file's unknown keys; a save keeps them
+    # A rope file was read at load without error, or this editor has written one since. A map with no rope file beside
+    # it leaves this false, so saving a map without ropes writes no rope file.
+    rope_file_read: bool = False
 
 
 class MapEditor:
@@ -83,6 +104,7 @@ class MapEditor:
         # without needing an explicit __init__ snapshot.
         self._saved_nodes: Dict[int, EditorNode] = {}
         self._saved_rotation: List[int] = []
+        self._saved_ropes: List[RopeMark] = []
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -125,6 +147,14 @@ class MapEditor:
         """
         self._canvas_frame = tk.Frame(self.window, bg='gray20')
         self._canvas_frame.pack(side=tk.TOP, fill=tk.X)
+
+        # Status line below the canvas: why a click placed nothing (and, in the Ropes panel, what a rope tool did).
+        # Two lines high from the start so a long text does not move the panel.
+        self._status_label = tk.Label(
+            self.window, text="", anchor='nw', justify=tk.LEFT, height=2,
+            wraplength=WINDOW_INITIAL_WIDTH - 2 * PANEL_PADX, bg='lightblue', font=self._font_body,
+        )
+        self._status_label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX)
 
         panel_outer = tk.Frame(self.window, bg='lightblue')
         panel_outer.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
@@ -453,8 +483,13 @@ class MapEditor:
         self.window.bind('<Control-0>', self._zoomReset)
         self.window.bind('<Control-MouseWheel>', self._onCtrlMouseWheel)
 
+    def _setStatus(self, text: str) -> None:
+        """Write the status line below the canvas."""
+        self._status_label.config(text=text)
+
     def _onCanvasClick(self, event):
-        """Left-click on canvas: select an existing node within SELECT_RADIUS_PX, else place a new one.
+        """Left-click on canvas: select an existing node within SELECT_RADIUS_PX, else place a new one,
+        unless that spot is inside a rope's keep-out (H91): then nothing is placed and the status says why.
 
         event.x/event.y are in canvas pixels (post-scale); divide by RENDER_SCALE to get
         native minimap coords for storage and hit-testing.
@@ -464,7 +499,17 @@ class MapEditor:
         hit_id = self._findNodeAt(native_x, native_y)
         if hit_id is not None:
             self.state.selected_id = hit_id
+            self._setStatus("")
         else:
+            rope = near_rope_end((native_x, native_y), self.state.ropes)
+            if rope is not None:
+                left, right = free_x(rope)
+                self._setStatus(
+                    f"Not placed: ({native_x}, {native_y}) is too close to the rope at x {rope.x}, "
+                    f"where it meets a platform. Place it at x {left} or less, or {right} or more."
+                )
+                return
+            self._setStatus("")
             self._placeNode(native_x, native_y)
             self._recomputeDirty()
             self._refreshRotation()
@@ -519,6 +564,7 @@ class MapEditor:
         self.state.dirty = (
             self.state.nodes != self._saved_nodes
             or self.state.rotation_order != self._saved_rotation
+            or self.state.ropes != self._saved_ropes
         )
         if self.state.dirty != was_dirty:
             self._refreshTitle()
@@ -594,6 +640,19 @@ class MapEditor:
                     "Cannot save: at least one blue_node is required.\n"
                     "The agent has nothing to rotate to.")
 
+        # Nodes inside a rope's keep-out (H91, Hong's pick "Refuse and block Save"): loaded from a file, or left there
+        # when a rope was added or moved. The click refusal in _onCanvasClick keeps new ones out.
+        near_ropes = [(n, rope) for n in self.state.nodes.values()
+                      if (rope := near_rope_end(n.pos, self.state.ropes)) is not None]
+        if near_ropes:
+            lines = ["Cannot save: these nodes are too close to a rope where it meets a platform:"]
+            for n, rope in near_ropes:
+                left, right = free_x(rope)
+                lines.append(
+                    f"#{n.local_id} {n.pos}: rope at x {rope.x}; place it at x {left} or less, or {right} or more"
+                )
+            return ("block", "\n".join(lines))
+
         issues = []
 
         positions = {}
@@ -664,6 +723,13 @@ class MapEditor:
                 self.minimap_canvas_width // RENDER_SCALE,
                 self.minimap_canvas_height // RENDER_SCALE,
             )
+        # The rope file beside the CSV (H94). With no ropes marked and a damaged rope file at the target, ask before
+        # anything is written (Hong, QB236): Yes removes the file, No leaves it. Either way the CSV is written.
+        rope_path = rope_file_for(Path(path))
+        rope_file_damaged = not self.state.ropes and not is_successful(read_ropes(rope_path))
+        remove_rope_file = rope_file_damaged and messagebox.askyesno(
+            "Rope file damaged", ROPE_FILE_DAMAGED_QUESTION, default=messagebox.NO, parent=self.window,
+        )
         result = write_editor_nodes(
             path,
             self.state.nodes,
@@ -674,6 +740,31 @@ class MapEditor:
             messagebox.showerror(
                 "Save failed",
                 f"Could not write {path}:\n\n{result.failure()}",
+                parent=self.window,
+            )
+            return
+        # The CSV is written. A rope file is written when ropes are marked, or when a rope file was read (so ropes
+        # deleted from a good file stay deleted and its unknown keys are kept); a map with neither stays one file.
+        rope_error = None
+        if rope_file_damaged:
+            if remove_rope_file:
+                try:
+                    rope_path.unlink(missing_ok=True)
+                    self.state.rope_file_read = False
+                except OSError as error:
+                    rope_error = f"{rope_path} could not be removed: {error.strerror or error}."
+        elif self.state.ropes or self.state.rope_file_read:
+            rope_result = write_ropes(
+                rope_path, RopeFile(tuple(self.state.ropes), minimap_size, self.state.rope_extra),
+            )
+            if is_successful(rope_result):
+                self.state.rope_file_read = True
+            else:
+                rope_error = rope_result.failure()
+        if rope_error is not None:
+            messagebox.showerror(
+                "Save failed",
+                f"The map was written to {path}, but its rope file was not:\n\n{rope_error}",
                 parent=self.window,
             )
             return
@@ -694,6 +785,7 @@ class MapEditor:
         """
         self._saved_nodes = copy.deepcopy(self.state.nodes)
         self._saved_rotation = list(self.state.rotation_order)
+        self._saved_ropes = list(self.state.ropes)  # RopeMark is frozen, so a shallow copy is a snapshot
         self.state.dirty = False
         self._refreshTitle()
 
@@ -793,15 +885,37 @@ class MapEditor:
                 )
                 return
 
+        # The rope file beside the CSV (H94), read only now: a bad CSV, a size mismatch or nodes out of bounds were
+        # refused above, before this. A bad rope file does not stop the load: the nodes open with no ropes (C11).
+        rope_path = rope_file_for(Path(path))
+        rope_file_existed = rope_path.exists()  # before the read: a missing file reads as Success with no ropes
+        rope_result = read_ropes(rope_path)
+
         self.state.nodes = {n.local_id: n for n in nodes_list}
         self.state.rotation_order = list(rotation_order)
         self.state.selected_id = None
+        self.state.selected_rope = None
         self.state.next_local_id = (max(self.state.nodes) + 1) if self.state.nodes else 1
         self.state.current_file = path
+        if is_successful(rope_result):
+            rope_file = rope_result.unwrap()
+            self.state.ropes = list(rope_file.ropes)
+            self.state.rope_extra = dict(rope_file.extra)
+            self.state.rope_file_read = rope_file_existed  # assigned on every load: no stale flag from the last map
+        else:
+            self.state.ropes = []
+            self.state.rope_extra = {}
+            self.state.rope_file_read = False
         self._snapshotSavedBaseline()
         self._refreshInspector()
         self._refreshRotation()
         self._renderNodes()
+        if not is_successful(rope_result):
+            messagebox.showerror(
+                "Rope file not loaded",
+                f"{rope_result.failure()}\n\n{ROPE_FILE_NOT_LOADED_TEXT}",
+                parent=self.window,
+            )
 
     def _okToClose(self):
         """Hooked to WM_DELETE_WINDOW via gui.py. Returns True if the window should be
@@ -1009,11 +1123,26 @@ class MapEditor:
                 fill="red", width=2, tags=CANVAS_TAG_ORPHAN,
             )
 
+    def _renderRopes(self):
+        """Draw each rope mark as a yellow line from (x, top_y) to (x, bottom_y), the selected one thicker.
+        Called by _renderNodes before the dots, so the dots sit on top of the lines."""
+        if self.minimap_canvas is None:
+            return
+        self.minimap_canvas.delete(CANVAS_TAG_ROPE)
+        for index, rope in enumerate(self.state.ropes):
+            width = ROPE_SELECTED_LINE_WIDTH if index == self.state.selected_rope else ROPE_LINE_WIDTH
+            self.minimap_canvas.create_line(
+                rope.x * RENDER_SCALE, rope.top_y * RENDER_SCALE,
+                rope.x * RENDER_SCALE, rope.bottom_y * RENDER_SCALE,
+                fill="yellow", width=width, tags=CANVAS_TAG_ROPE,
+            )
+
     def _renderNodes(self):
         """Redraw all nodes + the selected-ring overlay. Calls _renderPreview first so
         node dots sit on top of edge/band overlays.
 
-        Render order: preview (edges + bands) → node dots → orphan X overlay → selected ring.
+        Render order: preview (edges + bands) → rope lines → node dots (a red keep-out ring under each node near a
+        rope end) → orphan X overlay → selected ring.
         node.pos is in native minimap coords; multiply by RENDER_SCALE for canvas pixels.
         """
         if self.minimap_canvas is None:
@@ -1022,10 +1151,18 @@ class MapEditor:
         self.minimap_canvas.delete(CANVAS_TAG_NODE)
         self.minimap_canvas.delete(CANVAS_TAG_SELECTED)
         self.minimap_canvas.delete(CANVAS_TAG_ORPHAN)
+        self.minimap_canvas.delete(CANVAS_TAG_KEEPOUT)
+        self._renderRopes()
         node_r = NODE_DRAW_RADIUS_PX * RENDER_SCALE
+        keepout_r = node_r + KEEPOUT_RING_EXTRA_PX
         for node in self.state.nodes.values():
             x, y = node.pos
             sx, sy = x * RENDER_SCALE, y * RENDER_SCALE
+            if near_rope_end(node.pos, self.state.ropes) is not None:
+                self.minimap_canvas.create_oval(
+                    sx - keepout_r, sy - keepout_r, sx + keepout_r, sy + keepout_r,
+                    fill="", outline="red", width=2, tags=CANVAS_TAG_KEEPOUT,
+                )
             fill = "lightblue" if node.nodetype == "blue_node" else "orange"
             outline = "blue" if node.nodetype == "blue_node" else "darkorange"
             self.minimap_canvas.create_oval(
