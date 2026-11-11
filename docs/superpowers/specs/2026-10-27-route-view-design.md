@@ -646,7 +646,7 @@ Simulator-only checks (no game, no board; an agent runs them):
   without, give identical `LegRecord`s, `LapRecord`s and report, and the generators end in the same state.
 - **S3 the preview agrees with the planner.** Over every `planned` event of a 20-lap sim run: the preview's cost to go
   equals the logged `cost_to_go_s` exactly, its `toward` equals the logged one, and its first move equals the logged
-  kind, direction and `walk_ms` (for a coin-flip down move, the logged choice is one of the two options). The same
+  kind, direction and `walk_ms` (for a coin-flip down move, the logged choice is one of the two options) [2026-11-11: superseded by H87, `next_move` no longer tosses the coin, so a new run has one option for a down move; the coin-flip text stays for runs recorded before.]. The same
   over every `planned` event of a 20-lap run with node offsets (`NoiseConfig(node_offset_px=2)`, as
   `tests/route/test_sim_run.py:81` runs it; `sim/world.py:133`), whose off-graph reads the plain run lacks. One plain
   run is not enough: measured by RV2 with `sys.settrace` on the seed-1 run's 379 moves, it never takes the planner's
@@ -660,7 +660,7 @@ Simulator-only checks (no game, no board; an agent runs them):
   `planned` event of both 20-lap sim runs, and every case of the hand-built table), and for each hop k from 2 to the
   last, call `next_move` (with a generator of the test's own) at the landing point the preview assumed for hop k-1,
   with the same target and route graph. Its move must equal the preview's hop k exactly: kind, direction, `walk_ms`
-  and `toward` (for a coin-flip down hop, `next_move`'s move is one of the hop's two options), and the preview
+  and `toward` (for a coin-flip down hop, `next_move`'s move is one of the hop's two options) [2026-11-11: superseded by H87, `next_move` no longer tosses the coin, so a new run has one option for a down move; the coin-flip text stays for runs recorded before.], and the preview
   computed from that landing point must give the same remaining path as the original preview from hop k on. Because
   the landing point is the one the preview assumed, both sides plan from the same position and no tolerance is
   needed; this covers hops 3..n and the down and slope branches as later hops, which the hand-built cases can force
@@ -679,7 +679,7 @@ Simulator-only checks (no game, no board; an agent runs them):
 - **S5 the view model.** A pure (no Tk) model built from a sim folder at chosen steps gives: blue nodes numbered 1..n
   in file order, the right target highlighted per leg, the route polyline's points, the hop labels and keys, and the
   "why" lines; pinned by golden text for a handful of steps, including a coin-flip down, a teleport run and an
-  off-graph read (from a hand-written `steps.jsonl`).
+  off-graph read (from a hand-written `steps.jsonl`). [2026-11-11: superseded by H87, `next_move` no longer tosses the coin, so a new run has one option for a down move; the coin-flip text stays for runs recorded before.]
 - **S6 the window opens.** As `tests/controller/test_gui_startup.py` does (real, withdrawn Tk root, no mainloop,
   skips if Tk cannot start), the view loads a sim folder and a legs-only folder and draws step k without error.
 - **S7 following a live folder.** A test thread appends `steps.jsonl` lines (including half a line) and frame index
