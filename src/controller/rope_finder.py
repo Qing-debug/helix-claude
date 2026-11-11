@@ -13,13 +13,16 @@ GROUND_GREY_MIN = 180        # a platform's row: both neighbours at least this g
 MIN_ROPE_ROWS = 6            # a rope is a run of at least this many rows in one column
 SAME_ROPE_PX = 2             # columns this close, or closer, are one rope
 _SIZE_CHANGED = "the minimap changed size while ropes were being found; try again"
+_NO_FRAMES = "no minimap frames were collected, so ropes cannot be found; try again"
 
 _Candidate = tuple[int, int, int, float]   # (x, top_y, bottom_y, mean blue over the run)
 
 
 def median_frame(frames: Sequence[np.ndarray]) -> Result[np.ndarray, str]:
     """The per-pixel median (uint8, RGB) of frames of one shape."""
-    if not frames or len({frame.shape for frame in frames}) != 1:
+    if not frames:
+        return Failure(_NO_FRAMES)
+    if len({frame.shape for frame in frames}) != 1:
         return Failure(_SIZE_CHANGED)
     return Success(np.rint(np.median(np.stack(frames), axis=0)).astype(np.uint8))
 
@@ -29,7 +32,8 @@ def find_ropes(frame: np.ndarray) -> list[RopeMark]:
     the blue of both horizontal neighbours and both neighbours are background. A rope is a run of at least
     MIN_ROPE_ROWS such rows in one column whose run meets a platform above and below (a row whose neighbours are both
     at least GROUND_GREY_MIN grey). The top platform row is the top of its bright band, the bottom one the band's top
-    where the walk down first meets it; top_y and bottom_y are those rows minus NODE_ABOVE_GROUND_PX."""
+    where the walk down first meets it; top_y and bottom_y are those rows minus NODE_ABOVE_GROUND_PX (top_y at least 0).
+    Columns within SAME_ROPE_PX are one rope when their rows overlap; ropes stacked in a column stay separate."""
     blue = frame[:, :, 2].astype(np.int32)
     height, width = blue.shape
     if width < 3:
@@ -53,12 +57,15 @@ def find_ropes(frame: np.ndarray) -> list[RopeMark]:
                 continue
             top = _band_top(bright[:, column], top)
             mean_blue = float(blue[start:end + 1, x].mean())
-            candidates.append((x, top - NODE_ABOVE_GROUND_PX, bottom - NODE_ABOVE_GROUND_PX, mean_blue))
+            top_y = max(0, top - NODE_ABOVE_GROUND_PX)   # a platform in rows 0-2: read_ropes refuses a negative top_y
+            candidates.append((x, top_y, bottom - NODE_ABOVE_GROUND_PX, mean_blue))
 
     groups: list[list[_Candidate]] = []
     for candidate in sorted(candidates):
-        if groups and candidate[0] - groups[-1][-1][0] <= SAME_ROPE_PX:
-            groups[-1].append(candidate)
+        for group in groups:
+            if any(_same_rope(candidate, member) for member in group):
+                group.append(candidate)
+                break
         else:
             groups.append([candidate])
     ropes: list[RopeMark] = []
@@ -66,6 +73,11 @@ def find_ropes(frame: np.ndarray) -> list[RopeMark]:
         x, top_y, bottom_y, _ = min(group, key=lambda c: (c[3], c[0]))   # the darkest column is the rope's x
         ropes.append(RopeMark(x, top_y, bottom_y))
     return ropes
+
+
+def _same_rope(a: _Candidate, b: _Candidate) -> bool:
+    """Columns within SAME_ROPE_PX whose rows overlap; ropes stacked in one column only touch at the platform between."""
+    return abs(a[0] - b[0]) <= SAME_ROPE_PX and a[1] < b[2] and b[1] < a[2]
 
 
 def _grey(frame: np.ndarray) -> np.ndarray:

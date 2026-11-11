@@ -99,6 +99,26 @@ def test_folder_at_the_rope_file_path_is_a_failure_not_no_ropes(tmp_path: Path):
     assert str(folder) in result.failure()
 
 
+def test_a_path_that_cannot_be_read_is_a_failure_with_a_fix_not_no_ropes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # a stat error makes Path.exists() answer False; only "nothing at the path" may read as no ropes
+    path = tmp_path / "ff2.ropes.json"
+    path.write_text(json.dumps(GOOD), encoding="utf-8")
+    real_read = Path.read_bytes
+
+    def read_bytes(self):
+        if self == path:
+            raise PermissionError(13, "Access is denied")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    result = read_ropes(path)
+    assert not is_successful(result)
+    assert str(path) in result.failure()
+    assert "Access is denied" in result.failure()
+    assert "How to fix it:" in result.failure()
+
+
 def test_unknown_top_level_key_survives_read_write_read(tmp_path: Path):
     source = tmp_path / "a.ropes.json"
     source.write_text(json.dumps(_document(platforms=[[1, 2, 3]])), encoding="utf-8")

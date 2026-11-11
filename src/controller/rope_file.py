@@ -21,6 +21,7 @@ FORMAT = "helix-ropes"
 VERSION = 1
 FIX_TEXT = ("open the map in the map editor, mark its ropes again (Find ropes or Add rope) and save; the save "
             "replaces this file")
+READ_FIX_TEXT = "make the file readable (permissions, or a program holding it open), or move it away to start with no ropes"
 NEWER_FIX_TEXT = "update Helix, which reads rope files of version 1"
 _KNOWN_KEYS = ("format", "version", "minimap_size", "ropes")
 
@@ -49,11 +50,11 @@ def read_ropes(path: Path) -> Result[RopeFile, str]:
     """Nothing at the path reads as no ropes. Otherwise the whole file is checked before anything is returned, and every
     problem is listed in one message naming the file, each bad rope by its number, and how to fix it (C11)."""
     try:
-        if not path.exists():
-            return Success(RopeFile((), None, {}))
         raw = path.read_bytes()
+    except FileNotFoundError:
+        return Success(RopeFile((), None, {}))
     except OSError as error:
-        return Failure(f"{path} could not be read: {_reason(error)}.")
+        return Failure(f"{path} could not be read: {_reason(error)}.\nHow to fix it: {READ_FIX_TEXT}.")
     try:
         data = json.loads(raw.decode("utf-8"))
     except ValueError:  # UnicodeDecodeError and JSONDecodeError are both ValueError

@@ -59,9 +59,21 @@ def test_a_dark_column_with_no_platform_below_is_not_a_rope():
 
 
 def test_a_dark_column_inside_a_bright_area_is_not_a_rope():
-    # the floor block's edge: column 36 has a bright neighbour at 35, so it is not background on both sides
-    frame = _frame((), [(36, 21, 29, ROPE)], bright_block=(30, 35, 20, 30))
+    # the floor block's edge: column 36 has a bright neighbour at 35, so it is not background on both sides. The frame
+    # has platform rows above and below, so only the "both neighbours are background" rule (C12) rejects the column.
+    frame = _frame((TOP, MID), [(36, TOP + 1, MID - 1, ROPE)], bright_block=(30, 35, TOP, MID))
     assert find_ropes(frame) == []
+
+
+def test_a_platform_in_the_top_rows_gives_a_top_y_of_zero_not_a_negative_one():
+    # platform row 2: 2 - 3 would be -1, which read_ropes refuses
+    assert find_ropes(_frame((2, MID), [(20, 3, MID - 1, ROPE)])) == [RopeMark(20, 0, 27)]
+
+
+def test_two_ropes_stacked_in_one_column_are_two_ropes():
+    # floor -> mid and mid -> top share the column and the mid platform: their rows touch but do not overlap
+    frame = _frame((TOP, MID, FLOOR), [(20, TOP + 1, MID - 1, ROPE), (20, MID + 1, FLOOR - 1, ROPE)])
+    assert find_ropes(frame) == [RopeMark(20, 7, 27), RopeMark(20, 27, 41)]
 
 
 def test_dark_columns_two_apart_with_one_clear_column_between_are_one_rope():
@@ -75,10 +87,10 @@ def test_median_of_frames_of_two_shapes_is_a_failure():
     assert result.failure() == "the minimap changed size while ropes were being found; try again"
 
 
-def test_median_of_no_frames_is_a_failure():
+def test_median_of_no_frames_is_a_failure_with_its_own_message():
     result = median_frame([])
     assert not is_successful(result)
-    assert result.failure() == "the minimap changed size while ropes were being found; try again"
+    assert result.failure() == "no minimap frames were collected, so ropes cannot be found; try again"
 
 
 def test_median_is_per_pixel_uint8():
