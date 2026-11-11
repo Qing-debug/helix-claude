@@ -31,6 +31,9 @@ Where the plan is silent:
   counts the world effects with a NO_OP. `sim_seconds` is the virtual time from the run's start to its end and
   `mean_lap_s` the mean lap duration (0.0 with no lap).
 - `noise` fails when no move was made (0/0).
+- The marks of the map's rope file (`read_ropes(rope_file_for(map_csv))`, none when there is no file; a bad file is the
+  run's `Failure`) go to the world and to the recovery replays' worlds, read from the `--map` file itself: the node-offset
+  copy shifts nodes only, so the marks stay where they were measured. `rope_grabs` counts the world's grabs.
 - With node offsets the original CSV is loaded first (it gives the unshifted rotation positions), then one offset is
   drawn per CSV data row, in file order, before the world's first draw.
 - The CSV parser's progress prints during `loadMap` are swallowed, so the CLI prints only the report and the checks.
@@ -70,6 +73,7 @@ from src.classes.classes import CharacterClass, Kanna
 from src.controller.controller import BuildOutcome, MapleAgent
 from src.controller.csv_parser import CSVParser
 from src.controller.node import Node
+from src.controller.rope_file import RopeMark, read_ropes, rope_file_for
 from src.input.input_layer import InputLayer
 from src.input.protocol import Key
 from src.input.timing import TimingModel
@@ -122,6 +126,7 @@ class SimReport:
     knockbacks: int = 0                      # world effects with a mob knockback (`--real-ground` turns them on)
     off_map: int = 0                         # legs that ended `off_map`: stood 0.5 s more than 6 px from every platform
     drop_only_edges: int = 0                 # drop-only DOWN edges (dy > reach_v) on a rotation leg's cheapest path (H87)
+    rope_grabs: int = 0                      # times the character grabbed a rope (the map's rope file; H88)
 
 
 @dataclass(frozen=True)
@@ -220,11 +225,11 @@ def _leg_nodes(rotation: Sequence[Node], rec: LegRecord) -> tuple[Node | None, N
 
 
 def _replay_moves(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim_params: SimParams,
-                  rec: LegRecord, number: int, start: tuple[float, float]) -> int:
+                  rec: LegRecord, number: int, start: tuple[float, float], ropes: Sequence[RopeMark]) -> int:
     """The moves the leg takes in a fresh noise-off world from `start` (the nominal count)."""
     rng_timing, rng_planner, rng_world, rng_positions = _rngs(number)
     off = NoiseConfig.off()
-    world = SimWorld(terrain, rg.reach_h, rg.reach_v, sim_params, off, rng_world, start)
+    world = SimWorld(terrain, rg.reach_h, rg.reach_v, sim_params, off, rng_world, start, ropes)
     clock = SimClock()
     layer = InputLayer(SimLink(world, clock, sim_params), TimingModel(rng_timing))
     positions = SimPositionSource(world, clock, off.miss_p, rng_positions)
@@ -243,7 +248,8 @@ class _Recovery:
 
 
 def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim_params: SimParams,
-              sink: _MarkingSink, effects: Sequence[MoveEffect], start: tuple[float, float]) -> _Recovery:
+              sink: _MarkingSink, effects: Sequence[MoveEffect], start: tuple[float, float],
+              ropes: Sequence[RopeMark]) -> _Recovery:
     single = single_within = multi = multi_within = 0
     for i, rec in enumerate(sink.legs):
         first = sink.marks[i - 1] if i else 0
@@ -251,7 +257,7 @@ def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim
         if errors == 0:
             continue
         began = sink.ends[i - 1] if i else start
-        extra = len(rec.moves) - _replay_moves(rg, rotation, terrain, sim_params, rec, i, began)
+        extra = len(rec.moves) - _replay_moves(rg, rotation, terrain, sim_params, rec, i, began, ropes)
         if errors == 1:
             single += 1
             single_within += extra <= _EXTRA_PER_ERROR
@@ -368,6 +374,10 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
     if not is_successful(terrain_loaded):
         return Failure(terrain_loaded.failure())
     sim_terrain = terrain_loaded.unwrap()
+    ropes_read = read_ropes(rope_file_for(Path(map_csv)))
+    if not is_successful(ropes_read):
+        return Failure(ropes_read.failure())
+    ropes = ropes_read.unwrap().ropes
 
     loaded = _load_agent(Path(map_csv), character)
     if not is_successful(loaded):
@@ -395,7 +405,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         return Failure(f"no terrain surface at or below the first rotation node {csv_rotation[0]}")
     start = (float(x0), surface[1])
 
-    world = SimWorld(sim_terrain, rg.reach_h, rg.reach_v, sim_params, noise, rng_world, start)
+    world = SimWorld(sim_terrain, rg.reach_h, rg.reach_v, sim_params, noise, rng_world, start, ropes)
     clock = SimClock()
     layer = InputLayer(SimLink(world, clock, sim_params), TimingModel(rng_timing))
     positions = SimPositionSource(world, clock, noise.miss_p, rng_positions)
@@ -426,7 +436,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
     summary = ran.unwrap()
     sim_seconds = (clock.now_ns() - began_ns) / 1e9
 
-    recovery = _recovery(rg, rotation, sim_terrain, sim_params, sink, world.effects, start)
+    recovery = _recovery(rg, rotation, sim_terrain, sim_params, sink, world.effects, start, ropes)
     legs = sink.legs
     entries = [m for rec in legs for m in rec.moves]
     lap_seconds = [(lap.end_ns - lap.start_ns) / 1e9 for lap in sink.laps]
@@ -452,6 +462,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         knockbacks=sum(InjectedError.KNOCKBACK in e.injected for e in world.effects),
         off_map=sum(rec.outcome == LegOutcome.OFF_MAP for rec in legs),
         drop_only_edges=_drop_only_edges_used(rg, rotation),
+        rope_grabs=world.rope_grabs,
     ))
 
 

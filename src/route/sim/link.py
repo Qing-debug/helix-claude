@@ -5,6 +5,7 @@ and advances a virtual `SimClock` by the link latency plus the schedule's total.
 world's position at the clock's time, rounded to minimap pixels, and misses with a set probability. It draws the dot's
 centre, `SimParams.dot_above_foot_px` above the foot the world tracks, and reports it through `position.foot_from_dot`,
 as the live source does (OFFP141): with the default offset of `position.DOT_TO_FOOT_PX` the read is the rounded foot.
+`SimLink` decodes Alt with one of Left/Right, the arrow down first, as `SimWorld.jump_off` (the way off a rope, H88).
 
 Where the plan is silent: a play that fails from `fail_next` advances no time and uses no seq; `play` and
 `release_all` share one seq counter (as `BleLink` does); a read draws one `rng.random()` every call, even with
@@ -108,6 +109,11 @@ class SimLink:
         elif pressed == {Key.DOWN, Key.ALT} and first_down[Key.DOWN] < first_down[Key.ALT]:
             self.world.drop(t_end)
             return
+        elif len(arrows) == 1 and others == {Key.ALT} and arrows <= {Key.LEFT, Key.RIGHT}:
+            (arrow,) = arrows
+            if first_down[arrow] < first_down[Key.ALT]:
+                self.world.jump_off(arrow, t_end)
+                return
         elif len(arrows) == 1 and not others:
             (arrow,) = arrows
             held_ms = (last_up.get(arrow, total_100us) - first_down[arrow][0]) / 10

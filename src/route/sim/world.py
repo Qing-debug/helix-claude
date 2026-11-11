@@ -10,11 +10,32 @@ settle time), and an invalid direction is `nothing` with no draw. A knockback (a
 move, OFFP141) replaces the move's settle curve: the character shows at the move's end at once and is shoved from
 there, so one effect is live at a time and `position_at` (it reads only `effects[-1]`) and `SimWorld.pos` never
 disagree. Its curve moves x as well as y over the whole settle, so a shove along level ground is airborne.
+
+Ropes (the rope fix, H88; the marks are the map's rope file, `src.controller.rope_file`). A character on a rope is at
+x `mark.x + ON_ROPE_DX` (where it reads) and `on_rope` is the mark's index; off every rope it is None. A rope grab needs
+the character on a platform whose surface at the rope's read x is within `rope_top_px` of the mark's `top_y`, launched
+within `rope_grab_px` of that x. The draws keep their places: a move first makes today's `_no_op()` draw (a no-op
+returns as today and never grabs), the grab test comes after it and before `_draw()`'s landing draws, so a grab
+replaces the landing and `injected` never holds both `ROPE_GRAB` and `LANDING`. A grab is followed by `_shoved` as
+every move is.
+- A `drop` from such a platform grabs the rope: the character ends at (read x, `top_y` + depth), depth one
+  `rng.integers` draw from `rope_grab_depth_px`, capped at `bottom_y - 1`; kind `"drop"`, `injected` empty (the live
+  mechanic, not noise), settle `drop_settle_s`.
+- A `teleport(DOWN)` from such a platform grabs it only with `rope_grab_p > 0`: one `rng.random()` (drawn only under
+  the launch condition) and, on a hit, the same end, kind `"teleport"`, `injected == (ROPE_GRAB,)`, settle
+  `teleport_settle_s`. With `rope_grab_p == 0` nothing is drawn, so a run without grabs is bit-identical.
+- On a rope, `walk` is `none`; `drop` climbs `rope_climb_px` down with no landing draw (x never changes), and when that
+  would reach `bottom_y` it lands on the first surface at or below its y instead and leaves the rope; `teleport` is
+  today's code from the rope's point and leaves the rope when it lands; `jump_off` moves x by `jump_off_px` and lands on
+  the first surface at or below y (from a platform: at or below y minus the side teleport's rise), with settle
+  `jump_air_s` plus the fall, and leaves the rope; a `knockback` that lands leaves the rope. A move that finds no
+  surface stays where it is, on the rope if it was.
 """
 
 import bisect
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -23,6 +44,7 @@ import numpy as np
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
+from src.controller.rope_file import ON_ROPE_DX, RopeMark
 from src.input.protocol import Key
 
 _ON_SURFACE_PX = 0.5        # a position is on a platform when its surface is within this many px of y
@@ -126,6 +148,11 @@ class SimParams:
     dot_above_foot_px: int = 3           # the dot's centre sits this many px above the foot (= position.DOT_TO_FOOT_PX)
     side_teleport_extra_px: float = 0.0  # a sideways teleport goes this much farther than the character's reach
     knockback_air_s: float = 0.3         # how long a mob's shove keeps the character in the air
+    rope_grab_px: float = 2.0            # a drop launched within this of a rope's read x grabs it
+    rope_climb_px: float = 2.0           # a drop on a rope climbs down this far (live: 44, 46, 48, 49)
+    rope_top_px: float = 1.5             # the launch surface at the rope's read x must be this near the mark's top_y
+    jump_off_px: float = 4.0             # Alt + Left/Right moves the character this far sideways
+    jump_air_s: float = 0.3              # and keeps it in the air this long
 
 
 @dataclass(frozen=True)
@@ -139,6 +166,8 @@ class NoiseConfig:
     node_offset_px: int = 0      # B14 shifts each map node's y by U{-k..k} before planning; the terrain stays
     knockback_p: float = 0.0     # a mob shoves the character after a move; 0 draws nothing
     knockback_px: tuple[int, int] = (3, 8)
+    rope_grab_p: float = 0.0     # a teleport down over a rope grabs it; 0 draws nothing (a drop over one always does)
+    rope_grab_depth_px: tuple[int, int] = (3, 9)  # a grab ends this far below the mark's top_y
 
     @staticmethod
     def off() -> "NoiseConfig":
@@ -151,11 +180,12 @@ class InjectedError(StrEnum):
     OVERSHOOT = "overshoot"
     LANDING = "landing"
     KNOCKBACK = "knockback"
+    ROPE_GRAB = "rope_grab"
 
 
 @dataclass(frozen=True)
 class MoveEffect:
-    kind: str                                  # "teleport" | "walk" | "drop" | "knockback" | "none"
+    kind: str                                  # "teleport" | "walk" | "drop" | "jump_off" | "knockback" | "none"
     start: tuple[float, float]
     end: tuple[float, float]
     t_end_ns: int
@@ -173,7 +203,7 @@ class _Draw:
 
 class SimWorld:
     def __init__(self, terrain: SimTerrain, reach_h: int, reach_v: int, params: SimParams, noise: NoiseConfig,
-                 rng: np.random.Generator, start: tuple[float, float]) -> None:
+                 rng: np.random.Generator, start: tuple[float, float], ropes: Sequence[RopeMark] = ()) -> None:
         self.terrain = terrain
         self.reach_h = reach_h
         self.reach_v = reach_v
@@ -184,6 +214,9 @@ class SimWorld:
             raise ValueError(f"start {start!r} is not within {_ON_SURFACE_PX} px of any platform surface")
         self.pos: tuple[float, float] = (float(start[0]), float(start[1]))
         self.effects: list[MoveEffect] = []
+        self.ropes: tuple[RopeMark, ...] = tuple(ropes)
+        self.on_rope: int | None = None   # the index of the rope the character hangs on
+        self.rope_grabs = 0
 
     # --- helpers --------------------------------------------------------------------------------------------
 
@@ -234,6 +267,43 @@ class SimWorld:
             self.knockback(sign * int(self.rng.integers(lo, hi + 1)), move.t_end_ns)
         return move
 
+    def _rope_under(self, platform: int) -> int | None:
+        """The rope a drop or a teleport down from `platform` at `pos` grabs: launched within `rope_grab_px` of the
+        rope's read x, from a surface within `rope_top_px` of the mark's `top_y` at that x."""
+        for i, mark in enumerate(self.ropes):
+            read_x = mark.x + ON_ROPE_DX
+            surface = self.terrain.platforms[platform].surface_y(read_x)
+            if (surface is not None and abs(self.pos[0] - read_x) <= self.params.rope_grab_px
+                    and abs(surface - mark.top_y) <= self.params.rope_top_px):
+                return i
+        return None
+
+    def _grab(self, rope: int, kind: str, settle_s: float, injected: tuple[InjectedError, ...],
+              now_ns: int) -> MoveEffect:
+        """The character ends on `rope`, one `rng.integers` draw (the depth) below its top, then `_shoved`."""
+        mark = self.ropes[rope]
+        lo, hi = self.noise.rope_grab_depth_px
+        depth = int(self.rng.integers(lo, hi + 1))
+        end = (float(mark.x + ON_ROPE_DX), float(min(mark.top_y + depth, mark.bottom_y - 1)))
+        effect = self._record(kind, end, now_ns, settle_s, injected)
+        self.on_rope = rope
+        self.rope_grabs += 1
+        return self._shoved(effect)
+
+    def _climb(self, rope: int, now_ns: int) -> MoveEffect:
+        """A drop on a rope: down `rope_climb_px`; at the mark's `bottom_y` it stands on the first surface at or below
+        its y and leaves the rope."""
+        x, y = self.pos
+        y_new = y + self.params.rope_climb_px
+        if y_new < self.ropes[rope].bottom_y:
+            return self._shoved(self._record("drop", (x, y_new), now_ns, self.params.drop_settle_s, ()))
+        landing = self.terrain.surface_below(x, y)
+        if landing is None:  # no surface under the rope (cannot happen on FF2): stay on it, like a drop with no landing
+            return self._shoved(self._record("drop", self.pos, now_ns, self.params.drop_settle_s, ()))
+        self.on_rope = None
+        settle_s = self.params.drop_settle_s + (landing[1] - y) / self.params.fall_px_per_s
+        return self._shoved(self._record("drop", (x, landing[1]), now_ns, settle_s, ()))
+
     # --- moves ----------------------------------------------------------------------------------------------
 
     def knockback(self, dx_px: float, now_ns: int) -> MoveEffect:
@@ -244,6 +314,7 @@ class SimWorld:
         landing = self.terrain.surface_below(x + dx_px, y - _SIDE_TELEPORT_RISE_PX)
         if landing is None:
             return self._record("knockback", self.pos, now_ns, settle_s, (InjectedError.KNOCKBACK,))
+        self.on_rope = None
         settle_s += max(0.0, landing[1] - y) / self.params.fall_px_per_s
         return self._record("knockback", (x + dx_px, landing[1]), now_ns, settle_s, (InjectedError.KNOCKBACK,))
 
@@ -252,6 +323,11 @@ class SimWorld:
             return self.nothing(now_ns)
         if self._no_op():
             return self._no_op_effect(now_ns)
+        if direction == Key.DOWN and self.noise.rope_grab_p > 0 and self.on_rope is None:
+            current = self._platform_at(self.pos)
+            rope = None if current is None else self._rope_under(current)
+            if rope is not None and bool(self.rng.random() < self.noise.rope_grab_p):
+                return self._grab(rope, "teleport", self.params.teleport_settle_s, (InjectedError.ROPE_GRAB,), now_ns)
         x, y = self.pos
         sideways = direction in (Key.LEFT, Key.RIGHT)
         draw = self._draw(overshoot=sideways, landing=True)
@@ -270,6 +346,7 @@ class SimWorld:
         landing = self.terrain.surface_below(x_new, y_from)
         if landing is None:
             return self._shoved(self._record("teleport", self.pos, now_ns, self.params.teleport_settle_s, injected))
+        self.on_rope = None
         y_land = landing[1]
         if direction == Key.DOWN:
             fall = max(0.0, (y_land - y) - self.reach_v)
@@ -284,7 +361,7 @@ class SimWorld:
         if self._no_op():
             return self._no_op_effect(now_ns)
         current = self._platform_at(self.pos)
-        if current is None:  # off every surface: cannot happen through the public moves; same as drop's "none"
+        if current is None or self.on_rope is not None:  # off every surface, or on a rope: same as drop's "none"
             return self._record("none", self.pos, now_ns, 0.0, ())
         x, y = self.pos
         draw = self._draw(overshoot=True, landing=False)
@@ -306,9 +383,14 @@ class SimWorld:
     def drop(self, now_ns: int) -> MoveEffect:
         if self._no_op():
             return self._no_op_effect(now_ns)
+        if self.on_rope is not None:
+            return self._climb(self.on_rope, now_ns)
         current = self._platform_at(self.pos)
         if current is None or not self.terrain.platforms[current].droppable:
             return self._record("none", self.pos, now_ns, 0.0, ())
+        rope = self._rope_under(current)
+        if rope is not None:
+            return self._grab(rope, "drop", self.params.drop_settle_s, (), now_ns)
         x, y = self.pos
         draw = self._draw(overshoot=False, landing=True)
         injected = tuple(draw.injected)
@@ -319,6 +401,22 @@ class SimWorld:
         y_land = landing[1]
         settle_s = self.params.drop_settle_s + (y_land - y) / self.params.fall_px_per_s
         return self._shoved(self._record("drop", (x_new, y_land), now_ns, settle_s, injected))
+
+    def jump_off(self, direction: Key, now_ns: int) -> MoveEffect:
+        """Alt + Left/Right: `jump_off_px` sideways, landing from a rope on the first surface at or below its y, from a
+        platform on the first at or below y minus the side teleport's rise; no surface: stays. Leaves the rope."""
+        if direction not in (Key.LEFT, Key.RIGHT):
+            return self.nothing(now_ns)
+        if self._no_op():
+            return self._no_op_effect(now_ns)
+        x, y = self.pos
+        x_new = x + (self.params.jump_off_px if direction == Key.RIGHT else -self.params.jump_off_px)
+        landing = self.terrain.surface_below(x_new, y if self.on_rope is not None else y - _SIDE_TELEPORT_RISE_PX)
+        if landing is None:
+            return self._shoved(self._record("jump_off", self.pos, now_ns, self.params.jump_air_s, ()))
+        self.on_rope = None
+        settle_s = self.params.jump_air_s + max(0.0, landing[1] - y) / self.params.fall_px_per_s
+        return self._shoved(self._record("jump_off", (x_new, landing[1]), now_ns, settle_s, ()))
 
     def nothing(self, now_ns: int) -> MoveEffect:
         """A schedule that moves nothing: no draw, no move."""
