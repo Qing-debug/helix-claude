@@ -66,6 +66,7 @@ from returns.result import Failure, Result, Success
 
 from src.classes.classes import CharacterClass, Kanna
 from src.controller.controller import BuildOutcome, MapleAgent
+from src.controller.rope_file import read_ropes, rope_file_for
 from src.input.input_layer import InputLayer, Link
 from src.input.link import BleLink
 from src.input.timing import TimingModel
@@ -73,6 +74,7 @@ from src.route import runtime
 from src.route.harness.record_minimap import INDEX_NAME, record, shared_frames
 from src.route.leg_log import LAPS_FILE, LEGS_FILE, JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink
 from src.route.params import MovementParams
+from src.route.ropes import RopeZones
 from src.route.route_graph import RouteGraph
 from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, RunHeader, StepLog
 from src.route.walker import Clock, PositionSource, RealClock, RouteWalker, RunSummary, WalkerConfig
@@ -198,7 +200,7 @@ class _LostLegSink:
         return self._inner.write_lap(rec)
 
 
-def _load_route(map_csv: Path, character: CharacterClass) -> Result[tuple[RouteGraph, tuple], str]:
+def _load_route(map_csv: Path, character: CharacterClass) -> Result[tuple[RouteGraph, tuple, RopeZones], str]:
     agent = MapleAgent(characterClass=character)
     with contextlib.redirect_stdout(io.StringIO()):  # the CSV parser prints its progress
         loaded = agent.loadMap(map_csv)
@@ -212,7 +214,11 @@ def _load_route(map_csv: Path, character: CharacterClass) -> Result[tuple[RouteG
     built = RouteGraph.build(agent.pathGraph, MovementParams())
     if not is_successful(built):
         return Failure(f"route graph: {built.failure()}")
-    return Success((built.unwrap(), rotation))
+    rg = built.unwrap()
+    roped = read_ropes(rope_file_for(map_csv))  # a bad rope file refuses the walk like a bad map (C11, H88)
+    if not is_successful(roped):
+        return Failure(roped.failure())
+    return Success((rg, rotation, RopeZones.build(roped.unwrap().ropes, rg.params)))
 
 
 def _git_head() -> str | None:
@@ -436,7 +442,7 @@ class RunSession:
             if not is_successful(route):
                 self._log(f"error: {route.failure()}", True)
                 return 5
-            rg, rotation = route.unwrap()
+            rg, rotation, ropes = route.unwrap()
             seed = s.seed if s.seed is not None else secrets.randbits(64)
             rng_timing, rng_planner = (np.random.default_rng(x) for x in np.random.SeedSequence(seed).spawn(2))
             positions = self._make_positions(shared)
@@ -489,7 +495,7 @@ class RunSession:
             clock = self._make_clock()
             step_log = StepLog(log=self._error_line)  # no I/O; every walk passes it (V7 step 3)
             walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log,
-                                 log=self._error_line)
+                                 log=self._error_line, ropes=ropes)
             stop = self._make_stop(self._on_stop, log=self._error_line)
             sink.arm(stop.trigger, walker.stop_now)
             if self._flagged():

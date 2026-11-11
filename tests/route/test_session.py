@@ -104,7 +104,7 @@ def env(monkeypatch, tmp_path):
     """FF2 terrain, noise off, start at (113, 60), one SimClock everywhere, one lap, no countdown, a shared frame set.
     The fake stop control calls `on_stop` from `trigger`; with `env.later_stop` it calls it later from another thread,
     as the real worker does (`LaterStop`). `RouteWalker.run` counts its calls."""
-    rg, rotation = session._load_route(FIXTURE, Kanna()).unwrap()
+    rg, rotation, _ropes = session._load_route(FIXTURE, Kanna()).unwrap()
     clock = SimClock()
     params = SimParams()
     world = SimWorld(load_terrain(TERRAIN).unwrap(), rg.reach_h, rg.reach_v, params, NoiseConfig.off(),
@@ -750,3 +750,55 @@ def test_session_hands_its_error_line_to_each_component(env, monkeypatch):
     assert seen == dict.fromkeys(("run_cleanup", "walker", "step_log", "stop_control"), made._error_line)
     made._error_line("x")
     assert env.lines[-1] == ("x", True)
+
+
+# ---- the map's rope file (rope fix, Task 6, H88, C11) -----------------------------------------------------------------
+
+def _copy_map(tmp_path, *, ropes_text=None):
+    """FF2's map copied to a tmp folder, with `ropes_text` as the rope file beside it (none: no file)."""
+    csv = tmp_path / "map.csv"
+    shutil.copy(FIXTURE, csv)
+    if ropes_text is not None:
+        csv.with_suffix(".ropes.json").write_text(ropes_text, encoding="utf-8")
+    return csv
+
+
+def test_a_bad_rope_file_refuses_the_walk_before_anything_starts(env, tmp_path):
+    env.map_csv = _copy_map(tmp_path, ropes_text="not json")
+    env.lines = []
+
+    assert env.run() == 5
+    assert env.calls == [] and env.walks == 0   # no positions, no capture, no link: refused with the map load
+    assert _ended(env.events).code == 5
+    texts = [text for text, error in env.lines if error]
+    assert any("map.ropes.json" in text and "the file is not JSON" in text and "How to fix it" in text for text in texts)
+    assert not (env.out / "legs.jsonl").exists()
+
+
+def test_a_map_without_a_rope_file_starts_as_today(env, tmp_path, monkeypatch):
+    seen = []
+    real_init = RouteWalker.__init__
+
+    def spy(self, *args, **kwargs):
+        seen.append(kwargs["ropes"])
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(RouteWalker, "__init__", spy)
+    env.map_csv = _copy_map(tmp_path)
+
+    assert env.run() == 0
+    assert env.walks == 1 and seen[0].at((106, 49)) is None   # an empty table: no zone anywhere
+
+
+def test_the_walker_gets_the_zones_of_the_rope_file(env, monkeypatch):
+    seen = []
+    real_init = RouteWalker.__init__
+
+    def spy(self, *args, **kwargs):
+        seen.append(kwargs["ropes"])
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(RouteWalker, "__init__", spy)
+
+    assert env.run() == 0
+    assert [seen[0].at((106, 49)), seen[0].at((46, 35)), seen[0].at((90, 35))] == [1, 0, None]   # FF2's two ropes

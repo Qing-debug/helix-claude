@@ -149,7 +149,7 @@ def load_sim() -> Result[SimSetup, str]:
     terrain = load_terrain(TERRAIN)
     if not is_successful(terrain):
         return Failure(f"terrain {TERRAIN}: {terrain.failure()}")
-    rg, _rotation = route.unwrap()
+    rg, _rotation, _ropes = route.unwrap()
     return Success(SimSetup(rg.reach_h, rg.reach_v, terrain.unwrap()))
 
 

@@ -378,7 +378,7 @@ def rig(monkeypatch, tmp_path):
         env.positions = positions
 
     def use_sim(start=(113.0, 60.0)) -> None:
-        rg, _ = session._load_route(FIXTURE, Kanna()).unwrap()  # noqa: SLF001
+        rg, _, _ = session._load_route(FIXTURE, Kanna()).unwrap()  # noqa: SLF001
         params = SimParams()
         world = SimWorld(load_terrain(TERRAIN).unwrap(), rg.reach_h, rg.reach_v, params, NoiseConfig.off(),
                          np.random.default_rng(0), start)

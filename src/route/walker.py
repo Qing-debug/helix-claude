@@ -31,6 +31,12 @@ Where the plan is silent:
   (`locate.attach_standing`) and the walker plans from that point; with no line that close it logs one line and ends
   the leg `OFF_MAP` (the run ends too, as for `STOPPED`). A character the strict rules place (`locate.attach`) never
   starts the timer, whether or not the planner finds a path, and every move sent restarts it.
+- The rope rule (rope fix, H88, H93): a read that neither the planner nor `locate.attach` places, inside a marked rope's
+  zone (`RopeZones.at`, one dict lookup, asked only for such a read), held `rope_still_s` gets `planner.rope_move`'s
+  moves in order: blinks to the nearer platform in reach, then one jump off; a move sent restarts the 0.1 s hold. With
+  the order used up the leg ends `OFF_MAP` with one line. A rope move is not progress (`best` is unchanged) and never
+  counts toward a stall by itself; its order restarts when the read is placed by `next_move` or `attach`, or is on
+  another rope. A read outside every zone follows the still rule above, unchanged.
 - The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
   thread, and after its first exception it is reported once through `log` and not called again this run. With no
   observer nothing else happens: each call site is one `is not None` test.
@@ -54,7 +60,8 @@ from src.input.link import InputError
 from src.route.leg_log import LapRecord, LegOutcome, LegRecord, LegSink, MoveEntry
 from src.route.locate import attach, attach_standing
 from src.route.moves import execute
-from src.route.planner import next_move
+from src.route.planner import Decision, next_move, rope_move
+from src.route.ropes import RopeZones
 from src.route.route_graph import RouteGraph
 
 STALE = "stale"  # the PositionSource Failure that means "no new frame yet"; any other Failure is a miss
@@ -162,6 +169,7 @@ class RouteWalker:
         *,
         observer: StepObserver | None = None,
         log: Callable[[str], None] = _print_error,
+        ropes: RopeZones = RopeZones.EMPTY,
     ) -> None:
         self._rg = rg
         self._rotation = tuple(rotation)
@@ -178,6 +186,7 @@ class RouteWalker:
         self._sink_failure_printed = False
         self._observer = observer
         self._log_line = log  # the app run's log goes to the console box (route tab H71); `_log` is the sink check
+        self._ropes = ropes  # the map's rope zones (H88); `RopeZones.EMPTY` for a map with no rope file
 
     def walk_leg(self, lap: int, leg: int, src: Node | None, dst: Node) -> LegRecord:
         """Walk from the character's current position to `dst`; the record says how the leg ended."""
@@ -194,6 +203,8 @@ class RouteWalker:
         entries: list[MoveEntry] = []
         misses = off_graph = stalls = 0
         still = _Stillness()  # the character cannot be placed on the map: how long it has read the same
+        rope_at: int | None = None  # the rope the last rope move was for (an index into the zones), None before one
+        rope_tries = 0  # how many moves of rope_move's order have been sent for it
 
         while True:
             if self._stop.is_set():  # 1
@@ -222,29 +233,50 @@ class RouteWalker:
             pos = read.unwrap()
 
             planned = next_move(self._rg, pos, dst, self._rng)  # 5
+            on_rope = False  # the move below is a rope move: it is not the planner's, and it is not progress
             if not is_successful(planned):
                 off_graph += 1
                 if self._observer is not None:
                     self._emit(self._observer.no_plan, read_ns, pos, planned.failure())
                 if is_successful(attach(self._rg, pos)):  # placed by A1-A3, but no path: waiting is as today
                     still.reset()
+                    rope_at, rope_tries = None, 0
                     clock.sleep(params.poll_s)
                     continue
-                if still.see(pos, read_ns) < params.standing_s:
-                    clock.sleep(params.poll_s)
-                    continue
-                snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
-                if not is_successful(snapped):
-                    self._log_line(f"the character is {snapped.failure()}; ending the run")
-                    outcome = LegOutcome.OFF_MAP
-                    break
-                pos = snapped.unwrap()
-                planned = next_move(self._rg, pos, dst, self._rng)
-                if not is_successful(planned):
-                    clock.sleep(params.poll_s)
-                    continue
+                rope = self._ropes.at(pos)  # only now: a read the map places never asks the zones
+                if rope is not None:  # on a marked rope (H88)
+                    if still.see(pos, read_ns) < params.rope_still_s:
+                        clock.sleep(params.poll_s)
+                        continue
+                    if rope != rope_at:
+                        rope_at, rope_tries = rope, 0
+                    mark = self._ropes.mark(rope)
+                    rope_choice = rope_move(mark, pos, dst, rope_tries, self._rg.reach_v, params.rope_blink_tries)
+                    if rope_choice is None:
+                        self._log_line(f"the character is on the rope at x {mark.x}, at ({pos[0]}, {pos[1]}), and "
+                                       "could not get off it; ending the run")
+                        outcome = LegOutcome.OFF_MAP
+                        break
+                    rope_tries += 1
+                    planned = Success(Decision(rope_choice, best if math.isfinite(best) else 0.0, None))
+                    on_rope = True
+                else:
+                    if still.see(pos, read_ns) < params.standing_s:
+                        clock.sleep(params.poll_s)
+                        continue
+                    snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
+                    if not is_successful(snapped):
+                        self._log_line(f"the character is {snapped.failure()}; ending the run")
+                        outcome = LegOutcome.OFF_MAP
+                        break
+                    pos = snapped.unwrap()
+                    planned = next_move(self._rg, pos, dst, self._rng)
+                    if not is_successful(planned):
+                        clock.sleep(params.poll_s)
+                        continue
             else:
                 still.reset()
+                rope_at, rope_tries = None, 0
             decision = planned.unwrap()
             move = decision.move
             if move is None:
@@ -253,7 +285,9 @@ class RouteWalker:
                     self._emit(self._observer.reached, read_ns, pos)
                 break
 
-            if decision.cost_to_go_s < best - params.progress_eps_s:  # 6
+            if on_rope:  # 6: a rope move is never progress, and it never trips the stall count on its own
+                last_progress = now
+            elif decision.cost_to_go_s < best - params.progress_eps_s:
                 best = decision.cost_to_go_s
                 last_progress = now
 

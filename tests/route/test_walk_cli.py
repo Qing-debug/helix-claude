@@ -538,7 +538,7 @@ def _json(path: Path) -> dict:
 @pytest.fixture
 def sim(monkeypatch, tmp_path):
     """The end-to-end seams of plan B19: FF2 terrain, noise off, start at (113, 60), one SimClock everywhere."""
-    rg, rotation = session._load_route(FIXTURE, Kanna()).unwrap()
+    rg, rotation, _ropes = session._load_route(FIXTURE, Kanna()).unwrap()
     clock = SimClock()
     params = SimParams()
     world = SimWorld(load_terrain(TERRAIN).unwrap(), rg.reach_h, rg.reach_v, params, NoiseConfig.off(),
