@@ -2858,3 +2858,23 @@ In plain words: nothing is built. Hong opens Windows PowerShell with "Run as adm
 Cost if wrong: Hong has to remember the administrator terminal each time. Undo: Hong asks for option B or C.
 
 Pointer: question bank QB259; H82.
+
+## H99 (2026-11-12): The rope file remembers deleted ropes, so a rope Hong deletes stays deleted and the automatic find does not bring it back (Hong's QB262)
+
+Context: H96 has the map editor add found ropes by itself when it opens, "add new ropes only" (QB255). The review of that build (AUTOFIND162-review, I2) found that a rope Hong deletes on purpose comes back at the next open, because the rope file did not remember deletions (the cost H96 recorded). He was asked what should happen when the automatic find marks a wrong rope (set rope163, rope163-1). Options shown: A, remember deleted ropes in the map's rope file (the recommendation); B, find automatically only on maps with no rope file yet; C, keep as built. He chose A, verbatim: "Remember deleted ropes in the map's rope file, so a rope you delete stays deleted".
+
+In plain words: the rope file gets an optional `deleted_ropes` list holding the places where a rope was deleted or moved away from; the editor's find leaves those places empty. Only the editor uses it; the walker and the simulator read the rope file as before. Built in branch `p1-editor-autofind` (AUTOFIND163 I2, commit 33b2666). This extends the "add new ropes only" answer of H96.
+
+Cost if wrong: a rope deleted by mistake is not found again by the automatic find until Hong adds it by hand or the entry is removed from the rope file. Undo: Hong says so.
+
+Pointer: question bank QB262; H96; H94; `src/controller/rope_file.py`.
+
+## H100 (2026-11-12): The minimap capture's "Minimap lost" message and startup console lines stay as built (Hong's QB263)
+
+Context: the capture fix of H97 shows a "Minimap lost" message and prints console lines at startup and when the minimap is lost or found. The build showed the lost message in the main window, the map editor and the Route tab's idle minimap, a choice made provisionally by the implementer (VIS162-FIX-D1, option A). Hong was asked to confirm it (set rope163, rope163-2). Options shown: A, keep as built (the recommendation); B, the lost message in the main window only, no startup lines. He chose A, verbatim: "Keep it as built: startup lines, and the lost message in the main window, the map editor and the Route tab's idle minimap".
+
+In plain words: nothing more is built; the provisional choice is confirmed.
+
+Cost if wrong: the message may flash on each map change (an open review point, VIS162-FIX-review M1). Undo: Hong asks for option B.
+
+Pointer: question bank QB263; H97.
