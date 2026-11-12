@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from returns.pipeline import is_successful
-from returns.result import Success
+from returns.result import Failure, Success
 from test_walker_standing import (
     CSV,
     OFF_MAP_LINE,
@@ -36,6 +36,7 @@ from test_walker_standing import (
 )
 
 from src.controller.rope_file import read_ropes, rope_file_for
+from src.input.link import InputError
 from src.route import walker as walker_module
 from src.route.leg_log import JsonlLegLog, LegOutcome, MemorySink
 from src.route.locate import attach
@@ -77,12 +78,12 @@ def ff2():
     return _load(CSV)
 
 
-def _rig(world, fn, *, ropes=ZONES, leg_timeout_s=3.0, stop_at_s=None, sink=None, **walker_args):
+def _rig(world, fn, *, ropes=ZONES, leg_timeout_s=3.0, stop_at_s=None, sink=None, layer_of=RopeLayer, **walker_args):
     """A walker over `world` with the rope zones `ropes` (none: the keyword left out), a scripted source `fn`, a rope
-    layer and an observer."""
+    layer (`layer_of(clock)`) and an observer."""
     clock = SimClock()
     source = ScriptedSource(clock, fn)
-    layer = RopeLayer(clock)
+    layer = layer_of(clock)
     rec, lines = Rec(), []
     config = WalkerConfig(use_stimulus=False, leg_timeout_s=leg_timeout_s)
     walker = RouteWalker(world.rg, world.rotation, layer, source, clock, MemorySink() if sink is None else sink,
@@ -483,3 +484,34 @@ def test_stop_wins_during_the_hold_after_a_placed_no_op(ff2):
     record = _leg(ff2, rig, (58, 46))
 
     assert record.outcome == LegOutcome.STOPPED and _kinds(rig) == ["walk"] and rig.lines == []
+
+
+class FailingFirstWalk(RopeLayer):
+    """`RopeLayer` whose first `walk` is not sent: it returns `Failure(error)` (the play is logged, the key never moves
+    the character, as for every layer here)."""
+
+    def __init__(self, clock, error):
+        super().__init__(clock)
+        self.error, self.walks = error, 0
+
+    def walk(self, direction, intended_ms, stimulus_ns=None):
+        self.walks += 1
+        played = super().walk(direction, intended_ms, stimulus_ns)
+        return Failure(self.error) if self.walks == 1 else played
+
+
+@pytest.mark.parametrize("error", [InputError.WRITE_FAILED, InputError.REJECTED, InputError.ACK_TIMEOUT])
+def test_a_move_that_was_not_sent_is_not_a_no_op(ff2, error):
+    """ROPE159-C10B-F1 M3: a send that failed (not link down) did not press the key, so the read that stays the same
+    afterwards is not a move that did nothing, and the rope rule does not start from it. The planner's move is sent
+    again first, and only the second walk, which was sent and did nothing, starts the rule (blink up from the top)."""
+    rig = _rig(ff2, steps((0, Success(TOP_107)), (1.0, Success((58, 46)))), leg_timeout_s=3.0,
+               layer_of=lambda clock: FailingFirstWalk(clock, error))
+
+    record = _leg(ff2, rig, (58, 46))
+
+    assert record.outcome == LegOutcome.REACHED and rig.lines == []
+    assert _kinds(rig)[:3] == ["walk", "walk", "teleport"]
+    assert record.moves[0].input == error.name and record.moves[1].input == "ok"
+    assert rig.layer.keys[0] == ("teleport", "UP")
+    assert [e[7] is None for e in rig.rec.of("planned")][:3] == [False, False, True]   # two planner moves, then the rule's

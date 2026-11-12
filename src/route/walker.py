@@ -315,7 +315,9 @@ class RouteWalker:
             sent = execute(self._layer, move, stimulus_ns)
             failure = None if is_successful(sent) else sent.failure()
             still.reset()  # a move was sent: a no-op needs another 0.5 s in a row before the next loose attach
-            sent_from = read_pos  # the read, not a snapped point: the next read is compared with it
+            # the read, not a snapped point: the next read is compared with it. A send that failed pressed no key, so
+            # the same read after it is not a move that did nothing (C10 option B, ROPE159-C10B-F1 M3)
+            sent_from = read_pos if failure is None else None
             if self._observer is not None:
                 self._emit(self._observer.sent, clock.now_ns(), *_sent_values(sent))
             entry = MoveEntry(
