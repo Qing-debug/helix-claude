@@ -79,6 +79,14 @@ ADD_ROPE_BOTTOM_TEXT = "Now click its bottom end, where a node on the platform b
 MINIMAP_NOT_FOUND_TEXT = "Minimap not found yet"
 ROPE_BOX_LABELS = {"x": "x", "top_y": "top y", "bottom_y": "bottom y"}
 
+# Arrow keys move the selected node (NODEMOVE159; Hong, 2026-11-12, QB240, QB241).
+NODE_MOVE_PX = 1               # native px per arrow press
+NODE_MOVE_SHIFT_PX = 5         # native px per Shift+arrow press
+ARROW_KEY_STEPS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}  # keysym -> (dx, dy) of one px
+# Widgets that take typed text. A key typed in one edits its text first, and the window's bindings (<Delete>, the arrows) run
+# after it, so they leave a key whose `event.widget` is one of these alone.
+TEXT_BOX_WIDGETS = (tk.Entry, tk.Spinbox, ttk.Entry)
+
 
 @dataclass
 class MapEditorState:
@@ -420,6 +428,7 @@ class MapEditor:
         self.minimap_canvas.pack(padx=8, pady=8)  # default side=TOP centers horizontally in the frame
         self.minimap_canvas.bind("<Button-1>", self._onCanvasClick)
         self.window.bind("<Delete>", self._onDeleteKey)
+        self._bindArrowKeys()
         self._refreshInspector()  # start with empty inspector since no node is selected yet
         self._refreshRotation()
 
@@ -634,6 +643,44 @@ class MapEditor:
         self._renderNodes()
         self._refreshRotation()
 
+    def _bindArrowKeys(self):
+        """Bind the arrow keys on the window, like <Delete>: an arrow moves the selected node 1 px, Shift+arrow 5 px."""
+        for key, (dx, dy) in ARROW_KEY_STEPS.items():
+            for sequence, step in ((f"<{key}>", NODE_MOVE_PX), (f"<Shift-{key}>", NODE_MOVE_SHIFT_PX)):
+                self.window.bind(sequence, lambda event, dx=dx * step, dy=dy * step: self._onArrowKey(event, dx, dy))
+
+    def _onArrowKey(self, event, dx, dy):
+        """An arrow key (NODEMOVE159): move the selected node by (dx, dy) native px. Only `pos` changes: the type, the flags
+        and the node's place in the rotation order stay. It does nothing with no node selected (a rope selected, or nothing),
+        before the minimap canvas exists, or when the key was typed in a number box (the Spinbox's own binding ran first:
+        Left and Right move its cursor, Up and Down change its value, and a typed value must not be hijacked, as for Delete).
+        A press that would put a coordinate off the minimap (outside 0..size-1) does nothing; a node that is already off it
+        (a map file can hold one, and Save warns) may still be moved toward the minimap. A move into a rope's keep-out is
+        allowed: `_renderNodes` draws the red ring and `_validateForSave` blocks Save until the node is moved out (Hong, QB241).
+        The window's binding does not `break`, and nothing else binds the arrow keys in the editor."""
+        if isinstance(getattr(event, "widget", None), TEXT_BOX_WIDGETS):
+            return
+        sid = self.state.selected_id
+        if sid is None or sid not in self.state.nodes or self.minimap_canvas_width is None or self.minimap_canvas_height is None:
+            return
+        node = self.state.nodes[sid]
+        x, y = node.pos
+        new_x, new_y = x + dx, y + dy
+        native_w = self.minimap_canvas_width // RENDER_SCALE
+        native_h = self.minimap_canvas_height // RENDER_SCALE
+        for old, new, size in ((x, new_x, native_w), (y, new_y, native_h)):
+            if new == old:
+                continue  # this axis does not move: an off-map coordinate on it must not stop the other one
+            off = max(-new, new - (size - 1), 0)  # px beyond the range 0..size-1
+            off_before = max(-old, old - (size - 1), 0)
+            if off > 0 and off >= off_before:
+                return
+        node.pos = (new_x, new_y)
+        self._recomputeDirty()
+        self._refreshInspector()  # the "pos:" label
+        self._refreshRotation()   # a blue node's row shows its position
+        self._renderNodes()       # dot, selected ring, keep-out ring, edge preview, bands and orphan marks
+
     # -- the Ropes panel (H92, plan Task 3b). Every change to `state.ropes` or `state.selected_rope` below ends with the
     # contract's one rule: `_recomputeDirty()`, then `_renderNodes()`. Status texts go through `_setStatus` only.
 
@@ -641,7 +688,7 @@ class MapEditor:
         """The <Delete> key (Hong, QB235): with a rope selected it deletes that rope, as the panel's "Delete rope" does;
         otherwise `_deleteSelected` does what it always did. The binding is on the window, so a Delete typed in a number
         box (an Entry or Spinbox, which edits its own text first) reaches it too: it does nothing then (R-I2)."""
-        if isinstance(getattr(event, "widget", None), (tk.Entry, tk.Spinbox, ttk.Entry)):
+        if isinstance(getattr(event, "widget", None), TEXT_BOX_WIDGETS):
             return
         if self.state.selected_rope is not None:
             self._deleteSelectedRope()
