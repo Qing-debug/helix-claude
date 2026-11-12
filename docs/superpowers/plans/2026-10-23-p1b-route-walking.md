@@ -1062,7 +1062,7 @@ class SimReport:
     laps_requested: int; laps_completed: int; legs: int; legs_reached: int
     stalls: int; timeouts: int; link_down: int
     known_cases: dict[str, tuple[int, int]]    # "(x1, y1)->(x2, y2)" -> (reached, attempted), laps >= 1 only
-    single_error_legs: int; single_error_within_3: int
+    single_error_legs: int; single_error_within_bound: int
     multi_error_legs: int; multi_error_within_bound: int     # extra <= 3 x (number of errors)
     moves: int; no_ops: int; drops: int; teleport_downs: int
     sim_seconds: float; mean_lap_s: float
@@ -1091,7 +1091,7 @@ def main(argv: list[str] | None = None) -> int
   `world.effects`), replay the same leg in a fresh noise-off world from the leg's actual start position (`world.pos` when the leg began) (same terrain
   and the same `RouteGraph` the run used, including any node offsets; a fresh `TimingModel` and planner rng seeded
   from the leg's number) and count its moves (nominal);
-  `extra = moves − nominal`; `single_error_within_3` counts `extra ≤ 3`. A leg with k ≥ 2 errors is replayed the
+  `extra = moves − nominal`; `single_error_within_bound` counts `extra ≤ 3` (since the rope rule's option B, 2026-11-12: `extra ≤ 3` plus the order's moves for a no-op that starts the rope order). A leg with k ≥ 2 errors is replayed the
   same way and counts in `multi_error_legs`, and in `multi_error_within_bound` when `extra ≤ 3·k` (each injected
   error is allowed its own 3 extra moves).
 - [ ] **`judge`** returns these checks, in order: `laps` (`laps_completed == laps_requested` and
