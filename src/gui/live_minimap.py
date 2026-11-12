@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from PIL import Image, ImageTk
 from returns.pipeline import is_successful
 
+from src.gui.minimap_lost import LOST_TEXT, read_minimap
 from src.controller.map_csv import read_editor_nodes
 from src.controller.map_format import BLUE_NODE
 from src.route.character import CharacterLocator
@@ -95,11 +96,14 @@ class LiveMinimap:
 
     def _draw(self) -> None:
         shared = self._gui.sharedInfo
-        frame = None
-        if shared is not None:
-            with shared.minimap_frame_lock:  # the reference only: no Tk call or match while the lock is held
-                frame = shared.minimap_frame
+        frame, lost = (None, False) if shared is None else read_minimap(shared)  # the reference only: no Tk call or match under the lock
         canvas = self.canvas
+        if frame is not None and lost:  # the capture lost the minimap: the message in place of its frozen picture (VIS162-FIX)
+            w, h = int(canvas.cget("width")), int(canvas.cget("height"))
+            canvas.delete("all")
+            canvas.create_text(w // 2, h // 2, text=LOST_TEXT, fill=LABEL_FG, tags="lost")
+            self._photo = None
+            return
         if frame is None:
             canvas.delete("all")
             canvas.configure(width=NOT_FOUND_PX[0], height=NOT_FOUND_PX[1])

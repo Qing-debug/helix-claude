@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 import src.vision.vision_helper_lib as vision
+import src.vision.minimap_follow as follow
 import time
 from collections import namedtuple
 # Constants
@@ -39,6 +40,7 @@ def capture_and_process_minimap(sharedInfo):
         minimap_border_masks[corner] = cv2.imread(str(minimap_paths[corner]["mask"]), cv2.IMREAD_GRAYSCALE)
 
     print("Beginning minimap capture process...")
+    tracker = follow.LostTracker(sharedInfo)
     while True:
         entire_monitor_frame = vision.cameraGrab(camera)
         screen_height, screen_width = entire_monitor_frame.shape[:2]
@@ -57,18 +59,24 @@ def capture_and_process_minimap(sharedInfo):
             matched_template_loc_and_conf_score[corner] = MatchedTemplateInfo(x = x, y = y, conf_score=max_val)
 
         #retry from beginning if computed template location for minimap borders is not valid (could be due to invalid minimap image)
-        if not vision.isMatchedTemplateLocValid(matched_template_loc_and_conf_score, corners, MINIMAP_TEMPLATE_MATCH_CONFIDENCE_THRESHOLD):
-            print("Minimap border template matching failed or returned invalid results. Retrying minimap detection...")
+        if not vision.isMatchedTemplateLocValid(matched_template_loc_and_conf_score, corners, MINIMAP_TEMPLATE_MATCH_CONFIDENCE_THRESHOLD, verbose=False):
+            tracker.search_failed()  # one console line and the lost flag, not a line per failed search; the last frame stays in sharedInfo (VIS162-FIX)
             continue
 
         minimap_border_locations = vision.findInGameMinimapBorder(matched_template_loc_and_conf_score, minimap_border_templates, corners)
         top_left, bottom_right = minimap_border_locations["left_top"], minimap_border_locations["right_bot"]
-        minimap_region, minimap_valid, minimap_frame_counter = (*top_left, *bottom_right), True, 0
+        lock = follow.make_lock(minimap_gray, matched_template_loc_and_conf_score, minimap_border_templates,
+                                minimap_border_masks, corners, (*top_left, *bottom_right))
+        minimap_valid, minimap_frame_counter = True, 0
 
         while minimap_valid and minimap_frame_counter < MINIMAP_POSITION_RECALC_INTERVAL:
-            if not vision.isProposedMinimapRegionValid(minimap_region, screen_width, screen_height):
+            if not vision.isProposedMinimapRegionValid(lock.box, screen_width, screen_height):
                 break
-            minimap_frame = vision.cameraGrab(camera, minimap_region)
+            box_frame = vision.cameraGrab(camera, lock.box)  # the minimap and its four corner templates (VIS162-FIX)
+            if not follow.still_there(lock, cv2.cvtColor(box_frame, cv2.COLOR_BGR2GRAY)):
+                break  # moved, covered or gone: publish nothing from this grab and search the whole screen at once
+            crop_x1, crop_y1, crop_x2, crop_y2 = lock.crop
+            minimap_frame = box_frame[crop_y1:crop_y2, crop_x1:crop_x2]
 
             if vision.isMinimapBlack(minimap_frame):
                 print("Minimap frame is detected to be black. Retrying minimap detection...")
@@ -76,7 +84,6 @@ def capture_and_process_minimap(sharedInfo):
                 time.sleep(MINIMAP_DETECTION_RETRY_DELAY_S)
                 break
 
-            with sharedInfo.minimap_frame_lock:
-                sharedInfo.minimap_frame = cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB)
+            tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB))  # the one writer of minimap_frame and minimap_lost, under the lock
             minimap_frame_counter += 1
             time.sleep(THREAD_SLEEP_DURATION_S)  # floor between frames: time for other threads; cameraGrab itself waits in Windows for a new image (H77)
