@@ -20,7 +20,9 @@ EDGE_ALIGNMENT_TOLERANCE_PX = 6  # corners may differ by their template-size del
 #checks the confidence rating for each matched template loc, ensures left/right and top/bottom ordering, and that the
 #four corners actually form a coherent rectangle (opposite edges aligned) rather than just being correctly ordered
 def isMatchedTemplateLocValid(matched_templates: dict, corners: list[str], template_min_conf_score: float = 0.95,
-                              edge_alignment_tolerance_px: int = EDGE_ALIGNMENT_TOLERANCE_PX) -> bool:
+                              edge_alignment_tolerance_px: int = EDGE_ALIGNMENT_TOLERANCE_PX, verbose: bool = True) -> bool:
+    # verbose=False: the capture loop searches again at once after a failure, so a reject must not print per search (VIS162-FIX)
+    say = print if verbose else (lambda _text: None)
     for corner in corners:
         matched_template = matched_templates[corner]
         if matched_template.conf_score < template_min_conf_score:
@@ -32,20 +34,20 @@ def isMatchedTemplateLocValid(matched_templates: dict, corners: list[str], templ
                                                                                     matched_templates[right_bot],
                                                                              matched_templates[left_bot])
     if left_top_template.x >= right_top_template.x or left_bot_template.x >= right_bot_template.x:
-        print("Template matched locations are invalid: left-most x coord >= right-most x coord")
+        say("Template matched locations are invalid: left-most x coord >= right-most x coord")
         return False
     if left_top_template.y >= left_bot_template.y or right_top_template.y >= right_bot_template.y:
-        print("Template matched locations are invalid: top-most y coord >= bottom-most y coord")
+        say("Template matched locations are invalid: top-most y coord >= bottom-most y coord")
         return False
     # rectangle consistency: ordering alone allows skewed quads (e.g. a slanted top edge). Require opposite edges to
     # actually align within tolerance so an incoherent set of high-confidence matches is rejected, not just used.
     if (abs(left_top_template.y - right_top_template.y) > edge_alignment_tolerance_px or
             abs(left_bot_template.y - right_bot_template.y) > edge_alignment_tolerance_px):
-        print("Template matched locations are invalid: top/bottom corners are not horizontally aligned")
+        say("Template matched locations are invalid: top/bottom corners are not horizontally aligned")
         return False
     if (abs(left_top_template.x - left_bot_template.x) > edge_alignment_tolerance_px or
             abs(right_top_template.x - right_bot_template.x) > edge_alignment_tolerance_px):
-        print("Template matched locations are invalid: left/right corners are not vertically aligned")
+        say("Template matched locations are invalid: left/right corners are not vertically aligned")
         return False
     return True
 
