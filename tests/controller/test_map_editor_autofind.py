@@ -11,6 +11,7 @@ display) with `after` recorded, and share the fixture and helpers of `test_map_e
 have the automatic find off unless a test asks for it with `make(frame, auto_find=True)`.
 """
 import inspect
+import json
 from pathlib import Path
 
 import numpy as np
@@ -432,3 +433,66 @@ def test_a_found_rope_refuses_a_click_near_its_end_on_an_untitled_map(make_edito
 
     assert editor.state.nodes == {}
     assert status(editor) == ropes.not_placed(101, 43, 107, 100, 112)
+
+
+# -- a rope file that cannot be read: no find, so the question on Save still comes first (AUTOFIND163 I1) ---------------
+
+def damaged_rope_file_with_a_hand_made_rope(tmp_path):
+    """A rope file from a newer Helix (version 99) that holds a rope Hong marked by hand: x 80, which the finder never sees."""
+    csv_path = write_map(tmp_path / "m.csv")
+    payload = json.dumps({"format": "helix-ropes", "version": 99, "ropes": [{"x": 80, "top_y": 30, "bottom_y": 50}]}).encode()
+    rope_file_for(csv_path).write_bytes(payload)
+    return csv_path, payload
+
+
+def test_a_load_whose_rope_file_cannot_be_read_runs_no_find_and_save_still_asks(make_editor, tmp_path):
+    csv_path, payload = damaged_rope_file_with_a_hand_made_rope(tmp_path)
+    rig = make_editor(rope_frame(), auto_find=True)
+    editor = rig.editor
+    run_scan(rig)  # the open-time find, on the untitled map
+
+    load(rig, csv_path)
+    assert rig.dialogs.errors[-1][0] == "Rope file not loaded"
+    run_scan(rig)  # nothing may be pending: a find here would fill state.ropes and Save would not ask
+    assert editor.state.ropes == [] and pending_ticks(rig) == []
+
+    rig.dialogs.yes_answer = False  # No: leave the file
+    editor._save()
+    assert [title for title, _ in rig.dialogs.questions] == ["Rope file damaged"]
+    assert rope_file_for(csv_path).read_bytes() == payload  # the hand-made rope x 80 survives
+
+
+def test_the_notice_says_why_no_find_ran_after_a_load_with_a_damaged_rope_file(make_editor, tmp_path):
+    csv_path, _ = damaged_rope_file_with_a_hand_made_rope(tmp_path)
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+
+    load(rig, csv_path)
+
+    assert notice_shown(rig.editor)
+    assert notice(rig.editor) == map_editor.ROPE_SKIP_DAMAGED_TEXT
+    assert "rope file could not be read" in notice(rig.editor) and "Find ropes" in notice(rig.editor)
+
+
+def test_the_find_ropes_button_still_works_after_a_damaged_rope_file(make_editor, tmp_path):
+    csv_path, _ = damaged_rope_file_with_a_hand_made_rope(tmp_path)
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, csv_path)
+
+    rig.editor._findRopes()  # his own click: he has seen the box
+    run_scan(rig)
+
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+def test_a_damaged_rope_file_loaded_before_the_canvas_exists_gets_no_find_when_the_canvas_is_built(make_editor, tmp_path):
+    csv_path, _ = damaged_rope_file_with_a_hand_made_rope(tmp_path)
+    rig = make_editor(None, auto_find=True)
+    load(rig, csv_path)
+
+    rig.editor.sharedInfo.minimap_frame = rope_frame()
+    waits = [item for item in rig.scheduled if item[1] == rig.editor._waitForMinimapAndBuildCanvas]
+    waits[0][1](*waits[0][2])  # the canvas is built: the one find per open is due, but not for this map
+
+    assert pending_ticks(rig) == [] and notice(rig.editor) == map_editor.ROPE_SKIP_DAMAGED_TEXT

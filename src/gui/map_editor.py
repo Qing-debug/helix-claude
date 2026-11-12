@@ -86,6 +86,9 @@ ROPE_BOX_LABELS = {"x": "x", "top_y": "top y", "bottom_y": "bottom y"}
 ROPE_FINDING_NOTICE = "Finding ropes on the minimap (3 seconds)..."
 ROPE_HINT_TEXT = ("A character standing still on a rope can hide it from the find. Move the character, then press "
                   "Find ropes if a rope seems missing.")
+# Shown instead of a find when the editor must not run one for the map it just loaded (AUTOFIND163).
+ROPE_SKIP_DAMAGED_TEXT = ("No automatic find after this load: the map's rope file could not be read, and a find would let "
+                          "Save replace that file without asking first. Press Find ropes to look anyway.")
 ROPE_NOTICE_BG = '#fff2b3'     # pale yellow, so it reads as a notice and not as a second status line
 ROPE_NOTICE_FG = '#5c2a00'
 
@@ -140,6 +143,13 @@ class MapEditorState:
     add_rope_armed: bool = False
 
 
+@dataclass(frozen=True)
+class LoadedMap:
+    """What the last successful load told the editor about the map, for deciding whether the editor's own find may run
+    for it (`_ropeFindSkipReason`)."""
+    rope_file_failed: bool   # the map's rope file existed but could not be read (the load opened the nodes with no ropes)
+
+
 class MapEditor:
     def __init__(self, parent_tk, controller, sharedInfo, *, auto_find_ropes: bool = True):
         """
@@ -153,6 +163,7 @@ class MapEditor:
         self.controller = controller
         self.sharedInfo = sharedInfo
         self._auto_find_ropes = auto_find_ropes
+        self._loaded_map: Optional[LoadedMap] = None  # None until a load goes ahead
         self.state = MapEditorState()
 
         # Saved baseline for state-comparison dirty tracking. Deep-copied on save/load so
@@ -888,9 +899,25 @@ class MapEditor:
         """The find the editor starts by itself (AUTOFIND162): when its canvas is built and after every successful
         load. Same collection as the button, same add-only rule (`_finishRopeScan`). With no canvas yet it does nothing
         and says nothing: the canvas's own build ends in this call. Off when the editor was made with
-        `auto_find_ropes=False`."""
-        if self._auto_find_ropes and self.minimap_canvas is not None:
-            self._findRopes(auto=True)
+        `auto_find_ropes=False`. When the loaded map is one the find must not run for (`_ropeFindSkipReason`), the
+        notice says why and no collection starts; the button still works."""
+        if not self._auto_find_ropes or self.minimap_canvas is None:
+            return
+        reason = self._ropeFindSkipReason()
+        if reason:
+            self._setRopeNotice(reason)
+            return
+        self._findRopes(auto=True)
+
+    def _ropeFindSkipReason(self) -> str:
+        """The notice text for why the editor's own find must not run for the map loaded now, or "" when it may. It
+        reads what the load stored, so it also holds when the load came before the canvas and the canvas's build asks.
+        A map whose rope file could not be read: ropes found now would fill `state.ropes`, and the Save after that
+        would replace the damaged file without asking Hong's question first (AUTOFIND163 I1, QB236)."""
+        loaded = self._loaded_map
+        if loaded is not None and loaded.rope_file_failed:
+            return ROPE_SKIP_DAMAGED_TEXT
+        return ""
 
     def _setRopeNotice(self, text: str) -> None:
         """Write the rope notice under the status line; no text takes the label off the window."""
@@ -1310,6 +1337,7 @@ class MapEditor:
         self.state.add_rope_armed = False
         self.state.next_local_id = (max(self.state.nodes) + 1) if self.state.nodes else 1
         self.state.current_file = path
+        self._loaded_map = LoadedMap(rope_file_failed=not is_successful(rope_result))
         if is_successful(rope_result):
             rope_file = rope_result.unwrap()
             self.state.ropes = list(rope_file.ropes)
