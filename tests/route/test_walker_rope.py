@@ -35,7 +35,7 @@ from test_walker_standing import (
     steps,
 )
 
-from src.controller.rope_file import read_ropes, rope_file_for
+from src.controller.rope_file import ON_ROPE_DX, RopeMark, read_ropes, rope_file_for
 from src.input.link import InputError
 from src.route import walker as walker_module
 from src.route.leg_log import JsonlLegLog, LegOutcome, MemorySink
@@ -515,3 +515,67 @@ def test_a_move_that_was_not_sent_is_not_a_no_op(ff2, error):
     assert record.moves[0].input == error.name and record.moves[1].input == "ok"
     assert rig.layer.keys[0] == ("teleport", "UP")
     assert [e[7] is None for e in rig.rec.of("planned")][:3] == [False, False, True]   # two planner moves, then the rule's
+
+
+# --- ROPE159-C10B-F1 I1: no platform within reach of the read, so no blink (Hong, verbatim: "if you're in the middle of a
+# really long rope such that no platform is close up or down, and you try to blink up or down, your position wont move.
+# only option is to either climb it until you're in teleport range or you jump off it") ---------------------------------
+#
+# Fossil Foundry 2's two ropes are 18 px long, so every read on them has a platform within the 23 px of Kanna's reach and
+# the order there always starts with blinks. These tests make up a longer rope, with the same x column the read is at, so
+# that the nearest platform end is `up` or `down` px from the read. The rule must then send the jump off alone, the move
+# that gets the character off; a blink would be a key that does nothing (the position does not move).
+
+JUMP_RIGHT = ("jump_off", "RIGHT")
+# (px to the mark's top, px to its bottom, the keys the rope rule sends in order): the gap that counts is the nearer one
+NO_PLATFORM_IN_REACH = [
+    pytest.param(24, 24, [JUMP_RIGHT], id="24-and-24-px"),
+    pytest.param(40, 31, [JUMP_RIGHT], id="40-and-31-px"),
+    pytest.param(23, 40, [UP, UP, JUMP_RIGHT], id="up-exactly-in-reach"),
+    pytest.param(40, 23, [DOWN, DOWN, JUMP_RIGHT], id="down-exactly-in-reach"),
+]
+
+
+def _long_rope(read, up, down):
+    """The zones of one made-up rope at the read's column, `up` px above the read and `down` px below it."""
+    x, y = read
+    zones = RopeZones.build([RopeMark(x=x - ON_ROPE_DX, top_y=y - up, bottom_y=y + down)], MovementParams())
+    assert zones.at(read) == 0
+    return zones
+
+
+@pytest.mark.parametrize("up, down, order", NO_PLATFORM_IN_REACH)
+def test_an_unplaced_rope_read_with_no_platform_in_reach_jumps_off_without_blinking(ff2, up, down, order):
+    """(a) The read is on no platform line (the character hangs on the rope): the rope rule sends the order as it is
+    sent anywhere, so with no platform within `reach_v` of the read the order is the jump off alone, then `off_map`."""
+    read = (106, 52)   # 9 px under the mid-right platform's row and 9 over the floor's: the map does not place it
+    assert not is_successful(attach(ff2.rg, read)) and ff2.rg.reach_v == 23
+    rig = _rig(ff2, steps((0, Success(read))), ropes=_long_rope(read, up, down), leg_timeout_s=30.0)
+
+    record = _leg(ff2, rig, FLOOR_RIGHT)
+
+    assert record.outcome == LegOutcome.OFF_MAP
+    assert rig.layer.keys == order
+    assert [(kind, direction) for _, kind, direction in _rope_moves(rig)] == order
+    assert rig.lines == [ROPE_LINE.format(x=107, px=106, py=52)]
+
+
+@pytest.mark.parametrize("up, down, order", NO_PLATFORM_IN_REACH)
+def test_a_placed_rope_read_with_no_platform_in_reach_jumps_off_without_blinking(ff2, up, down, order):
+    """(b) The read is one the map places ((70, 24) on the second platform, where the planner's move toward the floor node
+    is a walk, which does nothing on a rope) and the rope crosses it mid-way: after the walk that did nothing the rule sends the order, the jump off
+    alone when no platform is within reach, and then, as the read is placed, the planner's move again and the order again
+    (ROPE158-C10B-p2-D1). No blink is ever sent."""
+    read = (70, 24)
+    _placed(ff2, read, FLOOR_RIGHT)
+    first = next_move(ff2.rg, read, ff2.nodes[FLOOR_RIGHT], np.random.default_rng(0)).unwrap().move
+    assert (first.kind.value, first.direction.name) == ("walk", "RIGHT")
+    rig = _rig(ff2, steps((0, Success(read))), ropes=_long_rope(read, up, down), leg_timeout_s=10.0)
+
+    record = _leg(ff2, rig, FLOOR_RIGHT)
+
+    assert record.outcome == LegOutcome.TIMED_OUT and rig.lines == []
+    cycle = ["walk"] + ["teleport" if k[0] == "teleport" else "jump_off" for k in order]
+    assert _kinds(rig)[:3 * len(cycle)] == cycle * 3
+    assert rig.layer.keys[:2 * len(order)] == order * 2
+    assert [(k, d) for _, k, d in _rope_moves(rig)][:2 * len(order)] == order * 2
