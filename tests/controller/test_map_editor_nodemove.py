@@ -6,8 +6,8 @@ with no node selected or while the keyboard is in a number box.
 
 Like `test_map_editor_ropes.py` (whose fixture and helpers these tests share; there is no conftest.py under tests/), these build
 a real `MapEditor` on a real withdrawn Tk root and are skipped where Tk cannot open a display. A key goes through
-`press` below, which sends the real key event when Tk's focus allows it and otherwise runs the window's handler by hand, as
-`press_delete` does for the Delete key.
+`press` below, which sends the real key event when Tk's focus allows it and otherwise runs the window's own bound script for the
+key (`fire_bound`), so a wrong binding in `_bindArrowKeys` fails here.
 """
 import copy
 import tkinter as tk
@@ -34,14 +34,25 @@ STEPS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
 KEYS = tuple(STEPS)
 
 
+def fire_bound(window, sequence, widget):
+    """Run the window's own binding for `sequence` as Tk runs it for a key event whose widget is `widget`: the script that
+    `window.bind(sequence)` returns (it calls the lambda `_bindArrowKeys` registered), with the %-fields of a KeyPress. The
+    handler reads only `event.widget` (from %W) and the key's binding, so the step it moves by is whatever the binding says."""
+    script = str(window.bind(sequence))
+    command = script.split("[", 1)[1].split(" %#", 1)[0]  # the Tcl name of the registered function
+    keysym = sequence.strip("<>").split("-")[-1]
+    fields = ["1", "0", "1", "0", "0", "0", "0", "0", "0", "0", "", "0", keysym, "0", str(widget), "2", "0", "0", "0"]
+    window.tk.call(command, *fields)  # %#, %b, %f, %h, %k, %s, %t, %w, %x, %y, %A, %E, %K, %N, %W, %T, %X, %Y, %D
+
+
 def press(editor, key, shift=False, widget=None):
     """An arrow key (Shift+arrow when `shift`) typed with the keyboard in `widget` (by default the map canvas, which a click on
     the map gives the keyboard), through the widget's own bindings and then the window's.
 
     Never `focus_force` (it asks Windows for the foreground; see `press_delete` in test_map_editor_ropes.py). When Tk's focus is
     the widget after `focus_set`, send the real key event. Otherwise (inside one pytest process only the first Tk window gets
-    the keyboard from Windows) check that the window has the binding and runs after the widget's own and its class's, and call
-    the window's handler by hand with the widget as `event.widget`. Returns "key" or "call"."""
+    the keyboard from Windows) check that the window has the binding and runs after the widget's own and its class's, and run
+    the window's bound script for the key (`fire_bound`) with the widget as `event.widget`. Returns "key" or "call"."""
     window = editor.window
     window.update()
     widget = widget if widget is not None else editor.minimap_canvas
@@ -54,9 +65,7 @@ def press(editor, key, shift=False, widget=None):
     assert window.bind(sequence)
     tags = list(widget.bindtags())
     assert tags.index(widget.winfo_class()) < tags.index(str(window))
-    step = 5 if shift else 1
-    dx, dy = STEPS[key]
-    editor._onArrowKey(SimpleNamespace(widget=widget), dx * step, dy * step)
+    fire_bound(window, sequence, widget)
     return "call"
 
 
