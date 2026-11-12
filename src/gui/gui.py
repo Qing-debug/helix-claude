@@ -8,6 +8,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from returns.pipeline import is_successful
 import tkinter.ttk as ttk
+from src.gui.minimap_lost import clear_lost, read_minimap, show_lost
 from src.controller.node import  CharacterNode
 from src.controller.controller import BuildOutcome
 from src.classes.classes import CharacterClass
@@ -519,12 +520,15 @@ class MapleGUI:
                               and not self.isSetupTabShown())
             # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
             # The vision thread stores a new array for every frame (src/vision/vision.py:80), so the array read here is not mutated.
-            with self.sharedInfo.minimap_frame_lock:
-                frame = self.sharedInfo.minimap_frame
+            frame, lost = read_minimap(self.sharedInfo)
             if frame is not None and not picture_unseen:
                 canvas = self.minimap_canvas
                 if canvas is None:
                     canvas = self._createMinimapCanvas(frame)
+                if lost:  # the capture lost the minimap: say so in place of the frozen picture (VIS162-FIX)
+                    show_lost(canvas, self.minimap_canvas_width, self.minimap_canvas_height)
+                    return  # the finally below still schedules the next pass
+                clear_lost(canvas)
 
                 # Image conversion pipeline: numpy array → PIL Image → Tkinter PhotoImage
                 pil_minimap = Image.fromarray(frame)

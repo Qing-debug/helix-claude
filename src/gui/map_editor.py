@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image, ImageTk
+from src.gui.minimap_lost import clear_lost, show_lost
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
@@ -1541,7 +1542,8 @@ class MapEditor:
             return
         with self.sharedInfo.minimap_frame_lock:
             frame = self.sharedInfo.minimap_frame
-            if frame is not None:
+            lost = bool(getattr(self.sharedInfo, "minimap_lost", False))
+            if frame is not None and not lost:
                 pil_minimap = Image.fromarray(frame)
                 if RENDER_SCALE != 1:
                     pil_minimap = pil_minimap.resize(
@@ -1558,4 +1560,8 @@ class MapEditor:
                     self.minimap_canvas.itemconfig(
                         self.minimap_canvas_bg_img_id, image=minimap_img
                     )
+        if frame is not None and lost:  # the capture lost the minimap: the message over the frozen picture (VIS162-FIX)
+            show_lost(self.minimap_canvas, self.minimap_canvas_width, self.minimap_canvas_height)
+        else:
+            clear_lost(self.minimap_canvas)
         self.window.after(10, self._updateCanvas)
