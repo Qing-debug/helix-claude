@@ -31,12 +31,14 @@ Where the plan is silent:
   (`locate.attach_standing`) and the walker plans from that point; with no line that close it logs one line and ends
   the leg `OFF_MAP` (the run ends too, as for `STOPPED`). A character the strict rules place (`locate.attach`) never
   starts the timer, whether or not the planner finds a path, and every move sent restarts it.
-- The rope rule (rope fix, H88, H93): a read that neither the planner nor `locate.attach` places, inside a marked rope's
-  zone (`RopeZones.at`, one dict lookup, asked only for such a read), held `rope_still_s` gets `planner.rope_move`'s
-  moves in order: blinks to the nearer platform in reach, then one jump off; a move sent restarts the 0.1 s hold. With
-  the order used up the leg ends `OFF_MAP` with one line. A rope move is not progress (`best` is unchanged) and never
-  counts toward a stall by itself; its order restarts when the read is placed by `next_move` or `attach`, or is on
-  another rope. A read outside every zone follows the still rule above, unchanged.
+- The rope rule (rope fix, H88, H93, C10 option B): a read the map cannot place (neither `next_move` nor
+  `locate.attach` places it), or a placed read that the move sent from that very read left unchanged (a no-op), inside a
+  marked rope's zone (`RopeZones.at`, one dict lookup, asked for those reads only), held `rope_still_s` gets
+  `planner.rope_move`'s moves in order: blinks to the nearer platform in reach, then one jump off; a move sent restarts
+  the 0.1 s hold. With the order used up the leg ends `OFF_MAP` with one line. A rope move is not progress (`best` is
+  unchanged) and never counts toward a stall by itself; its order restarts when a placed read has moved since the move
+  sent from it, when `attach` places the read, or when the read is on another rope. A read outside every zone follows
+  the still rule above, unchanged.
 - The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
   thread, and after its first exception it is reported once through `log` and not called again this run. With no
   observer nothing else happens: each call site is one `is not None` test.
@@ -251,7 +253,7 @@ class RouteWalker:
                     rope_at, rope_tries = None, 0
                     clock.sleep(params.poll_s)
                     continue
-                rope = self._ropes.at(pos)  # only now: a read the map places never asks the zones
+                rope = self._ropes.at(pos)  # a read the map cannot place always asks the zones (a placed read asks only after a no-op, above)
             if rope is not None:  # on a marked rope (H88), or a placed read there that a move left unchanged (C10)
                 if still.see(pos, read_ns) < params.rope_still_s:
                     clock.sleep(params.poll_s)
