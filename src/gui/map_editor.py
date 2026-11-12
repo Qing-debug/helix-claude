@@ -93,20 +93,33 @@ ROPE_NOTICE_BG = '#fff2b3'     # pale yellow, so it reads as a notice and not as
 ROPE_NOTICE_FG = '#5c2a00'
 
 
-def ropeFindNotice(found: int, added: List[RopeMark]) -> str:
-    """The notice after a find that ended: `found` ropes seen on the minimap, `added` of them new to the map. It says what
-    was added, what that means for placing nodes and for Save, that a wrong rope can be deleted and that nothing is written
-    before Save; the hint about a character standing still on a rope is always the last line."""
+def sameRope(a: RopeMark, b: RopeMark) -> bool:
+    """One rope seen twice, by the finder's own rule (`rope_finder._same_rope`): columns within SAME_ROPE_PX whose rows
+    overlap (ropes stacked in one column only touch at the platform between them, so they are two). The rope file's
+    remembered deletions are matched with it (AUTOFIND163); the add-only rule against the marks is still the x test alone."""
+    return abs(a.x - b.x) <= SAME_ROPE_PX and a.top_y < b.bottom_y and b.top_y < a.bottom_y
+
+
+def ropeFindNotice(found: int, added: List[RopeMark], skipped: int = 0) -> str:
+    """The notice after a find that ended: `found` ropes seen on the minimap, `added` of them new to the map and `skipped`
+    of them left out because the rope file remembers a rope deleted there. It says what was added, what that means for
+    placing nodes and for Save, that a wrong rope can be deleted (and stays deleted once saved) and that nothing is
+    written before Save; the hint about a character standing still on a rope is always the last line."""
     if found == 0:
         result = "No rope found on the minimap."
     elif not added:
-        result = f"Found {found} rope{'' if found == 1 else 's'} on the minimap, all already marked in this map."
+        result = (f"Found {found} rope{'' if found == 1 else 's'} on the minimap, "
+                  + ("all already marked in this map." if skipped == 0 else "none added."))
     else:
         where = ", ".join(f"x {mark.x}" for mark in added)
         result = (f"Added {len(added)} rope{'' if len(added) == 1 else 's'} found on the minimap ({where}). "
                   f"Nodes within {KEEP_OUT_X_PX} px sideways and {KEEP_OUT_Y_PX} px of where a rope meets a platform are "
                   "refused and ringed red, and Save is blocked until they are moved. A wrong rope can be deleted: select "
-                  "it and press Delete. Ropes are written only when you press Save.")
+                  "it and press Delete, and it stays deleted once you press Save. Ropes are written only when you press "
+                  "Save.")
+    if skipped:
+        result += (f" Skipped {skipped} rope{'' if skipped == 1 else 's'} found where you deleted one before: a deleted "
+                   "rope stays deleted. To bring one back, mark it with Add rope.")
     return f"{result}\n{ROPE_HINT_TEXT}"
 
 # Arrow keys move the selected node (NODEMOVE159; Hong, 2026-11-12, QB240, QB241).
@@ -133,6 +146,9 @@ class MapEditorState:
     ropes: List[RopeMark] = field(default_factory=list)
     selected_rope: Optional[int] = None                      # index into `ropes`, drawn thicker
     rope_extra: Dict[str, object] = field(default_factory=dict)  # the loaded rope file's unknown keys; a save keeps them
+    # The places the rope file remembers a rope was deleted (`deleted_ropes`, AUTOFIND163), as of the last load or save. The
+    # find leaves them empty. What a save writes is `MapEditor._effectiveDeleted()`, which adds the deletions made since.
+    deleted_ropes: List[RopeMark] = field(default_factory=list)
     # A rope file was read at load without error, or this editor has written one since. A map with no rope file beside
     # it leaves this false, so saving a map without ropes writes no rope file.
     rope_file_read: bool = False
@@ -173,6 +189,10 @@ class MapEditor:
         self._saved_nodes: Dict[int, EditorNode] = {}
         self._saved_rotation: List[int] = []
         self._saved_ropes: List[RopeMark] = []
+        # The ropes the editor has seen: those of the loaded or saved file, and those its finds added since. One of them
+        # that is no longer on the map was deleted or moved away, and the next save remembers its place (`_effectiveDeleted`).
+        # A rope that was only ever marked by hand since the last save is not in it, so removing that remembers nothing.
+        self._known_ropes: List[RopeMark] = []
 
         # Find ropes (Task 3b): the frames collected so far, None while no collection runs; the ticks done.
         # The generation numbers the collections: each `after` tick carries its collection's number and stops when it is
@@ -961,8 +981,18 @@ class MapEditor:
             return
         found = find_ropes(median.unwrap())
         marked = list(self.state.ropes)  # a found rope is skipped only when an earlier mark is that close, not one found now
-        added = [rope for rope in found if all(abs(rope.x - mark.x) > SAME_ROPE_PX for mark in marked)]
+        deleted = self._effectiveDeleted()  # where a rope was deleted: in the rope file, or in this session
+        added: List[RopeMark] = []
+        skipped = 0
+        for rope in found:
+            if any(abs(rope.x - mark.x) <= SAME_ROPE_PX for mark in marked):
+                continue  # already marked
+            if any(sameRope(rope, gone) for gone in deleted):
+                skipped += 1  # a rope he deleted stays deleted
+                continue
+            added.append(rope)
         self.state.ropes.extend(added)
+        self._known_ropes.extend(added)
         if auto and self.state.current_file is None and not self.state.nodes:
             self._saved_ropes = self._saved_ropes + added  # an edit of his own to the ropes still differs from this
         if len(found) == 0:
@@ -970,7 +1000,7 @@ class MapEditor:
         else:
             new = "" if len(added) == len(found) else (f", {len(added)} new" if added else ", none new")
             self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s") + new)
-        self._setRopeNotice(ropeFindNotice(len(found), added))
+        self._setRopeNotice(ropeFindNotice(len(found), added, skipped))
         self._recomputeDirty()
         self._renderNodes()
 
@@ -986,9 +1016,25 @@ class MapEditor:
             self.state.nodes != self._saved_nodes
             or self.state.rotation_order != self._saved_rotation
             or self.state.ropes != self._saved_ropes
+            or set(self._effectiveDeleted()) != set(self.state.deleted_ropes)
         )
         if self.state.dirty != was_dirty:
             self._refreshTitle()
+
+    def _effectiveDeleted(self) -> List[RopeMark]:
+        """The places the rope file should remember as deleted (AUTOFIND163, Hong's rope163-1): the file's own, minus those
+        a mark on the map now covers (a rope marked again there clears the deletion), plus every rope the editor has seen
+        (`_known_ropes`) that no mark covers any more. It is worked out from the map as it is, not from a log of edits,
+        so a rope moved a pixel at a time is remembered where it started, a rope moved away and back is remembered
+        nowhere, and a rope marked by hand and deleted again before any save leaves nothing. A mark covers a place when it
+        is the same rope (`sameRope`), so a rope moved 2 px or less needs no memory: the find's add-only rule already
+        treats the found rope as the one he moved. Save writes this and the baseline holds it (`state.deleted_ropes`)."""
+        marks = self.state.ropes
+        result = [gone for gone in self.state.deleted_ropes if not any(sameRope(gone, mark) for mark in marks)]
+        for seen in self._known_ropes:
+            if not any(sameRope(seen, mark) for mark in marks) and not any(sameRope(seen, gone) for gone in result):
+                result.append(seen)
+        return result
 
     def _refreshTitle(self):
         """Composes the title bar from dirty marker + current file name (basename only)."""
@@ -1174,9 +1220,11 @@ class MapEditor:
                 parent=self.window,
             )
             return
-        # The CSV is written. A rope file is written when ropes are marked, or when a rope file was read (so ropes
-        # deleted from a good file stay deleted and its unknown keys are kept); a map with neither stays one file.
+        # The CSV is written. A rope file is written when ropes are marked, when a rope file was read (so ropes deleted
+        # from a good file stay deleted and its unknown keys are kept) or when a deletion is to be remembered; a map with
+        # none of these stays one file.
         rope_error = None
+        deleted = tuple(self._effectiveDeleted())  # where a rope was deleted: the file remembers it (AUTOFIND163)
         if rope_file_damaged:
             if remove_rope_file:
                 try:
@@ -1184,9 +1232,9 @@ class MapEditor:
                     self.state.rope_file_read = False
                 except OSError as error:
                     rope_error = f"{rope_path} could not be removed: {error.strerror or error}."
-        elif self.state.ropes or self.state.rope_file_read:
+        elif self.state.ropes or self.state.rope_file_read or deleted:
             rope_result = write_ropes(
-                rope_path, RopeFile(tuple(self.state.ropes), minimap_size, self.state.rope_extra),
+                rope_path, RopeFile(tuple(self.state.ropes), minimap_size, self.state.rope_extra, deleted),
             )
             if is_successful(rope_result):
                 self.state.rope_file_read = True
@@ -1217,6 +1265,8 @@ class MapEditor:
         self._saved_nodes = copy.deepcopy(self.state.nodes)
         self._saved_rotation = list(self.state.rotation_order)
         self._saved_ropes = list(self.state.ropes)  # RopeMark is frozen, so a shallow copy is a snapshot
+        self.state.deleted_ropes = self._effectiveDeleted()  # before `_known_ropes` is reset: it holds what was deleted
+        self._known_ropes = list(self.state.ropes)
         self.state.dirty = False
         self._refreshTitle()
 
@@ -1342,11 +1392,14 @@ class MapEditor:
             rope_file = rope_result.unwrap()
             self.state.ropes = list(rope_file.ropes)
             self.state.rope_extra = dict(rope_file.extra)
+            self.state.deleted_ropes = list(rope_file.deleted)
             self.state.rope_file_read = rope_file_existed  # assigned on every load: no stale flag from the last map
         else:
             self.state.ropes = []
             self.state.rope_extra = {}
+            self.state.deleted_ropes = []
             self.state.rope_file_read = False
+        self._known_ropes = list(self.state.ropes)  # the file's ropes are the ones seen; the old map's are not
         self._snapshotSavedBaseline()
         self._refreshInspector()
         self._refreshRopeBoxes()

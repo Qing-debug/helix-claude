@@ -5,6 +5,8 @@ displayed fom the tget go as opposed to me needing to click find ropes". His fou
 the find adds only ropes not already saved (x within 2 px), saved ropes stay as they are, found ropes mark the editor
 dirty and are written only on Save, and there is one find when the editor opens (and one after each successful load)
 with a hint that a character standing still on a rope can hide it; the Find ropes button stays.
+His later answer rope163-1 ("Remember deleted ropes in the map's rope file, so a rope you delete stays deleted")
+replaced rope161-2's "a deleted rope may come back": see the last section of this file.
 
 Like the other editor tests these build a real `MapEditor` on a real withdrawn Tk root (skipped where Tk cannot open a
 display) with `after` recorded, and share the fixture and helpers of `test_map_editor_ropes.py`. The fixture's editors
@@ -229,28 +231,6 @@ def test_the_find_ropes_button_stays_and_retries_once_the_character_has_moved(ma
     assert editor.state.ropes == [ROPE_46, ROPE_107] and status(editor) == "Found 2 ropes, 1 new"
 
 
-def test_a_deleted_rope_comes_back_on_the_next_open_and_marks_the_map_dirty(make_editor, tmp_path):
-    # Hong accepted this (rope161-2): the rope file keeps no memory of what was deleted.
-    csv_path = map_with_saved_ropes(tmp_path, [ROPE_46, ROPE_107])
-    first = make_editor(rope_frame(), auto_find=True)
-    run_scan(first)
-    load(first, csv_path)
-    run_scan(first)
-    click(first.editor, 107, 52)
-    assert first.editor.state.selected_rope == 1
-    first.editor._deleteSelectedRope()
-    first.editor._save()
-    assert ropes.saved_ropes(csv_path) == (ROPE_46,) and not first.editor.state.dirty
-
-    second = make_editor(rope_frame(), auto_find=True)
-    run_scan(second)
-    load(second, csv_path)
-    assert second.editor.state.ropes == [ROPE_46]
-    run_scan(second)
-
-    assert second.editor.state.ropes == [ROPE_46, ROPE_107] and second.editor.state.dirty
-
-
 # -- an untitled map with no nodes is not marked dirty by the find ----------------------------------------------------
 
 def test_the_open_time_find_does_not_mark_an_untitled_empty_map_dirty(make_editor, monkeypatch):
@@ -322,7 +302,7 @@ def test_the_notice_names_what_was_added_and_what_it_means(make_editor):
     assert text == (
         "Added 2 ropes found on the minimap (x 46, x 107). Nodes within 5 px sideways and 6 px of where a rope meets a "
         "platform are refused and ringed red, and Save is blocked until they are moved. A wrong rope can be deleted: "
-        "select it and press Delete. Ropes are written only when you press Save.\n" + HINT)
+        "select it and press Delete, and it stays deleted once you press Save. Ropes are written only when you press Save.\n" + HINT)
     assert notice_shown(editor)
 
 
@@ -496,3 +476,226 @@ def test_a_damaged_rope_file_loaded_before_the_canvas_exists_gets_no_find_when_t
     waits[0][1](*waits[0][2])  # the canvas is built: the one find per open is due, but not for this map
 
     assert pending_ticks(rig) == [] and notice(rig.editor) == map_editor.ROPE_SKIP_DAMAGED_TEXT
+
+
+# -- a deleted rope stays deleted (AUTOFIND163 I2 and M2; Hong, rope163-1) -----------------------------------------------
+
+def deleted_in_file(csv_path) -> tuple:
+    return read_ropes(rope_file_for(Path(csv_path))).unwrap().deleted
+
+
+def select_and_delete(editor, x, y):
+    click(editor, x, y)
+    assert editor.state.selected_rope is not None
+    editor._deleteSelectedRope()
+
+
+def test_a_deleted_rope_stays_deleted_on_the_next_open_and_load(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_46, ROPE_107])
+    first = make_editor(rope_frame(), auto_find=True)
+    run_scan(first)
+    load(first, csv_path)
+    run_scan(first)
+    select_and_delete(first.editor, 107, 52)
+    assert first.editor.state.dirty  # the deletion is a change to the file, so the title says so until Save
+    first.editor._save()
+    assert ropes.saved_ropes(csv_path) == (ROPE_46,) and deleted_in_file(csv_path) == (ROPE_107,)
+    assert not first.editor.state.dirty
+
+    second = make_editor(rope_frame(), auto_find=True)
+    run_scan(second)
+    load(second, csv_path)
+    run_scan(second)
+
+    editor = second.editor
+    assert editor.state.ropes == [ROPE_46] and rope_lines(editor) == 1
+    assert status(editor) == "Found 2 ropes, none new" and not editor.state.dirty
+    assert "Skipped 1 rope found where you deleted one before" in notice(editor)
+
+
+def test_a_false_rope_the_editor_found_is_dismissed_for_good_by_deleting_it_and_saving(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, None)  # a map with no rope file yet
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, csv_path)
+    run_scan(rig)
+    editor = rig.editor
+    assert editor.state.ropes == [ROPE_46, ROPE_107]
+
+    select_and_delete(editor, 107, 52)
+    assert editor.state.dirty and not rope_file_for(csv_path).exists()  # written only on Save
+    editor._save()
+    assert ropes.saved_ropes(csv_path) == (ROPE_46,) and deleted_in_file(csv_path) == (ROPE_107,)
+
+    again = make_editor(rope_frame(), auto_find=True)
+    run_scan(again)
+    load(again, csv_path)
+    run_scan(again)
+    assert again.editor.state.ropes == [ROPE_46] and not again.editor.state.dirty
+
+
+def test_the_sessions_deletions_count_before_any_save(make_editor, tmp_path):
+    rig = make_editor(rope_frame(), auto_find=True)
+    load(rig, map_with_saved_ropes(tmp_path, None))
+    run_scan(rig)
+    editor = rig.editor
+    select_and_delete(editor, 107, 52)
+
+    editor._findRopes()  # the button, pressed again after the deletion and before any Save
+    run_scan(rig)
+
+    assert editor.state.ropes == [ROPE_46]
+    assert "Skipped 1 rope found where you deleted one before" in notice(editor)
+
+
+def test_a_map_with_only_remembered_deletions_still_gets_a_rope_file(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, None)
+    rig = make_editor(rope_frame(), auto_find=True)
+    load(rig, csv_path)
+    run_scan(rig)
+    select_and_delete(rig.editor, 107, 52)
+    select_and_delete(rig.editor, 46, 38)
+    assert rig.editor.state.ropes == []
+
+    rig.editor._save()
+
+    assert ropes.saved_ropes(csv_path) == () and set(deleted_in_file(csv_path)) == {ROPE_46, ROPE_107}
+
+
+def test_deleting_a_rope_that_was_never_saved_or_found_remembers_nothing(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_46])
+    rig = make_editor()
+    load(rig, csv_path)
+    rig.editor._startAddRope()
+    click(rig.editor, 60, 30)
+    click(rig.editor, 60, 50)
+    assert rig.editor.state.dirty
+    rig.editor._deleteSelectedRope()  # a rope he marked by hand and removed again before any Save
+    assert not rig.editor.state.dirty
+
+    rig.editor._save()
+
+    assert deleted_in_file(csv_path) == ()
+
+
+def test_a_rope_marked_by_hand_where_a_deletion_is_remembered_clears_that_deletion(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [])
+    write_ropes(rope_file_for(csv_path), RopeFile((), (FRAME_W, FRAME_H), {}, deleted=(ROPE_107,)))
+    rig = make_editor(rope_frame(rope_46=False))
+    editor = rig.editor
+    load(rig, csv_path)
+    assert not editor.state.dirty
+
+    editor._startAddRope()
+    click(editor, 108, 43)  # a click or two off: the remembered place is matched within the find's own tolerance
+    click(editor, 108, 61)
+    assert editor.state.dirty  # the file still remembers the deletion, so there is something to save
+    editor._save()
+    assert ropes.saved_ropes(csv_path) == (RopeMark(108, 43, 61),) and deleted_in_file(csv_path) == ()
+
+    editor._findRopes()
+    run_scan(rig)
+    assert editor.state.ropes == [RopeMark(108, 43, 61)] and not editor.state.dirty
+    assert notice(editor).startswith("Found 1 rope on the minimap, all already marked in this map.")
+
+    select_and_delete(editor, 108, 52)  # now a saved rope, so deleting it is remembered again
+    editor._save()
+    assert deleted_in_file(csv_path) == (RopeMark(108, 43, 61),)
+
+
+def test_the_find_ropes_button_leaves_out_remembered_deletions_and_says_how_many(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_46])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_46,), (FRAME_W, FRAME_H), {}, deleted=(ROPE_107,)))
+    rig = make_editor(rope_frame())  # no automatic find: the button alone
+    editor = rig.editor
+    load(rig, csv_path)
+
+    editor._findRopes()
+    run_scan(rig)
+
+    assert editor.state.ropes == [ROPE_46] and not editor.state.dirty
+    assert notice(editor) == ("Found 2 ropes on the minimap, none added. Skipped 1 rope found where you deleted one before: "
+                              "a deleted rope stays deleted. To bring one back, mark it with Add rope.\n" + HINT)
+
+
+def test_a_found_rope_in_the_same_column_but_on_other_rows_is_not_the_deleted_one(make_editor, tmp_path):
+    # the finder keeps ropes stacked in one column apart, so a deletion is matched by column and overlapping rows
+    csv_path = map_with_saved_ropes(tmp_path, [])
+    stacked_above = RopeMark(107, 5, 20)
+    write_ropes(rope_file_for(csv_path), RopeFile((), (FRAME_W, FRAME_H), {}, deleted=(stacked_above,)))
+    rig = make_editor(rope_frame(rope_46=False))
+    load(rig, csv_path)
+
+    rig.editor._findRopes()
+    run_scan(rig)
+
+    assert rig.editor.state.ropes == [ROPE_107]
+
+
+def test_a_file_that_holds_a_rope_and_its_deletion_loads_clean(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [])
+    write_ropes(rope_file_for(csv_path), RopeFile((ROPE_107,), (FRAME_W, FRAME_H), {}, deleted=(ROPE_107,)))
+    rig = make_editor()
+    load(rig, csv_path)
+    assert rig.editor.state.ropes == [ROPE_107] and not rig.editor.state.dirty
+
+
+def test_a_rope_moved_more_than_2_px_does_not_come_back_as_a_second_rope(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_107])
+    first = make_editor()
+    load(first, csv_path)
+    click(first.editor, 107, 52)
+    ropes.type_in_box(first.editor, "x", "111")  # 4 px off the finder's column
+    first.editor._save()
+    moved = RopeMark(111, 43, 61)
+    assert ropes.saved_ropes(csv_path) == (moved,) and deleted_in_file(csv_path) == (ROPE_107,)
+
+    second = make_editor(rope_frame(rope_46=False), auto_find=True)
+    run_scan(second)
+    load(second, csv_path)
+    run_scan(second)
+
+    assert second.editor.state.ropes == [moved] and not second.editor.state.dirty  # no second rope beside his
+
+
+def test_a_rope_moved_a_pixel_at_a_time_remembers_where_it_came_from(make_editor, tmp_path):
+    # the Spinbox's arrows commit each step: 107 -> 111 is four moves, and the place it started from is what counts
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_107])
+    rig = make_editor()
+    load(rig, csv_path)
+    click(rig.editor, 107, 52)
+    for x in (108, 109, 110, 111):
+        ropes.type_in_box(rig.editor, "x", str(x))
+
+    rig.editor._save()
+
+    assert ropes.saved_ropes(csv_path) == (RopeMark(111, 43, 61),) and deleted_in_file(csv_path) == (ROPE_107,)
+
+
+def test_a_move_of_2_px_or_less_remembers_nothing(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_107])
+    first = make_editor()
+    load(first, csv_path)
+    click(first.editor, 107, 52)
+    ropes.type_in_box(first.editor, "x", "109")
+    first.editor._save()
+    assert ropes.saved_ropes(csv_path) == (RopeMark(109, 43, 61),) and deleted_in_file(csv_path) == ()
+
+    second = make_editor(rope_frame(rope_46=False), auto_find=True)
+    run_scan(second)
+    load(second, csv_path)
+    run_scan(second)
+    assert second.editor.state.ropes == [RopeMark(109, 43, 61)] and not second.editor.state.dirty  # the add-only 2 px
+
+
+def test_moving_a_rope_away_and_back_leaves_the_map_clean(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_107])
+    rig = make_editor()
+    load(rig, csv_path)
+    click(rig.editor, 107, 52)
+
+    ropes.type_in_box(rig.editor, "x", "111")
+    assert rig.editor.state.dirty
+    ropes.type_in_box(rig.editor, "x", "107")
+
+    assert rig.editor.state.ropes == [ROPE_107] and not rig.editor.state.dirty

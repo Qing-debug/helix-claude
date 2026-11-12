@@ -614,11 +614,13 @@ def test_find_ropes_adds_the_ropes_in_the_frames(make_editor):
     run_scan(rig)
     assert editor.state.ropes == [ROPE_46, ROPE_107] and rope_lines(editor) == 2
 
-    # a found rope within 2 px of a mark is skipped; one farther away is added
-    set_ropes(editor, [RopeMark(108, 43, 61)])
-    editor._findRopes()
-    run_scan(rig)
-    assert editor.state.ropes == [RopeMark(108, 43, 61), ROPE_46]
+    # a found rope within 2 px of a mark is skipped; one farther away is added (a second editor: `set_ropes` here would
+    # take the first one's found ropes off the map, which counts as deleting them, and a deleted rope is not found again)
+    near = make_editor(rope_frame())
+    set_ropes(near.editor, [RopeMark(108, 43, 61)])
+    near.editor._findRopes()
+    run_scan(near)
+    assert near.editor.state.ropes == [RopeMark(108, 43, 61), ROPE_46]
 
     one = make_editor(rope_frame(rope_46=False))
     one.editor._findRopes()
