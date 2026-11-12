@@ -5,9 +5,9 @@ import (import-linter contract c), which is why the walker's node offset is repe
 Format, version 1: `{"format": "helix-ropes", "version": 1, "minimap_size": [W, H], "ropes": [{"x", "top_y", "bottom_y"}, ...],
 "deleted_ropes": [{"x", "top_y", "bottom_y"}, ...]}`. `deleted_ropes` (AUTOFIND163, Hong's rope163-1) is optional and the
 writer leaves it out when empty: it is the places where a rope was deleted, or moved away from, which the map editor's
-find then leaves empty so a deleted rope stays deleted. Only the editor uses it; the walker and the simulator read
-`ropes` and ignore it, and a file without it (every file written before it existed) reads with none. The version stays 1:
-a Helix that does not know the key keeps it as one of the unknown top-level keys (`RopeFile.extra`)."""
+find then leaves empty so a deleted rope stays deleted. Only the editor uses it; the walker and the simulator use `ropes` alone,
+but a bad `deleted_ropes` fails the whole read (they refuse that file like any damaged one), and a file without it reads with none.
+The version stays 1: a Helix that does not know the key keeps it in the unknown top-level keys (`RopeFile.extra`)."""
 import json
 import os
 from collections.abc import Mapping, Sequence
