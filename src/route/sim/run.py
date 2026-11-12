@@ -83,6 +83,7 @@ from src.input.input_layer import InputLayer
 from src.input.protocol import Key
 from src.input.timing import TimingModel
 from src.route.leg_log import JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink, MemorySink
+from src.route.locate import attach
 from src.route.params import MovementParams, validate
 from src.route.planner import MoveKind, _offered
 from src.route.ropes import RopeZones
@@ -94,7 +95,7 @@ from src.route.walker import RouteWalker, RunSummary, StepObserver, WalkerConfig
 
 _LEG_TIMEOUT_S = 60.0
 _START_RISE_PX = 3            # the world starts on the surface at or below the first node's y minus this
-_EXTRA_PER_ERROR = 3          # each injected error is allowed this many extra moves (a no-op in a rope zone: and the order)
+_EXTRA_PER_ERROR = 3          # each injected error is allowed this many extra moves (a no-op that starts the rope order: and its moves)
 _MIN_RECOVERED_SHARE = 0.99
 _MIN_NO_OP_SHARE = 0.05
 _REPO = Path(__file__).resolve().parents[3]
@@ -122,9 +123,9 @@ class SimReport:
     link_down: int
     known_cases: dict[str, tuple[int, int]]  # "(x1, y1)->(x2, y2)" -> (reached, attempted), laps >= 1 only
     single_error_legs: int
-    single_error_within_3: int
+    single_error_within_bound: int           # extra <= `_extra_allowed`, as for the multi-error legs below
     multi_error_legs: int
-    multi_error_within_bound: int            # extra <= `_extra_allowed` (3 x the errors, a rope zone's no-ops add the order)
+    multi_error_within_bound: int            # extra <= `_extra_allowed` (3 x the errors, a no-op that starts the rope order adds its moves)
     moves: int
     no_ops: int
     drops: int
@@ -254,18 +255,35 @@ def _replay_moves(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain,
     return len(walker.walk_leg(rec.lap, rec.leg, src, dst).moves)
 
 
-def _zone_no_ops(effects: Sequence[MoveEffect], zones: RopeZones, sim_params: SimParams) -> int:
-    """How many of `effects` are a no-op sent from a read inside a rope zone: the walker's rope rule answers each (H93,
-    ROPE158-C10B). The read is the one the walker had, `read_of` the effect's start, the character's place before the move."""
-    return sum(InjectedError.NO_OP in e.injected and zones.at(read_of(e.start, sim_params)) is not None for e in effects)
+def _rope_order_moves(effects: Sequence[MoveEffect], zones: RopeZones, rg: RouteGraph, sim_params: SimParams) -> int:
+    """The most moves the walker's rope order can take after the no-ops in `effects` that start it (H93, ROPE158-C10B,
+    ROPE159-C10B-F1 M1). A no-op starts the order when the read before the move, `read_of` the effect's start, is in a rope
+    zone and the map places it (`attach`): the planner sent the move and the read stayed the same. A read the map does not
+    place is the character on the rope, where the order runs anyway and the no-op was one of its own moves: it starts
+    nothing. The order from a read is `rope_blink_tries` blinks and the jump off when the nearer end of the mark is within
+    `reach_v` of it, the jump off alone when it is not (`planner.rope_move`'s rule; Hong: with no platform close up or down
+    a blink does not move the character). The effect does not say which move it was, so a no-op on a rope move at a placed
+    read counts as a start too, and the first blink that works is not credited: an upper bound."""
+    total = 0
+    for e in effects:
+        if InjectedError.NO_OP not in e.injected:
+            continue
+        read = read_of(e.start, sim_params)
+        zone = zones.at(read)
+        if zone is None or not is_successful(attach(rg, read)):
+            continue
+        mark = zones.mark(zone)
+        gap = min(read[1] - mark.top_y, mark.bottom_y - read[1])
+        total += rg.params.rope_blink_tries + 1 if gap <= rg.reach_v else 1
+    return total
 
 
-def _extra_allowed(errors: int, zone_no_ops: int, blink_tries: int) -> int:
+def _extra_allowed(errors: int, order_moves: int) -> int:
     """The extra moves a leg with `errors` injected errors may take and still count as recovered: `_EXTRA_PER_ERROR` for
-    each, and for each of those errors that is a no-op in a rope zone (`zone_no_ops` of them) the rope order as well,
-    `blink_tries` blinks and the one jump off, so a leg whose one error is such a no-op may take 3 + `blink_tries` + 1
-    (ROPE158-C10B-D1, option B). A no-op outside every zone is held to 3."""
-    return _EXTRA_PER_ERROR * errors + (blink_tries + 1) * zone_no_ops
+    each, and `order_moves` more for the rope order that the no-ops among them start (`_rope_order_moves`; ROPE158-C10B-D1,
+    option B, tightened by ROPE159-C10B-F1 M1). A leg whose one error is a no-op that starts the full order (a platform end
+    in reach) may take 3 + `blink_tries` + 1; with no platform in reach 3 + 1; a no-op that starts none is held to 3."""
+    return _EXTRA_PER_ERROR * errors + order_moves
 
 
 @dataclass(frozen=True)
@@ -286,8 +304,7 @@ def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim
         errors = sum(len(e.injected) for e in effects[first:sink.marks[i]])
         if errors == 0:
             continue
-        allowed = _extra_allowed(errors, _zone_no_ops(effects[first:sink.marks[i]], zones, sim_params),
-                                 rg.params.rope_blink_tries)
+        allowed = _extra_allowed(errors, _rope_order_moves(effects[first:sink.marks[i]], zones, rg, sim_params))
         began = sink.ends[i - 1] if i else start
         nominal = _replay_moves(rg, rotation, terrain, sim_params, rec, i, began, ropes)
         # a leg with no replay counts as a leg with errors that did not recover
@@ -485,7 +502,7 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         link_down=sum(rec.outcome == LegOutcome.LINK_DOWN for rec in legs),
         known_cases=_known_cases(legs, csv_rotation, known_cases),
         single_error_legs=recovery.single,
-        single_error_within_3=recovery.single_within,
+        single_error_within_bound=recovery.single_within,
         multi_error_legs=recovery.multi,
         multi_error_within_bound=recovery.multi_within,
         moves=len(entries),
@@ -525,14 +542,14 @@ def judge(report: SimReport, min_single_error_legs: int = 100) -> list[Check]:
         single_ok = min_single_error_legs == 0
     else:
         single_ok = (r.single_error_legs >= min_single_error_legs
-                     and r.single_error_within_3 / r.single_error_legs >= _MIN_RECOVERED_SHARE)
+                     and r.single_error_within_bound / r.single_error_legs >= _MIN_RECOVERED_SHARE)
     multi_ok = r.multi_error_legs == 0 or r.multi_error_within_bound / r.multi_error_legs >= _MIN_RECOVERED_SHARE
     checks.append(Check(
         "recovery", single_ok and multi_ok,
-        f"{r.single_error_within_3}/{r.single_error_legs} single-error legs within {_EXTRA_PER_ERROR} extra moves "
+        f"{r.single_error_within_bound}/{r.single_error_legs} single-error legs within {_EXTRA_PER_ERROR} extra moves "
         f"(need >= {min_single_error_legs} legs and {_MIN_RECOVERED_SHARE:.0%}); {r.multi_error_within_bound}/"
-        f"{r.multi_error_legs} multi-error legs within {_EXTRA_PER_ERROR} extra moves per error; a no-op in a rope zone "
-        "may also cost the rope order"))
+        f"{r.multi_error_legs} multi-error legs within {_EXTRA_PER_ERROR} extra moves per error; a no-op that starts the "
+        "rope order may also cost the order's moves"))
 
     no_op_share = r.no_ops / r.moves if r.moves else 0.0
     checks.append(Check("noise", r.moves > 0 and no_op_share >= _MIN_NO_OP_SHARE,

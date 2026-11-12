@@ -16,15 +16,17 @@ from returns.pipeline import is_successful
 from test_walker_standing import Rec, _load
 
 from src.classes.classes import Kanna
-from src.controller.rope_file import ON_ROPE_DX, read_ropes, rope_file_for
+from src.controller.rope_file import ON_ROPE_DX, RopeMark, read_ropes, rope_file_for
 from src.input.input_layer import InputLayer
 from src.input.protocol import Key, Step
 from src.input.timing import TimingModel
 from src.route.leg_log import LegOutcome, MemorySink
+from src.route.locate import attach
 from src.route.params import MovementParams
+from src.route.planner import rope_move
 from src.route.ropes import RopeZones
 import src.route.sim.run as sim_run
-from src.route.sim.link import SimClock, SimLink, SimPositionSource
+from src.route.sim.link import SimClock, SimLink, SimPositionSource, read_of
 from src.route.sim.run import REAL_GROUND_NOISE, REAL_GROUND_SIM, judge, run_sim
 from src.route.sim.world import (
     InjectedError, MoveEffect, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain,
@@ -443,7 +445,7 @@ def test_a_recovery_replay_that_starts_on_a_rope_is_not_recovered_and_not_a_cras
     assert is_successful(result), result
     report = result.unwrap()
     assert replays[0] is None and replays.count(None) == 1
-    not_recovered = ((report.single_error_legs - report.single_error_within_3)
+    not_recovered = ((report.single_error_legs - report.single_error_within_bound)
                      + (report.multi_error_legs - report.multi_error_within_bound))
     assert not_recovered >= 1
 
@@ -587,36 +589,68 @@ def _no_op_effect(terrain, x, y, *, on_rope=False):
     return effect
 
 
-def test_the_bound_is_three_per_error_and_a_zone_no_op_adds_the_rope_order():
-    blink = MovementParams().rope_blink_tries
-    assert sim_run._extra_allowed(1, 0, blink) == 3
-    assert sim_run._extra_allowed(1, 1, blink) == 3 + blink + 1 == 6
-    assert sim_run._extra_allowed(2, 0, blink) == 6
-    assert sim_run._extra_allowed(2, 1, blink) == 6 + blink + 1 == 9      # one error of two is the zone's no-op
-    assert sim_run._extra_allowed(2, 2, blink) == 6 + 2 * (blink + 1)
+def test_the_bound_is_three_per_error_and_the_rope_order_a_no_op_starts():
+    assert sim_run._extra_allowed(1, 0) == 3
+    assert sim_run._extra_allowed(1, 1) == 4
+    assert sim_run._extra_allowed(1, 3) == 6
+    assert sim_run._extra_allowed(2, 0) == 6
+    assert sim_run._extra_allowed(2, 3) == 9      # one error of two is a no-op that starts the order
+    assert sim_run._extra_allowed(2, 6) == 12
 
 
-def test_only_a_no_op_sent_from_inside_a_zone_counts_as_a_zone_no_op():
+def test_only_a_no_op_that_starts_the_rope_order_adds_its_moves(ff2):
+    """ROPE159-C10B-F1 M1. A no-op starts the order when the read before it is in a zone AND the map places it (the planner
+    sent the move). A read the map does not place is the character on the rope, where the order runs anyway and the no-op
+    was one of its own moves: it adds nothing."""
     terrain = _terrain(DEFAULT_TERRAIN)
     zones = RopeZones.build(ROPES, MovementParams())
     sim = SimParams()
-    foot = _no_op_effect(terrain, 105, _floor(terrain, 105))                   # the floor at the right rope's foot
+    order = MovementParams().rope_blink_tries + 1                                  # the blinks and the jump off
+    foot = _no_op_effect(terrain, 105, _floor(terrain, 105))                       # the floor at the right rope's foot
     hanging = _no_op_effect(terrain, READ_X, RIGHT_ROPE.top_y + 8, on_rope=True)
     top = _no_op_effect(terrain, READ_X, _surface(terrain, "mid-right", READ_X))   # the platform the rope hangs from: y 43
-    far = _no_op_effect(terrain, 100, _floor(terrain, 100))                    # 6 px from the rope's column: outside the zone
+    far = _no_op_effect(terrain, 100, _floor(terrain, 100))                        # 6 px from the rope's column: no zone
     landing = MoveEffect("teleport", (105.0, _floor(terrain, 105)), (105.0, 50.0), 0, 0.0, (InjectedError.LANDING,))
-    assert sim_run._zone_no_ops([foot, hanging], zones, sim) == 2
-    assert sim_run._zone_no_ops([top, far], zones, sim) == 0
-    assert sim_run._zone_no_ops([landing, far, foot], zones, sim) == 1         # an error that is not a no-op never counts
-    assert sim_run._zone_no_ops([foot], RopeZones.EMPTY, sim) == 0             # a map with no rope file has no zone
+    assert zones.at(read_of(foot.start, sim)) == 1 and is_successful(attach(ff2.rg, read_of(foot.start, sim)))
+    assert zones.at(read_of(hanging.start, sim)) == 1 and not is_successful(attach(ff2.rg, read_of(hanging.start, sim)))
+
+    def moves(effects, zs=zones):
+        return sim_run._rope_order_moves(effects, zs, ff2.rg, sim)
+
+    assert moves([foot]) == order == 3
+    assert moves([foot, foot]) == 2 * order
+    assert moves([hanging]) == 0                                                   # the order was running already
+    assert moves([foot, hanging]) == order
+    assert moves([top, far]) == 0
+    assert moves([landing, far, foot]) == order                                    # an error that is not a no-op never counts
+    assert moves([foot], RopeZones.EMPTY) == 0                                     # a map with no rope file has no zone
 
 
-def _recovery_of(effect, extra, *, nominal=4):
+@pytest.mark.parametrize("gap, order", [(23, 3), (24, 1)], ids=["platform-in-reach", "no-platform-in-reach"])
+def test_the_order_a_no_op_can_start_is_the_jump_off_alone_when_no_blink_reaches(ff2, gap, order):
+    """ROPE159-C10B-F1 M1 (Hong: with no platform close up or down a blink does not move the character, the only option is
+    to jump off). A placed read on a rope that is `gap` px from the nearer end: the blinks and the jump off when that is
+    within `reach_v` (23), the jump off alone beyond it. The count is checked against `planner.rope_move` itself."""
+    terrain = _terrain(DEFAULT_TERRAIN)
+    sim = SimParams()
+    effect = _no_op_effect(terrain, 82, _floor(terrain, 82))
+    read = read_of(effect.start, sim)
+    assert is_successful(attach(ff2.rg, read)) and ff2.rg.reach_v == 23
+    mark = RopeMark(x=read[0] - ON_ROPE_DX, top_y=read[1] - gap, bottom_y=read[1] + 40)
+    zones = RopeZones.build([mark], MovementParams())
+    assert zones.at(read) == 0
+    assert sim_run._rope_order_moves([effect], zones, ff2.rg, sim) == order
+    target, tries = ff2.nodes[(113, 60)], 0
+    while rope_move(mark, read, target, tries, ff2.rg.reach_v, MovementParams().rope_blink_tries) is not None:
+        tries += 1
+    assert tries == order
+
+
+def _recovery_of(rg, effect, extra, ropes=ROPES, *, nominal=4):
     """`_recovery` for one leg with one error, `effect`, that took `extra` moves more than its noise-off replay."""
     leg = SimpleNamespace(moves=[None] * (nominal + extra))
     sink = SimpleNamespace(legs=[leg], marks=[1], ends=[effect.end])
-    rg = SimpleNamespace(params=MovementParams())
-    return sim_run._recovery(rg, [], _terrain(DEFAULT_TERRAIN), SimParams(), sink, [effect], effect.start, ROPES)
+    return sim_run._recovery(rg, [], _terrain(DEFAULT_TERRAIN), SimParams(), sink, [effect], effect.start, ropes)
 
 
 @pytest.fixture
@@ -624,24 +658,38 @@ def replay_of_four_moves(monkeypatch):
     monkeypatch.setattr(sim_run, "_replay_moves", lambda *args: 4)
 
 
-@pytest.mark.parametrize("where", ["foot", "on the rope"])
-def test_a_no_op_inside_a_rope_zone_may_cost_the_whole_rope_order(replay_of_four_moves, where):
-    """The limit is 3 + `rope_blink_tries` + 1 = 6 extra moves: the move that did nothing, the order's 3 (blink, blink,
-    jump off) and 2 more; 7 is one too many."""
+def _within(recovery):
+    assert recovery.single == 1
+    return recovery.single_within == 1
+
+
+def test_a_no_op_that_starts_the_rope_order_may_cost_the_whole_order(replay_of_four_moves, ff2):
+    """The limit is 3 + `rope_blink_tries` + 1 = 6 extra moves: the move that did nothing, the order's 3 (blink, blink, jump
+    off) and 2 more; 7 is one too many."""
     terrain = _terrain(DEFAULT_TERRAIN)
-    effect = (_no_op_effect(terrain, 105, _floor(terrain, 105)) if where == "foot"
-              else _no_op_effect(terrain, READ_X, RIGHT_ROPE.top_y + 8, on_rope=True))
-    at_the_limit = _recovery_of(effect, 6)
-    assert (at_the_limit.single, at_the_limit.single_within) == (1, 1)
-    over = _recovery_of(effect, 7)
-    assert (over.single, over.single_within) == (1, 0)
+    foot = _no_op_effect(terrain, 105, _floor(terrain, 105))
+    assert _within(_recovery_of(ff2.rg, foot, 6)) and not _within(_recovery_of(ff2.rg, foot, 7))
+
+
+def test_a_no_op_with_no_platform_in_reach_may_cost_the_jump_off_alone(replay_of_four_moves, ff2):
+    """On a rope that crosses the placed floor read mid-way (24 px from both ends) the order is the jump off alone, so the
+    limit is 3 + 1 = 4; 5 is one too many."""
+    terrain = _terrain(DEFAULT_TERRAIN)
+    effect = _no_op_effect(terrain, 82, _floor(terrain, 82))
+    y = read_of(effect.start, SimParams())[1]
+    long_rope = [RopeMark(x=83, top_y=y - 24, bottom_y=y + 24)]
+    assert _within(_recovery_of(ff2.rg, effect, 4, long_rope)) and not _within(_recovery_of(ff2.rg, effect, 5, long_rope))
+
+
+def test_a_no_op_on_the_rope_itself_is_held_to_three(replay_of_four_moves, ff2):
+    """The character hangs where the map does not place it: the rope rule runs already, the no-op starts nothing."""
+    terrain = _terrain(DEFAULT_TERRAIN)
+    effect = _no_op_effect(terrain, READ_X, RIGHT_ROPE.top_y + 8, on_rope=True)
+    assert _within(_recovery_of(ff2.rg, effect, 3)) and not _within(_recovery_of(ff2.rg, effect, 4))
 
 
 @pytest.mark.parametrize("x, name", [(100, "floor"), (READ_X, "mid-right")], ids=["floor", "mid-right"])
-def test_a_no_op_outside_every_zone_is_still_held_to_three(replay_of_four_moves, x, name):
+def test_a_no_op_outside_every_zone_is_still_held_to_three(replay_of_four_moves, ff2, x, name):
     terrain = _terrain(DEFAULT_TERRAIN)
     effect = _no_op_effect(terrain, x, _surface(terrain, name, x))
-    at_the_limit = _recovery_of(effect, 3)
-    assert (at_the_limit.single, at_the_limit.single_within) == (1, 1)
-    over = _recovery_of(effect, 4)
-    assert (over.single, over.single_within) == (1, 0)
+    assert _within(_recovery_of(ff2.rg, effect, 3)) and not _within(_recovery_of(ff2.rg, effect, 4))
