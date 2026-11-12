@@ -260,14 +260,19 @@ class RouteWalker:
                     rope_at, rope_tries = rope, 0
                 mark = self._ropes.mark(rope)
                 rope_choice = rope_move(mark, pos, dst, rope_tries, self._rg.reach_v, params.rope_blink_tries)
-                if rope_choice is None:
+                if rope_choice is None and is_successful(planned):
+                    # the order is used up, but the map places this read: the run goes on (ROPE158-C10B-p2-D1). The order
+                    # starts again and the planner's move is sent; a read the map cannot place still ends the run below.
+                    rope_at, rope_tries = None, 0
+                elif rope_choice is None:
                     self._log_line(f"the character is on the rope at x {mark.x}, at ({pos[0]}, {pos[1]}), and "
                                    "could not get off it; ending the run")
                     outcome = LegOutcome.OFF_MAP
                     break
-                rope_tries += 1
-                planned = Success(Decision(rope_choice, best if math.isfinite(best) else 0.0, None))
-                on_rope = True
+                else:
+                    rope_tries += 1
+                    planned = Success(Decision(rope_choice, best if math.isfinite(best) else 0.0, None))
+                    on_rope = True
             elif not is_successful(planned):
                 if still.see(pos, read_ns) < params.standing_s:
                     clock.sleep(params.poll_s)

@@ -381,32 +381,56 @@ def test_a_move_that_does_nothing_on_a_placed_rope_read_blinks(ff2, pos, dst, fi
 
 
 @pytest.mark.parametrize("pos, dst, first, blink, jump", C10_CASES)
-def test_the_whole_order_runs_from_a_placed_rope_read_then_off_map(ff2, pos, dst, first, blink, jump):
-    """Nothing ever moves: the planner's move, two blinks, one jump off toward the target, then `off_map` with the
-    rope's line. The order is carried across the placed reads (a count reset by each one would never reach the jump)."""
-    rig = _rig(ff2, steps((0, Success(pos))), leg_timeout_s=30.0)
+def test_the_whole_order_runs_from_a_placed_rope_read_then_the_planned_move_again(ff2, pos, dst, first, blink, jump):
+    """ROPE158-C10B-p2-D1 (option B). Nothing ever moves: the planner's move, two blinks, one jump off toward the target.
+    The order is then used up, but the read is one the map places, so the walker does not end the run: it resets the order
+    and sends the planner's move again, and the order runs again (a count reset by every placed read would never reach the
+    jump; a count that was not reset would end the run, as before this ruling)."""
+    rig = _rig(ff2, steps((0, Success(pos))), leg_timeout_s=10.0)
 
     record = _leg(ff2, rig, dst)
 
-    mark = MARKS[ZONES.at(pos)]
+    assert record.outcome == LegOutcome.TIMED_OUT and rig.lines == []
+    assert rig.rec.of("leg_end")[0][2] != "off_map"
+    cycle = [first[0], "teleport", "teleport", "jump_off"]
+    assert len(rig.layer.plays) >= 3 * len(cycle)
+    assert _kinds(rig)[:3 * len(cycle)] == cycle * 3
+    assert rig.layer.keys[:6] == [blink, blink, ("jump_off", jump)] * 2
+    rope = [(k, d) for _, k, d in _rope_moves(rig)]
+    assert rope[:6] == [(*blink, ), (*blink, ), ("jump_off", jump)] * 2
+    planned = rig.rec.of("planned")   # after the jump off, the next planned move is the planner's again (`toward` set)
+    assert [e[7] is not None for e in planned[:8]] == [True, False, False, False, True, False, False, False]
+
+
+def test_an_unplaced_read_with_the_order_used_up_still_ends_off_map(ff2):
+    """ROPE158-C10B-p2-D1: the reset is for a placed read only. The order is used up on a placed read (the planner's
+    move, two blinks, the jump off), then the read becomes one the map cannot place (the character hangs 6 px under the
+    platform): the order stays used up, and the leg ends `off_map` with the rope's line, as today."""
+    assert ZONES.at(RIGHT_ROPE_READ) == RIGHT_ROPE and not is_successful(attach(ff2.rg, RIGHT_ROPE_READ))
+    holder = []
+    rig = _rig(ff2, lambda elapsed: Success(RIGHT_ROPE_READ if len(holder[0].layer.plays) >= 4 else TOP_107),
+               leg_timeout_s=30.0)
+    holder.append(rig)
+
+    record = _leg(ff2, rig, (58, 46))
+
     assert record.outcome == LegOutcome.OFF_MAP
-    assert _kinds(rig) == [first[0], "teleport", "teleport", "jump_off"]
-    assert rig.layer.keys == [blink, blink, ("jump_off", jump)]
-    assert [(k, d) for _, k, d in _rope_moves(rig)] == [(*blink, ), (*blink, ), ("jump_off", jump)]
-    assert rig.lines == [ROPE_LINE.format(x=mark.x, px=pos[0], py=pos[1])]
+    assert _kinds(rig) == ["walk", "teleport", "teleport", "jump_off"]
+    assert rig.layer.keys == [UP, UP, ("jump_off", "LEFT")]
+    assert rig.lines == [ROPE_LINE.format(x=107, px=106, py=49)]
 
 
 def test_the_order_starts_again_when_the_placed_read_moves(ff2):
     """A blink that did nothing, then the read moves to another placed zone cell (the planner's move from it, a walk
     that does nothing again): the count started again, so two more blinks come before the jump off. A count kept
     across the move would jump off after one."""
-    rig = _rig(ff2, steps((0, Success(TOP_107)), (0.32, Success(TOP_107_B))), leg_timeout_s=30.0)
+    rig = _rig(ff2, steps((0, Success(TOP_107)), (0.32, Success(TOP_107_B))), leg_timeout_s=10.0)
 
     record = _leg(ff2, rig, (58, 46))
 
-    assert record.outcome == LegOutcome.OFF_MAP
-    assert _kinds(rig) == ["walk", "teleport", "walk", "teleport", "teleport", "jump_off"]
-    assert rig.layer.keys == [UP, UP, UP, ("jump_off", "LEFT")]
+    assert record.outcome == LegOutcome.TIMED_OUT   # the order used up on a placed read resets (ROPE158-C10B-p2-D1)
+    assert _kinds(rig)[:6] == ["walk", "teleport", "walk", "teleport", "teleport", "jump_off"]
+    assert rig.layer.keys[:4] == [UP, UP, UP, ("jump_off", "LEFT")]
 
 
 def test_a_placed_rope_read_whose_move_moves_the_character_is_unchanged(ff2):
