@@ -209,6 +209,7 @@ class MapEditor:
         self._rope_scan_ticks = 0
         self._rope_scan_generation = 0
         self._rope_scan_auto = False  # the collection in flight (or last run) was started by the editor, not the button
+        self._rope_notice_is_find_result = False  # the notice on screen reports a find that ended (`_dropStaleRopeNotice`)
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -789,6 +790,7 @@ class MapEditor:
         self.state.selected_rope = None
         self._setStatus("")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshRopeBoxes()
         self._renderNodes()
 
@@ -852,6 +854,7 @@ class MapEditor:
         self.state.ropes[index] = moved
         self._setStatus("")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshRopeBoxes()
         self._renderNodes()
 
@@ -901,6 +904,7 @@ class MapEditor:
         self.state.selected_id = None
         self._setStatus(f"Added the rope at x {mark.x}, from y {mark.top_y} to y {mark.bottom_y}.")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshInspector()
         self._refreshRopeBoxes()
         self._renderNodes()
@@ -960,14 +964,27 @@ class MapEditor:
                 return ROPE_SKIP_OTHER_SIZE_TEXT
         return ""
 
-    def _setRopeNotice(self, text: str) -> None:
-        """Write the rope notice under the status line; no text takes the label off the window."""
+    def _setRopeNotice(self, text: str, *, find_result: bool = False) -> None:
+        """Write the rope notice under the status line; no text takes the label off the window. `find_result` says the text
+        reports a find that ended (`ropeFindNotice`), which a later edit to the ropes can make untrue (`_dropStaleRopeNotice`)."""
+        self._rope_notice_is_find_result = bool(text) and find_result
         label = self._rope_notice_label
         label.config(text=text)
         if text and not label.winfo_manager():
             label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX, pady=(0, 4), before=self._panel_outer)
         elif not text and label.winfo_manager():
             label.pack_forget()
+
+    def _dropStaleRopeNotice(self) -> None:
+        """Take the notice off the window when it reports a find that ended and the ropes have just been edited (AUTOFIND163
+        M4): after he deletes the rope it said was added, or marks or moves another, "Added 1 rope found on the minimap
+        (x 57)" would describe a map that is not there. The whole text goes, the hint with it; the next find or load writes a
+        new one. Two notices stay because an edit does not make them untrue: "Finding ropes..." while a collection runs (its
+        result replaces it) and the one that says why no find ran for this map (`_ropeFindSkipReason`). Called after
+        `_recomputeDirty()` by each edit of the ropes: `_deleteSelectedRope`, `_addRopeClick` (once the rope is added) and
+        `_applyRopeBox` (once it moved a rope)."""
+        if self._rope_notice_is_find_result:
+            self._setRopeNotice("")
 
     def _onRopeScanTick(self, generation):
         """One step of the collection numbered `generation`. The frame is copied under `minimap_frame_lock` into a local
@@ -1021,7 +1038,7 @@ class MapEditor:
         else:
             new = "" if len(added) == len(found) else (f", {len(added)} new" if added else ", none new")
             self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s") + new)
-        self._setRopeNotice(ropeFindNotice(len(found), added, skipped))
+        self._setRopeNotice(ropeFindNotice(len(found), added, skipped), find_result=True)
         self._recomputeDirty()
         self._renderNodes()
 

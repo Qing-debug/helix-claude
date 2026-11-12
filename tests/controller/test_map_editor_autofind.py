@@ -793,3 +793,114 @@ def test_a_csv_made_on_the_live_size_loaded_before_the_canvas_exists_gets_the_fi
     run_scan(rig)
 
     assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+# -- the notice does not outlive an edit it describes (AUTOFIND163 M4) ---------------------------------------------------
+
+def after_a_find_added_the_ropes(make_editor, tmp_path):
+    """An editor whose automatic find, after a load of a map with no rope file, has just added both ropes and said so."""
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, map_with_saved_ropes(tmp_path, None))
+    run_scan(rig)
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+    assert notice_shown(rig.editor) and notice(rig.editor).startswith("Added 2 ropes found on the minimap (x 46, x 107)")
+    return rig
+
+
+def test_deleting_a_rope_takes_the_stale_notice_off_the_window(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+
+    select_and_delete(rig.editor, 107, 52)
+
+    assert not notice_shown(rig.editor) and notice(rig.editor) == ""  # "Added 2 ropes ..." is no longer true
+
+
+def test_adding_a_rope_by_hand_takes_the_stale_notice_off_the_window(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+
+    rig.editor._startAddRope()
+    click(rig.editor, 70, 30)
+    assert notice_shown(rig.editor)  # the first click adds nothing yet
+    click(rig.editor, 70, 50)
+
+    assert len(rig.editor.state.ropes) == 3 and not notice_shown(rig.editor)
+
+
+def test_moving_a_rope_in_a_number_box_takes_the_stale_notice_off_the_window(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+    click(rig.editor, 107, 52)
+
+    ropes.type_in_box(rig.editor, "x", "111")
+
+    assert rig.editor.state.ropes[1].x == 111 and not notice_shown(rig.editor)
+
+
+def test_selecting_a_rope_leaves_the_notice(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+    text = notice(rig.editor)
+
+    click(rig.editor, 107, 52)  # a click on its line selects it and changes nothing on the map
+
+    assert rig.editor.state.selected_rope == 1
+    assert notice_shown(rig.editor) and notice(rig.editor) == text
+
+
+def test_an_edit_that_changes_nothing_leaves_the_notice(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+    text = notice(rig.editor)
+    click(rig.editor, 107, 52)
+
+    ropes.type_in_box(rig.editor, "x", "107")  # the value it already has
+    ropes.type_in_box(rig.editor, "top_y", "999")  # refused: top y would pass bottom y
+    rig.editor._startAddRope()
+    click(rig.editor, 70, 30)
+    click(rig.editor, 70, 30)  # refused: both ends at one height
+
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+    assert notice_shown(rig.editor) and notice(rig.editor) == text
+
+
+def test_an_edit_during_a_scan_keeps_the_finding_notice_and_the_result_replaces_it(make_editor, tmp_path):
+    csv_path = map_with_saved_ropes(tmp_path, [ROPE_46])
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, csv_path)
+    editor = rig.editor
+    assert run_scan(rig, limit=5) == 5
+    finding = f"{map_editor.ROPE_FINDING_NOTICE}\n{HINT}"
+    assert notice(editor) == finding
+
+    select_and_delete(editor, 46, 38)  # an edit while the scan is running
+    assert notice_shown(editor) and notice(editor) == finding  # the notice still describes what is happening
+
+    run_scan(rig)  # the scan ends: nothing marks 46 now, but he deleted it, so it stays deleted
+    assert notice_shown(editor) and notice(editor).startswith("Added 1 rope found on the minimap (x 107)")
+    assert "Skipped 1 rope found where you deleted one before" in notice(editor)
+
+
+def test_a_notice_that_says_why_no_find_ran_stays_after_an_edit(make_editor, tmp_path):
+    # it describes the load, not a find, so marking a rope by hand does not make it untrue
+    csv_path, _ = damaged_rope_file_with_a_hand_made_rope(tmp_path)
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, csv_path)
+    assert notice(rig.editor) == map_editor.ROPE_SKIP_DAMAGED_TEXT
+
+    rig.editor._startAddRope()
+    click(rig.editor, 70, 30)
+    click(rig.editor, 70, 50)
+
+    assert rig.editor.state.ropes == [RopeMark(70, 30, 50)]
+    assert notice_shown(rig.editor) and notice(rig.editor) == map_editor.ROPE_SKIP_DAMAGED_TEXT
+
+
+def test_the_next_find_writes_a_new_notice_after_an_edit_took_the_old_one_off(make_editor, tmp_path):
+    rig = after_a_find_added_the_ropes(make_editor, tmp_path)
+    select_and_delete(rig.editor, 107, 52)
+    assert not notice_shown(rig.editor)
+
+    rig.editor._findRopes()  # the button: 107 was deleted, so it is skipped
+    run_scan(rig)
+
+    assert notice_shown(rig.editor) and notice(rig.editor).startswith("Found 2 ropes on the minimap, none added.")
