@@ -1,6 +1,13 @@
 """The per-map rope file (C8, H94): `<map stem>.ropes.json` beside the map CSV. The reader and writer, the keep-out test
 the map editor refuses nodes by (H91, D1) and the nearest free x's it suggests (D2). Pure: no Tk, and no `src.route`
-import (import-linter contract c), which is why the walker's node offset is repeated here (H85)."""
+import (import-linter contract c), which is why the walker's node offset is repeated here (H85).
+
+Format, version 1: `{"format": "helix-ropes", "version": 1, "minimap_size": [W, H], "ropes": [{"x", "top_y", "bottom_y"}, ...],
+"deleted_ropes": [{"x", "top_y", "bottom_y"}, ...]}`. `deleted_ropes` (AUTOFIND163, Hong's rope163-1) is optional and the
+writer leaves it out when empty: it is the places where a rope was deleted, or moved away from, which the map editor's
+find then leaves empty so a deleted rope stays deleted. Only the editor uses it; the walker and the simulator read
+`ropes` and ignore it, and a file without it (every file written before it existed) reads with none. The version stays 1:
+a Helix that does not know the key keeps it as one of the unknown top-level keys (`RopeFile.extra`)."""
 import json
 import os
 from collections.abc import Mapping, Sequence
@@ -23,7 +30,7 @@ FIX_TEXT = ("open the map in the map editor, mark its ropes again (Find ropes or
             "replaces this file")
 READ_FIX_TEXT = "make the file readable (permissions, or a program holding it open), or move it away to start with no ropes"
 NEWER_FIX_TEXT = "update Helix, which reads rope files of version 1"
-_KNOWN_KEYS = ("format", "version", "minimap_size", "ropes")
+_KNOWN_KEYS = ("format", "version", "minimap_size", "ropes", "deleted_ropes")
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,7 @@ class RopeFile:
     ropes: tuple[RopeMark, ...]
     minimap_size: tuple[int, int] | None
     extra: Mapping[str, object]   # top-level keys this version does not know; the writer keeps them
+    deleted: tuple[RopeMark, ...] = ()   # `deleted_ropes`: where a rope was deleted; the editor's find skips those places
 
 
 def rope_file_for(map_csv: Path) -> Path:
@@ -93,10 +101,23 @@ def read_ropes(path: Path) -> Result[RopeFile, str]:
             else:
                 ropes.append(mark)
 
+    deleted: list[RopeMark] = []
+    if "deleted_ropes" in data:
+        raw_deleted = data["deleted_ropes"]
+        if not isinstance(raw_deleted, list):
+            problems.append('"deleted_ropes" must be a list')
+        else:
+            for number, item in enumerate(raw_deleted, start=1):
+                mark, rope_problems = _check_rope(item)
+                if mark is None:
+                    problems.extend(f"deleted rope {number}: {problem}" for problem in rope_problems)
+                else:
+                    deleted.append(mark)
+
     if problems:
         return _refused(path, problems, NEWER_FIX_TEXT if newer else FIX_TEXT)
     extra = {key: value for key, value in data.items() if key not in _KNOWN_KEYS}
-    return Success(RopeFile(tuple(ropes), minimap_size, extra))
+    return Success(RopeFile(tuple(ropes), minimap_size, extra, tuple(deleted)))
 
 
 def write_ropes(path: Path, file: RopeFile) -> Result[None, str]:
@@ -105,6 +126,8 @@ def write_ropes(path: Path, file: RopeFile) -> Result[None, str]:
     if file.minimap_size is not None:
         data["minimap_size"] = list(file.minimap_size)
     data["ropes"] = [{"x": rope.x, "top_y": rope.top_y, "bottom_y": rope.bottom_y} for rope in file.ropes]
+    if file.deleted:  # left out when empty, so a file with nothing deleted is what it always was
+        data["deleted_ropes"] = [{"x": rope.x, "top_y": rope.top_y, "bottom_y": rope.bottom_y} for rope in file.deleted]
     for key, value in file.extra.items():
         data.setdefault(key, value)
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"

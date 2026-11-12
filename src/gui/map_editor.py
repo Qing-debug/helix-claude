@@ -22,7 +22,8 @@ from src.gui.minimap_lost import clear_lost, show_lost
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
-from src.controller.rope_file import RopeFile, RopeMark, free_x, near_rope_end, read_ropes, rope_file_for, write_ropes
+from src.controller.rope_file import (KEEP_OUT_X_PX, KEEP_OUT_Y_PX, RopeFile, RopeMark, free_x, near_rope_end, read_ropes,
+                                      rope_file_for, write_ropes)
 from src.controller.rope_finder import SAME_ROPE_PX, find_ropes, median_frame
 from returns.pipeline import is_successful
 
@@ -80,6 +81,55 @@ ADD_ROPE_BOTTOM_TEXT = "Now click its bottom end, where a node on the platform b
 MINIMAP_NOT_FOUND_TEXT = "Minimap not found yet"
 ROPE_BOX_LABELS = {"x": "x", "top_y": "top y", "bottom_y": "bottom y"}
 
+# The find that runs by itself (AUTOFIND162; Hong, 2026-11-12: "the attempt to find ropes should ways be done no matter what
+# and its implications should be displayed fom the tget go as opposed to me needing to click find ropes"). Its notice sits
+# under the status line and, unlike the status line, is not cleared by a click.
+ROPE_FINDING_NOTICE = "Finding ropes on the minimap (3 seconds)..."
+ROPE_HINT_TEXT = ("A character standing still on a rope can hide it from the find. Move the character, then press "
+                  "Find ropes if a rope seems missing.")
+# Shown instead of a find when the editor must not run one for the map it just loaded (AUTOFIND163).
+ROPE_SKIP_DAMAGED_TEXT = ("No automatic find after this load: the map's rope file could not be read, and a find would let "
+                          "Save replace that file without asking first. Press Find ropes to look anyway.")
+# AUTOFIND163 M3: the one thing a map file keeps about the minimap it was made on is its `# minimap_size=` line, so a find after
+# a load runs only when that line is there and is the live minimap's size.
+ROPE_SKIP_NO_SIZE_TEXT = ("No automatic find after this load: the map file does not say which minimap size it was made on, so "
+                          "the editor cannot tell whether the game is showing this map. Press Find ropes to look on the live "
+                          "minimap.")
+ROPE_SKIP_OTHER_SIZE_TEXT = ("No automatic find after this load: the map was made on a different minimap size than the live "
+                             "one. Press Find ropes to look anyway.")
+ROPE_NOTICE_BG = '#fff2b3'     # pale yellow, so it reads as a notice and not as a second status line
+ROPE_NOTICE_FG = '#5c2a00'
+
+
+def sameRope(a: RopeMark, b: RopeMark) -> bool:
+    """One rope seen twice, by the finder's own rule (`rope_finder._same_rope`): columns within SAME_ROPE_PX whose rows
+    overlap (ropes stacked in one column only touch at the platform between them, so they are two). The rope file's
+    remembered deletions are matched with it (AUTOFIND163); the add-only rule against the marks is still the x test alone."""
+    return abs(a.x - b.x) <= SAME_ROPE_PX and a.top_y < b.bottom_y and b.top_y < a.bottom_y
+
+
+def ropeFindNotice(found: int, added: List[RopeMark], skipped: int = 0) -> str:
+    """The notice after a find that ended: `found` ropes seen on the minimap, `added` of them new to the map and `skipped`
+    of them left out because the rope file remembers a rope deleted there. It says what was added, what that means for
+    placing nodes and for Save, that a wrong rope can be deleted (and stays deleted once saved) and that nothing is
+    written before Save; the hint about a character standing still on a rope is always the last line."""
+    if found == 0:
+        result = "No rope found on the minimap."
+    elif not added:
+        result = (f"Found {found} rope{'' if found == 1 else 's'} on the minimap, "
+                  + ("all already marked in this map." if skipped == 0 else "none added."))
+    else:
+        where = ", ".join(f"x {mark.x}" for mark in added)
+        result = (f"Added {len(added)} rope{'' if len(added) == 1 else 's'} found on the minimap ({where}). "
+                  f"Nodes within {KEEP_OUT_X_PX} px sideways and {KEEP_OUT_Y_PX} px of where a rope meets a platform are "
+                  "refused and ringed red, and Save is blocked until they are moved. A wrong rope can be deleted: select "
+                  "it and press Delete, and it stays deleted once you press Save. Ropes are written only when you press "
+                  "Save.")
+    if skipped:
+        result += (f" Skipped {skipped} rope{'' if skipped == 1 else 's'} found where you deleted one before: a deleted "
+                   "rope stays deleted. To bring one back, mark it with Add rope.")
+    return f"{result}\n{ROPE_HINT_TEXT}"
+
 # Arrow keys move the selected node (NODEMOVE159; Hong, 2026-11-12, QB240, QB241).
 NODE_MOVE_PX = 1               # native px per arrow press
 NODE_MOVE_SHIFT_PX = 5         # native px per Shift+arrow press
@@ -104,6 +154,9 @@ class MapEditorState:
     ropes: List[RopeMark] = field(default_factory=list)
     selected_rope: Optional[int] = None                      # index into `ropes`, drawn thicker
     rope_extra: Dict[str, object] = field(default_factory=dict)  # the loaded rope file's unknown keys; a save keeps them
+    # The places the rope file remembers a rope was deleted (`deleted_ropes`, AUTOFIND163), as of the last load or save. The
+    # find leaves them empty. What a save writes is `MapEditor._effectiveDeleted()`, which adds the deletions made since.
+    deleted_ropes: List[RopeMark] = field(default_factory=list)
     # A rope file was read at load without error, or this editor has written one since. A map with no rope file beside
     # it leaves this false, so saving a map without ropes writes no rope file.
     rope_file_read: bool = False
@@ -114,16 +167,28 @@ class MapEditorState:
     add_rope_armed: bool = False
 
 
+@dataclass(frozen=True)
+class LoadedMap:
+    """What the last successful load told the editor about the map, for deciding whether the editor's own find may run
+    for it (`_ropeFindSkipReason`)."""
+    rope_file_failed: bool   # the map's rope file existed but could not be read (the load opened the nodes with no ropes)
+    minimap_size: Optional[Tuple[int, int]]  # the CSV's `# minimap_size=` line (native px); None for a legacy CSV without one
+
+
 class MapEditor:
-    def __init__(self, parent_tk, controller, sharedInfo):
+    def __init__(self, parent_tk, controller, sharedInfo, *, auto_find_ropes: bool = True):
         """
         parent_tk:   the main GUI's tk.Tk instance (used as Toplevel parent).
         controller:  shared Controller; the editor uses controller.agent (buildPathGraphFor, characterClass, the edge
                      tolerance levels). It never looks for the character itself.
         sharedInfo:  shared minimap-frame buffer + lock.
+        auto_find_ropes: the editor runs the rope find by itself, once when its canvas is built and once after every
+                     successful load (AUTOFIND162). Tests turn it off so a window starts no scan of its own.
         """
         self.controller = controller
         self.sharedInfo = sharedInfo
+        self._auto_find_ropes = auto_find_ropes
+        self._loaded_map: Optional[LoadedMap] = None  # None until a load goes ahead
         self.state = MapEditorState()
 
         # Saved baseline for state-comparison dirty tracking. Deep-copied on save/load so
@@ -133,6 +198,10 @@ class MapEditor:
         self._saved_nodes: Dict[int, EditorNode] = {}
         self._saved_rotation: List[int] = []
         self._saved_ropes: List[RopeMark] = []
+        # The ropes the editor has seen: those of the loaded or saved file, and those its finds added since. One of them
+        # that is no longer on the map was deleted or moved away, and the next save remembers its place (`_effectiveDeleted`).
+        # A rope that was only ever marked by hand since the last save is not in it, so removing that remembers nothing.
+        self._known_ropes: List[RopeMark] = []
 
         # Find ropes (Task 3b): the frames collected so far, None while no collection runs; the ticks done.
         # The generation numbers the collections: each `after` tick carries its collection's number and stops when it is
@@ -140,6 +209,8 @@ class MapEditor:
         self._rope_scan_frames: Optional[List[np.ndarray]] = None
         self._rope_scan_ticks = 0
         self._rope_scan_generation = 0
+        self._rope_scan_auto = False  # the collection in flight (or last run) was started by the editor, not the button
+        self._rope_notice_is_find_result = False  # the notice on screen reports a find that ended (`_dropStaleRopeNotice`)
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -191,8 +262,17 @@ class MapEditor:
         )
         self._status_label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX)
 
+        # The rope notice (AUTOFIND162): what the find saw, what it means, the hint. Not packed until it has text, then
+        # packed right under the status line, so it is on screen without scrolling the panel. `_setRopeNotice` is its
+        # one writer.
+        self._rope_notice_label = tk.Label(
+            self.window, text="", anchor='nw', justify=tk.LEFT, wraplength=WINDOW_INITIAL_WIDTH - 2 * PANEL_PADX - 12,
+            bg=ROPE_NOTICE_BG, fg=ROPE_NOTICE_FG, font=self._font_body, relief=tk.SOLID, borderwidth=1, padx=6, pady=4,
+        )
+
         panel_outer = tk.Frame(self.window, bg='lightblue')
         panel_outer.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+        self._panel_outer = panel_outer  # `_setRopeNotice` packs the notice before it, which is right under the status line
 
         self._panel_canvas = tk.Canvas(
             panel_outer, bg='lightblue', highlightthickness=0, borderwidth=0,
@@ -432,6 +512,7 @@ class MapEditor:
         self._bindArrowKeys()
         self._refreshInspector()  # start with empty inspector since no node is selected yet
         self._refreshRotation()
+        self._autoFindRopes()  # the one find per open, now that there is a minimap to look at
 
     def _onPlacementChange(self):
         self.state.placement_nodetype = self._placement_var.get()
@@ -655,9 +736,11 @@ class MapEditor:
         and the node's place in the rotation order stay. It does nothing with no node selected (a rope selected, or nothing),
         before the minimap canvas exists, or when the key was typed in a number box (the Spinbox's own binding ran first:
         Left and Right move its cursor, Up and Down change its value, and a typed value must not be hijacked, as for Delete).
-        A press that would put a coordinate off the minimap (outside 0..size-1) does nothing; a node that is already off it
-        (a map file can hold one, and Save warns) may still be moved toward the minimap. A move into a rope's keep-out is
-        allowed: `_renderNodes` draws the red ring and `_validateForSave` blocks Save until the node is moved out (Hong, QB241).
+        A press that would take a node on the minimap off it stops on the edge pixel (0 or size-1) if it can move at all: a
+        Shift+arrow from 1-4 px short of the edge does (Hong, NODEMOVE160 M3), a plain arrow from the edge pixel does nothing.
+        A node that is already off the minimap (a map file can hold one, and Save warns) may still be moved toward it, never
+        further out. A move into a rope's keep-out is allowed: `_renderNodes` draws the red ring and `_validateForSave` blocks
+        Save until the node is moved out (Hong, QB241).
         The window's binding does not `break`, and nothing else binds the arrow keys in the editor."""
         if isinstance(getattr(event, "widget", None), TEXT_BOX_WIDGETS):
             return
@@ -666,17 +749,21 @@ class MapEditor:
             return
         node = self.state.nodes[sid]
         x, y = node.pos
-        new_x, new_y = x + dx, y + dy
         native_w = self.minimap_canvas_width // RENDER_SCALE
         native_h = self.minimap_canvas_height // RENDER_SCALE
-        for old, new, size in ((x, new_x, native_w), (y, new_y, native_h)):
-            if new == old:
-                continue  # this axis does not move: an off-map coordinate on it must not stop the other one
+        moved = []
+        for old, delta, size in ((x, dx, native_w), (y, dy, native_h)):
+            new = old + delta
+            if delta and 0 <= old <= size - 1 and not 0 <= new <= size - 1:
+                new = min(max(new, 0), size - 1)  # a press that would leave the minimap from it stops on the edge pixel
+                if new == old:
+                    return  # already on the edge pixel: nothing moves
             off = max(-new, new - (size - 1), 0)  # px beyond the range 0..size-1
             off_before = max(-old, old - (size - 1), 0)
-            if off > 0 and off >= off_before:
-                return
-        node.pos = (new_x, new_y)
+            if delta and off > 0 and off >= off_before:
+                return  # an off-map node moved further out; an axis that does not move is not checked
+            moved.append(new)
+        node.pos = (moved[0], moved[1])
         self._recomputeDirty()
         self._refreshInspector()  # the "pos:" label
         self._refreshRotation()   # a blue node's row shows its position
@@ -704,6 +791,7 @@ class MapEditor:
         self.state.selected_rope = None
         self._setStatus("")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshRopeBoxes()
         self._renderNodes()
 
@@ -767,6 +855,7 @@ class MapEditor:
         self.state.ropes[index] = moved
         self._setStatus("")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshRopeBoxes()
         self._renderNodes()
 
@@ -816,14 +905,16 @@ class MapEditor:
         self.state.selected_id = None
         self._setStatus(f"Added the rope at x {mark.x}, from y {mark.top_y} to y {mark.bottom_y}.")
         self._recomputeDirty()
+        self._dropStaleRopeNotice()
         self._refreshInspector()
         self._refreshRopeBoxes()
         self._renderNodes()
 
-    def _findRopes(self):
+    def _findRopes(self, auto=False):
         """The Find ropes button: collect ROPE_SCAN_FRAMES minimap frames, one every ROPE_SCAN_EVERY_MS through the
         window's `after`, then find the ropes in their per-pixel median (`_onRopeScanTick`). Pressed while collecting,
-        it does nothing; before the minimap canvas exists it only says so."""
+        it does nothing; before the minimap canvas exists it only says so. `auto` marks the editor's own find
+        (`_autoFindRopes`): it differs only at the end, in `_finishRopeScan`."""
         if self.minimap_canvas is None:
             self._setStatus(MINIMAP_NOT_FOUND_TEXT)
             return
@@ -832,8 +923,69 @@ class MapEditor:
         self._rope_scan_generation += 1
         self._rope_scan_frames = []
         self._rope_scan_ticks = 0
+        self._rope_scan_auto = auto
         self._setStatus(FIND_ROPES_TEXT)
+        self._setRopeNotice(f"{ROPE_FINDING_NOTICE}\n{ROPE_HINT_TEXT}")
         self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, self._rope_scan_generation)
+
+    def _autoFindRopes(self):
+        """The find the editor starts by itself (AUTOFIND162): when its canvas is built and after every successful
+        load. Same collection as the button, same add-only rule (`_finishRopeScan`). With no canvas yet it does nothing
+        and says nothing: the canvas's own build ends in this call. Off when the editor was made with
+        `auto_find_ropes=False`. When the loaded map is one the find must not run for (`_ropeFindSkipReason`), the
+        notice says why and no collection starts; the button still works."""
+        if not self._auto_find_ropes or self.minimap_canvas is None:
+            return
+        reason = self._ropeFindSkipReason()
+        if reason:
+            self._setRopeNotice(reason)
+            return
+        self._findRopes(auto=True)
+
+    def _ropeFindSkipReason(self) -> str:
+        """The notice text for why the editor's own find must not run for the map loaded now, or "" when it may. It
+        reads what the load stored, so it also holds when the load came before the canvas and the canvas's build asks.
+        A map whose rope file could not be read: ropes found now would fill `state.ropes`, and the Save after that
+        would replace the damaged file without asking Hong's question first (AUTOFIND163 I1, QB236). A map that cannot say
+        it belongs to the minimap on screen: the find samples the live minimap, which need not be this map's (AUTOFIND163
+        M3). The only identity a map keeps is its `# minimap_size=` line (no map has a minimap.png of its own), so a legacy
+        CSV without one, or one made on another size than the live minimap (the load's own size gate is skipped while the
+        canvas is unknown, so this is where that case is caught), gets no find. Two different maps of one size still look
+        alike to it."""
+        loaded = self._loaded_map
+        if loaded is None:
+            return ""
+        if loaded.rope_file_failed:
+            return ROPE_SKIP_DAMAGED_TEXT
+        if loaded.minimap_size is None:
+            return ROPE_SKIP_NO_SIZE_TEXT
+        if self.minimap_canvas_width is not None and self.minimap_canvas_height is not None:
+            live = (self.minimap_canvas_width // RENDER_SCALE, self.minimap_canvas_height // RENDER_SCALE)
+            if loaded.minimap_size != live:
+                return ROPE_SKIP_OTHER_SIZE_TEXT
+        return ""
+
+    def _setRopeNotice(self, text: str, *, find_result: bool = False) -> None:
+        """Write the rope notice under the status line; no text takes the label off the window. `find_result` says the text
+        reports a find that ended (`ropeFindNotice`), which a later edit to the ropes can make untrue (`_dropStaleRopeNotice`)."""
+        self._rope_notice_is_find_result = bool(text) and find_result
+        label = self._rope_notice_label
+        label.config(text=text)
+        if text and not label.winfo_manager():
+            label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX, pady=(0, 4), before=self._panel_outer)
+        elif not text and label.winfo_manager():
+            label.pack_forget()
+
+    def _dropStaleRopeNotice(self) -> None:
+        """Take the notice off the window when it reports a find that ended and the ropes have just been edited (AUTOFIND163
+        M4): after he deletes the rope it said was added, or marks or moves another, "Added 1 rope found on the minimap
+        (x 57)" would describe a map that is not there. The whole text goes, the hint with it; the next find or load writes a
+        new one. Two notices stay because an edit does not make them untrue: "Finding ropes..." while a collection runs (its
+        result replaces it) and the one that says why no find ran for this map (`_ropeFindSkipReason`). Called after
+        `_recomputeDirty()` by each edit of the ropes: `_deleteSelectedRope`, `_addRopeClick` (once the rope is added) and
+        `_applyRopeBox` (once it moved a rope)."""
+        if self._rope_notice_is_find_result:
+            self._setRopeNotice("")
 
     def _onRopeScanTick(self, generation):
         """One step of the collection numbered `generation`. The frame is copied under `minimap_frame_lock` into a local
@@ -852,21 +1004,42 @@ class MapEditor:
             self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, generation)
             return
         self._rope_scan_frames = None
-        self._finishRopeScan(frames)
+        self._finishRopeScan(frames, self._rope_scan_auto)
 
-    def _finishRopeScan(self, frames):
+    def _finishRopeScan(self, frames, auto=False):
+        """The end of a collection: add the ropes in the median of its frames that no earlier mark is within SAME_ROPE_PX
+        of (only adds: a saved mark is never touched), say so in the status line and in the notice. The added ropes make
+        the editor dirty and are written only by a save. The one exception is the editor's own find (`auto`) on an
+        untitled map with no nodes: it has nothing of his to lose and no file to save the ropes to, so the ropes it adds
+        join the saved baseline and the map stays clean, until he changes something (AUTOFIND162; Hong: "Only when I
+        press Save")."""
         median = median_frame(frames)
         if not is_successful(median):
             self._setStatus(median.failure())
+            self._setRopeNotice(f"Rope find failed: {median.failure()}\n{ROPE_HINT_TEXT}")
             return
         found = find_ropes(median.unwrap())
         marked = list(self.state.ropes)  # a found rope is skipped only when an earlier mark is that close, not one found now
-        added = [rope for rope in found if all(abs(rope.x - mark.x) > SAME_ROPE_PX for mark in marked)]
+        deleted = self._effectiveDeleted()  # where a rope was deleted: in the rope file, or in this session
+        added: List[RopeMark] = []
+        skipped = 0
+        for rope in found:
+            if any(abs(rope.x - mark.x) <= SAME_ROPE_PX for mark in marked):
+                continue  # already marked
+            if any(sameRope(rope, gone) for gone in deleted):
+                skipped += 1  # a rope he deleted stays deleted
+                continue
+            added.append(rope)
         self.state.ropes.extend(added)
+        self._known_ropes.extend(added)
+        if auto and self.state.current_file is None and not self.state.nodes:
+            self._saved_ropes = self._saved_ropes + added  # an edit of his own to the ropes still differs from this
         if len(found) == 0:
             self._setStatus("Found no rope")
         else:
-            self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s"))
+            new = "" if len(added) == len(found) else (f", {len(added)} new" if added else ", none new")
+            self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s") + new)
+        self._setRopeNotice(ropeFindNotice(len(found), added, skipped), find_result=True)
         self._recomputeDirty()
         self._renderNodes()
 
@@ -882,9 +1055,25 @@ class MapEditor:
             self.state.nodes != self._saved_nodes
             or self.state.rotation_order != self._saved_rotation
             or self.state.ropes != self._saved_ropes
+            or set(self._effectiveDeleted()) != set(self.state.deleted_ropes)
         )
         if self.state.dirty != was_dirty:
             self._refreshTitle()
+
+    def _effectiveDeleted(self) -> List[RopeMark]:
+        """The places the rope file should remember as deleted (AUTOFIND163, Hong's rope163-1): the file's own, minus those
+        a mark on the map now covers (a rope marked again there clears the deletion), plus every rope the editor has seen
+        (`_known_ropes`) that no mark covers any more. It is worked out from the map as it is, not from a log of edits,
+        so a rope moved a pixel at a time is remembered where it started, a rope moved away and back is remembered
+        nowhere, and a rope marked by hand and deleted again before any save leaves nothing. A mark covers a place when it
+        is the same rope (`sameRope`), so a rope moved 2 px or less needs no memory: the find's add-only rule already
+        treats the found rope as the one he moved. Save writes this and the baseline holds it (`state.deleted_ropes`)."""
+        marks = self.state.ropes
+        result = [gone for gone in self.state.deleted_ropes if not any(sameRope(gone, mark) for mark in marks)]
+        for seen in self._known_ropes:
+            if not any(sameRope(seen, mark) for mark in marks) and not any(sameRope(seen, gone) for gone in result):
+                result.append(seen)
+        return result
 
     def _refreshTitle(self):
         """Composes the title bar from dirty marker + current file name (basename only)."""
@@ -1070,9 +1259,11 @@ class MapEditor:
                 parent=self.window,
             )
             return
-        # The CSV is written. A rope file is written when ropes are marked, or when a rope file was read (so ropes
-        # deleted from a good file stay deleted and its unknown keys are kept); a map with neither stays one file.
+        # The CSV is written. A rope file is written when ropes are marked, when a rope file was read (so ropes deleted
+        # from a good file stay deleted and its unknown keys are kept) or when a deletion is to be remembered; a map with
+        # none of these stays one file.
         rope_error = None
+        deleted = tuple(self._effectiveDeleted())  # where a rope was deleted: the file remembers it (AUTOFIND163)
         if rope_file_damaged:
             if remove_rope_file:
                 try:
@@ -1080,9 +1271,9 @@ class MapEditor:
                     self.state.rope_file_read = False
                 except OSError as error:
                     rope_error = f"{rope_path} could not be removed: {error.strerror or error}."
-        elif self.state.ropes or self.state.rope_file_read:
+        elif self.state.ropes or self.state.rope_file_read or deleted:
             rope_result = write_ropes(
-                rope_path, RopeFile(tuple(self.state.ropes), minimap_size, self.state.rope_extra),
+                rope_path, RopeFile(tuple(self.state.ropes), minimap_size, self.state.rope_extra, deleted),
             )
             if is_successful(rope_result):
                 self.state.rope_file_read = True
@@ -1113,6 +1304,8 @@ class MapEditor:
         self._saved_nodes = copy.deepcopy(self.state.nodes)
         self._saved_rotation = list(self.state.rotation_order)
         self._saved_ropes = list(self.state.ropes)  # RopeMark is frozen, so a shallow copy is a snapshot
+        self.state.deleted_ropes = self._effectiveDeleted()  # before `_known_ropes` is reset: it holds what was deleted
+        self._known_ropes = list(self.state.ropes)
         self.state.dirty = False
         self._refreshTitle()
 
@@ -1224,6 +1417,7 @@ class MapEditor:
         if self._rope_scan_frames is not None:  # its frames are of the live minimap and must not add ropes to this map
             self._rope_scan_frames = None  # the pending tick of this collection sees that and stops
             self._setStatus("")  # "Finding ropes: ..." no longer says what is happening
+        self._setRopeNotice("")  # whatever it said was about the map this load replaces
         self.state.nodes = {n.local_id: n for n in nodes_list}
         self.state.rotation_order = list(rotation_order)
         self.state.selected_id = None
@@ -1232,15 +1426,19 @@ class MapEditor:
         self.state.add_rope_armed = False
         self.state.next_local_id = (max(self.state.nodes) + 1) if self.state.nodes else 1
         self.state.current_file = path
+        self._loaded_map = LoadedMap(rope_file_failed=not is_successful(rope_result), minimap_size=metadata.get('minimap_size'))
         if is_successful(rope_result):
             rope_file = rope_result.unwrap()
             self.state.ropes = list(rope_file.ropes)
             self.state.rope_extra = dict(rope_file.extra)
+            self.state.deleted_ropes = list(rope_file.deleted)
             self.state.rope_file_read = rope_file_existed  # assigned on every load: no stale flag from the last map
         else:
             self.state.ropes = []
             self.state.rope_extra = {}
+            self.state.deleted_ropes = []
             self.state.rope_file_read = False
+        self._known_ropes = list(self.state.ropes)  # the file's ropes are the ones seen; the old map's are not
         self._snapshotSavedBaseline()
         self._refreshInspector()
         self._refreshRopeBoxes()
@@ -1252,6 +1450,7 @@ class MapEditor:
                 f"{rope_result.failure()}\n\n{ROPE_FILE_NOT_LOADED_TEXT}",
                 parent=self.window,
             )
+        self._autoFindRopes()  # after the box, so the collection runs while the loaded map is in front
 
     def _okToClose(self):
         """Hooked to WM_DELETE_WINDOW via gui.py. Returns True if the window should be

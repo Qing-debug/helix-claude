@@ -192,3 +192,43 @@ def test_fossil_foundry_2_fixture_reads_back_as_the_two_measured_ropes():
     result = read_ropes(FIXTURE)
     assert is_successful(result)
     assert result.unwrap() == RopeFile((ROPE_46, ROPE_107), (162, 82), {})
+
+
+# -- the remembered deletions (AUTOFIND163 I2; Hong, rope163-1: "Remember deleted ropes in the map's rope file, so a rope
+# you delete stays deleted") ---------------------------------------------------------------------------------------------
+
+def test_deleted_ropes_round_trip_beside_the_ropes(tmp_path: Path):
+    path = tmp_path / "ff2.ropes.json"
+    written = RopeFile((ROPE_107,), (162, 82), {"platforms": [1]}, deleted=(ROPE_46,))
+    assert is_successful(write_ropes(path, written))
+    assert json.loads(path.read_text(encoding="utf-8"))["deleted_ropes"] == [{"x": 46, "top_y": 28, "bottom_y": 46}]
+    assert read_ropes(path).unwrap() == written
+
+
+def test_a_file_without_deleted_ropes_reads_as_none_and_is_written_without_the_key(tmp_path: Path):
+    path = tmp_path / "old.ropes.json"
+    path.write_text(json.dumps(GOOD), encoding="utf-8")  # a file as the editor wrote it before this key existed
+    assert read_ropes(path).unwrap().deleted == ()
+    write_ropes(path, read_ropes(path).unwrap())
+    assert "deleted_ropes" not in json.loads(path.read_text(encoding="utf-8"))  # no empty key added to every file
+
+
+def test_the_deleted_key_is_known_so_it_is_not_kept_as_an_unknown_one(tmp_path: Path):
+    path = tmp_path / "a.ropes.json"
+    path.write_text(json.dumps(_document(deleted_ropes=[{"x": 46, "top_y": 28, "bottom_y": 46}], platforms=[1])),
+                    encoding="utf-8")
+    loaded = read_ropes(path).unwrap()
+    assert loaded.deleted == (ROPE_46,) and loaded.extra == {"platforms": [1]}
+
+
+@pytest.mark.parametrize(("payload", "expected"), [
+    pytest.param(_document(deleted_ropes={"x": 1}), '"deleted_ropes" must be a list', id="not-a-list"),
+    pytest.param(_document(deleted_ropes=[{"top_y": 43, "bottom_y": 61}]), "deleted rope 1:", id="no-x"),
+    pytest.param(_document(deleted_ropes=[{"x": 4, "top_y": 61, "bottom_y": 43}]), '"top_y" must be less than',
+                 id="top-below-bottom"),
+])
+def test_a_bad_deleted_rope_is_refused_by_number_like_a_bad_rope(tmp_path: Path, payload: object, expected: str):
+    path = tmp_path / "bad.ropes.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = read_ropes(path)
+    assert not is_successful(result) and expected in result.failure() and str(path) in result.failure()

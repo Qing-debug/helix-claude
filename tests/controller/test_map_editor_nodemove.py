@@ -1,13 +1,14 @@
 """Moving a selected node with the arrow keys in the map editor (NODEMOVE159; Hong's request, 2026-11-12, QB240, QB241).
 
 With a node selected, Left/Right/Up/Down move it 1 minimap px and Shift+arrow 5 px; only `pos` changes. A press that lands in
-a rope keep-out still moves (red ring, Save blocked); a press that would leave the minimap does nothing; the keys do nothing
+a rope keep-out still moves (red ring, Save blocked); a press that would leave the minimap stops on the edge pixel (a Shift+arrow
+from 1-4 px short) or does nothing (a plain arrow, or any press from the edge pixel); the keys do nothing
 with no node selected or while the keyboard is in a number box.
 
 Like `test_map_editor_ropes.py` (whose fixture and helpers these tests share; there is no conftest.py under tests/), these build
 a real `MapEditor` on a real withdrawn Tk root and are skipped where Tk cannot open a display. A key goes through
-`press` below, which sends the real key event when Tk's focus allows it and otherwise runs the window's handler by hand, as
-`press_delete` does for the Delete key.
+`press` below, which sends the real key event when Tk's focus allows it and otherwise runs the window's own bound script for the
+key (`fire_bound`), so a wrong binding in `_bindArrowKeys` fails here.
 """
 import copy
 import tkinter as tk
@@ -34,14 +35,25 @@ STEPS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
 KEYS = tuple(STEPS)
 
 
+def fire_bound(window, sequence, widget):
+    """Run the window's own binding for `sequence` as Tk runs it for a key event whose widget is `widget`: the script that
+    `window.bind(sequence)` returns (it calls the lambda `_bindArrowKeys` registered), with the %-fields of a KeyPress. The
+    handler reads only `event.widget` (from %W) and the key's binding, so the step it moves by is whatever the binding says."""
+    script = str(window.bind(sequence))
+    command = script.split("[", 1)[1].split(" %#", 1)[0]  # the Tcl name of the registered function
+    keysym = sequence.strip("<>").split("-")[-1]
+    fields = ["1", "0", "1", "0", "0", "0", "0", "0", "0", "0", "", "0", keysym, "0", str(widget), "2", "0", "0", "0"]
+    window.tk.call(command, *fields)  # %#, %b, %f, %h, %k, %s, %t, %w, %x, %y, %A, %E, %K, %N, %W, %T, %X, %Y, %D
+
+
 def press(editor, key, shift=False, widget=None):
     """An arrow key (Shift+arrow when `shift`) typed with the keyboard in `widget` (by default the map canvas, which a click on
     the map gives the keyboard), through the widget's own bindings and then the window's.
 
     Never `focus_force` (it asks Windows for the foreground; see `press_delete` in test_map_editor_ropes.py). When Tk's focus is
     the widget after `focus_set`, send the real key event. Otherwise (inside one pytest process only the first Tk window gets
-    the keyboard from Windows) check that the window has the binding and runs after the widget's own and its class's, and call
-    the window's handler by hand with the widget as `event.widget`. Returns "key" or "call"."""
+    the keyboard from Windows) check that the window has the binding and runs after the widget's own and its class's, and run
+    the window's bound script for the key (`fire_bound`) with the widget as `event.widget`. Returns "key" or "call"."""
     window = editor.window
     window.update()
     widget = widget if widget is not None else editor.minimap_canvas
@@ -54,9 +66,7 @@ def press(editor, key, shift=False, widget=None):
     assert window.bind(sequence)
     tags = list(widget.bindtags())
     assert tags.index(widget.winfo_class()) < tags.index(str(window))
-    step = 5 if shift else 1
-    dx, dy = STEPS[key]
-    editor._onArrowKey(SimpleNamespace(widget=widget), dx * step, dy * step)
+    fire_bound(window, sequence, widget)
     return "call"
 
 
@@ -260,26 +270,40 @@ def test_shift_arrows_walk_a_node_through_a_keep_out_and_out_the_other_side(make
 # -- the edge of the minimap ---------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("start, key, shift, expected", [
-    # a press that would leave the minimap does nothing; it does not stop at the edge
+    # a press from the edge pixel that would leave the minimap does nothing, plain or Shift
     ((0, 10), "Left", False, (0, 10)),
     ((FRAME_W - 1, 10), "Right", False, (FRAME_W - 1, 10)),
     ((50, 0), "Up", False, (50, 0)),
     ((50, FRAME_H - 1), "Down", False, (50, FRAME_H - 1)),
-    ((3, 10), "Left", True, (3, 10)),
-    ((FRAME_W - 4, 10), "Right", True, (FRAME_W - 4, 10)),
-    ((50, 4), "Up", True, (50, 4)),
-    ((50, FRAME_H - 5), "Down", True, (50, FRAME_H - 5)),
-    # a press that stays inside moves, up to and including the edge pixel
+    ((0, 10), "Left", True, (0, 10)),
+    ((FRAME_W - 1, 10), "Right", True, (FRAME_W - 1, 10)),
+    ((50, 0), "Up", True, (50, 0)),
+    ((50, FRAME_H - 1), "Down", True, (50, FRAME_H - 1)),
+    # a Shift+arrow press 1-4 px short of the edge stops on the edge pixel (Hong, NODEMOVE160 M3); it is not refused
+    ((1, 10), "Left", True, (0, 10)),
+    ((3, 10), "Left", True, (0, 10)),
+    ((FRAME_W - 2, 10), "Right", True, (FRAME_W - 1, 10)),
+    ((FRAME_W - 4, 10), "Right", True, (FRAME_W - 1, 10)),
+    ((50, 1), "Up", True, (50, 0)),
+    ((50, 4), "Up", True, (50, 0)),
+    ((50, FRAME_H - 2), "Down", True, (50, FRAME_H - 1)),
+    ((50, FRAME_H - 5), "Down", True, (50, FRAME_H - 1)),
+    # a plain press from 1 px short of the edge moves onto it, and a plain press from further in moves 1 px
     ((1, 10), "Left", False, (0, 10)),
     ((FRAME_W - 2, 10), "Right", False, (FRAME_W - 1, 10)),
     ((50, 1), "Up", False, (50, 0)),
     ((50, FRAME_H - 2), "Down", False, (50, FRAME_H - 1)),
+    ((3, 10), "Left", False, (2, 10)),
+    ((FRAME_W - 4, 10), "Right", False, (FRAME_W - 3, 10)),
+    # a Shift+arrow press with 5 px or more of room moves the full 5 px, to the edge pixel or short of it
     ((5, 10), "Left", True, (0, 10)),
     ((FRAME_W - 6, 10), "Right", True, (FRAME_W - 1, 10)),
     ((50, 5), "Up", True, (50, 0)),
     ((50, FRAME_H - 6), "Down", True, (50, FRAME_H - 1)),
+    ((10, 10), "Left", True, (5, 10)),
 ])
-def test_a_press_that_would_leave_the_minimap_does_nothing(make_editor, tmp_path, start, key, shift, expected):
+def test_a_press_that_would_leave_the_minimap_stops_on_the_edge_pixel_or_does_nothing(
+        make_editor, tmp_path, start, key, shift, expected):
     rig = make_editor()
     editor = rig.editor
     load(rig, write_map(tmp_path / "m.csv", [start]))
