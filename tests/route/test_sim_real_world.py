@@ -243,5 +243,7 @@ def test_defaults_change_nothing():
     assert is_successful(result), result
     report = result.unwrap()
     # H87 (ROPE T1): no drops, every down move a teleport; was (366, 25, 21, 23) and 241.7168 s
-    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (366, 25, 0, 44)
-    assert round(report.sim_seconds, 4) == 237.9668
+    # C10 option B (ROPE158-C10B, b551c1e): the last leg of a lap lands at the rope-107 foot, where a no-op now takes the
+    # rope order (+3 rope moves in 3 laps, 2 jump-offs...); was (366, 25, 0, 44) and 237.9668 s
+    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (371, 17, 0, 47)
+    assert round(report.sim_seconds, 4) == 235.6265

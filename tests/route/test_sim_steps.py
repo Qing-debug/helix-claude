@@ -49,15 +49,18 @@ BOTH_NOISES = pytest.mark.parametrize("noise", [NoiseConfig(), OFFSETS], ids=["p
 # and mean_lap_s 14.926615. The two floats are ns counts over 1e9.
 PINNED_REPORT = dict(
     laps_requested=20, laps_completed=20, legs=141, legs_reached=141, stalls=0, timeouts=0, link_down=0,
-    known_cases={}, single_error_legs=37, single_error_within_3=37, multi_error_legs=8, multi_error_within_bound=8,
-    moves=355, no_ops=17, drops=0, teleport_downs=41,
-    sim_seconds=pytest.approx(228.6318, rel=1e-9), mean_lap_s=pytest.approx(11.43159, rel=1e-9),
+    known_cases={}, single_error_legs=43, single_error_within_3=43, multi_error_legs=5, multi_error_within_bound=5,
+    moves=371, no_ops=20, drops=0, teleport_downs=44,
+    sim_seconds=pytest.approx(237.642, rel=1e-9), mean_lap_s=pytest.approx(11.8821, rel=1e-9),
     knockbacks=0,  # the field OFFP141 T3 added to the report; no knockback noise in these runs
     off_map=0,     # the field OFFP141 T7 added (legs that ended off_map); none in these runs
     drop_only_edges=0,  # the field ROPE T1 added (H87); no rotation leg needs a drop
     rope_grabs=0,       # the field ROPE T5 added (H88); no grab noise in these runs and no drop over a rope
-    jump_offs=0,        # the field ROPE T7 added (H88); no rope grab in these runs, so nothing to jump off
+    jump_offs=2,        # the field ROPE T7 added (H88); no grab noise, but C10 option B: 2 laps' last leg takes the rope order at the foot
 )
+# C10 option B (ROPE158-C10B, b551c1e, cf94129): a no-op at the rope-107 foot takes the rope order, which moved this run from
+# single_error_legs 37, multi_error_legs 8, moves 355, no_ops 17, teleport_downs 41, sim_seconds 228.6318 and mean_lap_s
+# 11.43159 (jump_offs 0), and the judge bound (a no-op in a zone may cost the rope order) counts its legs as recovered.
 # H87 (ROPE T1): always teleport down when a teleport reaches. Before it this run had drops 25, teleport_downs 16,
 # sim_seconds 233.5318 and mean_lap_s 11.67659.
 # The same for NoiseConfig(node_offset_px=2): the shifted copy's draws must not move (moves 350 is the count RV-5 uses;
@@ -65,10 +68,12 @@ PINNED_REPORT = dict(
 # sim_seconds 314.927 and mean_lap_s 15.74635). Before H87 (ROPE T1) at 12.5 px/s it had drops 21, teleport_downs 19,
 # sim_seconds 253.9981 and mean_lap_s 12.699905.
 PINNED_OFFSET_REPORT = dict(
-    PINNED_REPORT, single_error_legs=38, single_error_within_3=38, multi_error_legs=5, multi_error_within_bound=5,
-    moves=350, no_ops=20, drops=0, teleport_downs=40,
-    sim_seconds=pytest.approx(249.8481, rel=1e-9), mean_lap_s=pytest.approx(12.492405, rel=1e-9),
+    PINNED_REPORT, single_error_legs=40, single_error_within_3=40, multi_error_legs=6, multi_error_within_bound=6,
+    moves=356, no_ops=19, drops=0, teleport_downs=44,
+    sim_seconds=pytest.approx(252.6421, rel=1e-9), mean_lap_s=pytest.approx(12.632105, rel=1e-9), jump_offs=1,
 )
+# Before C10 option B: single_error_legs 38, multi_error_legs 5, moves 350, no_ops 20, teleport_downs 40, sim_seconds
+# 249.8481, mean_lap_s 12.492405, jump_offs 0.
 
 
 def _run(laps=20, seed=1, **kwargs):

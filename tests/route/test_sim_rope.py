@@ -373,8 +373,10 @@ def test_link_reads_only_an_arrow_then_alt_as_a_jump_off(steps, kind):
 # --- 5. run_sim -------------------------------------------------------------------------------------------------
 
 
-SMOKE = (366, 25, 0, 44, 237.9668)       # moves, no-ops, drops, teleports down, simulated seconds (Task 1)
-REAL = (352, 22, 0, 42, 237.7692)        # the same on the real ground (Task 1)
+SMOKE = (371, 17, 0, 47, 235.6265)       # moves, no-ops, drops, teleports down, simulated seconds; (366, 25, 0, 44, 237.9668)
+#                                       # at Task 1, moved by C10 option B (a no-op at the rope-107 foot takes the rope order)
+PRE_C10_SMOKE = (366, 25, 0, 44, 237.9668)   # the same run with no rope file beside the map: the walker has no zones
+REAL = (358, 22, 0, 46, 235.2635)        # the same on the real ground; (352, 22, 0, 42, 237.7692) before C10 option B moved it
 
 
 def _figures(report):
@@ -382,8 +384,8 @@ def _figures(report):
 
 
 def test_defaults_change_nothing_here(tmp_path):
-    """The rope file is present and the knobs are off: Task 1's figures, no grab, though the walker now knows the zones.
-    The same with the file hidden. The real ground's preset has the rope knob on since Task 6 (its own figures are
+    """The rope file is present and the knobs are off: no grab, though the walker now knows the zones (the figures moved
+    by C10 option B, see `SMOKE`). With the file hidden the run is Task 1's, unmoved. The real ground's preset has the rope knob on since Task 6 (its own figures are
     pinned in `test_sim_real_ground.py`), so its half of this test turns the knob off."""
     result = run_sim(CSV, DEFAULT_TERRAIN, 20, 2)
     assert is_successful(result), result
@@ -398,7 +400,9 @@ def test_defaults_change_nothing_here(tmp_path):
     assert not rope_file_for(hidden).exists()
     again = run_sim(hidden, DEFAULT_TERRAIN, 20, 2)
     assert is_successful(again), again
-    assert dataclasses.asdict(again.unwrap()) == dataclasses.asdict(result.unwrap())
+    # C10 option B: a no-op on a placed read in a rope zone takes the rope order only with a rope file, so the hidden run is
+    # the pre-C10 run (the figures the file-present run had at Task 1), not the file-present run it used to be equal to.
+    assert _figures(again.unwrap()) == PRE_C10_SMOKE and again.unwrap().rope_grabs == 0
 
 
 def test_a_bad_rope_file_is_the_runs_failure(tmp_path):
@@ -421,25 +425,27 @@ def test_node_offsets_do_not_move_the_marks():
 
 
 def test_a_recovery_replay_that_starts_on_a_rope_is_not_recovered_and_not_a_crash(monkeypatch):
-    """ROPE154-R6 m2: with node offsets of 2 px and the grab knob at 1.0 (the mix the test above says times out), a leg
-    ends with the character still on a rope, and the next leg's noise-off replay starts there. A world cannot start off
-    every platform surface, so that replay used to raise ValueError out of `run_sim`. Now it has no replay, and its leg
-    counts as a leg with errors that did not recover."""
+    """ROPE154-R6 m2: a leg can end with the character hanging on a rope, and the next leg's noise-off replay starts
+    there. A world cannot start off every platform surface, so that replay used to raise ValueError out of `run_sim`. Now
+    it has no replay, and its leg counts as a leg with errors that did not recover. Since C10 option B the walker leaves
+    every rope it can, so no run ends a leg on one any more (measured: 3 laps, offsets 2, grab 1.0, seeds 0-7: no replay
+    with a None start): the first replay of an ordinary run is started at (106, 48), the middle of rope 107 (the old
+    leftover), through the real `_replay_moves`, so the constructor's refusal is what returns None."""
     replays = []
     real = sim_run._replay_moves
 
-    def spy(*args):
-        replays.append(real(*args))
+    def spy(rg, rotation, terrain, sim_params, rec, number, start, ropes):
+        replays.append(real(rg, rotation, terrain, sim_params, rec, number, (106, 48) if not replays else start, ropes))
         return replays[-1]
 
     monkeypatch.setattr(sim_run, "_replay_moves", spy)
-    result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2, noise=NoiseConfig(node_offset_px=2, rope_grab_p=1.0))
+    result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2)
     assert is_successful(result), result
     report = result.unwrap()
-    assert replays.count(None) >= 1
+    assert replays[0] is None and replays.count(None) == 1
     not_recovered = ((report.single_error_legs - report.single_error_within_3)
                      + (report.multi_error_legs - report.multi_error_within_bound))
-    assert not_recovered >= replays.count(None)
+    assert not_recovered >= 1
 
 
 def test_every_recovery_replay_walker_gets_the_rope_zones_as_the_run_walker_does(monkeypatch):
@@ -497,13 +503,15 @@ def test_rope_grab_run_recovers():
 
 def test_jump_offs_are_the_walkers_jump_off_moves():
     """Task 7: `SimReport.jump_offs` counts the walker's moves of kind `jump_off`. Half the moves doing nothing makes a
-    blink up from a rope fail twice now and then, so the order reaches its jump off (seed 1: 1 grab, 1 jump off); the count
-    equals the observer's `planned` events of that kind, and the quiet default run has none."""
+    blink up from a rope fail twice now and then, so the order reaches its jump off (seed 1: 2 grabs, 7 jump offs, and
+    every leg still reached since C10 option B, ROPE158-C10B-p2-D1: an order used up on a placed read starts again; it was
+    1 grab, 1 jump off, 0 off map before C10); the count equals the observer's `planned` events of that kind, and the quiet
+    default run has none."""
     rec = Rec()
     result = run_sim(CSV, DEFAULT_TERRAIN, 5, 1, noise=NoiseConfig(no_op_p=0.5, rope_grab_p=0.5), observer=rec)
     assert is_successful(result), result
     report = result.unwrap()
-    assert (report.rope_grabs, report.jump_offs, report.off_map, report.laps_completed) == (1, 1, 0, 5)
+    assert (report.rope_grabs, report.jump_offs, report.off_map, report.laps_completed) == (2, 7, 0, 5)
     assert report.jump_offs == len([e for e in rec.of("planned") if e[3] == "jump_off"])
     quiet = run_sim(CSV, DEFAULT_TERRAIN, 2, 1).unwrap()
     assert quiet.jump_offs == 0
