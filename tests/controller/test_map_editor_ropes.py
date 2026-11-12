@@ -52,7 +52,8 @@ def _open_root():
 @pytest.fixture
 def make_editor(monkeypatch):
     """`make()` -> a rig (a second `make()` in one test is a second editor window on the same root): `.editor`, `.dialogs` (what the patched boxes were shown and what they answer), `.scheduled`
-    (the recorded `after` calls). Every box is patched: errors and infos are recorded, `askyesno` (the damaged-rope-file
+    (the recorded `after` calls). The editor's own find (at open and after a load, AUTOFIND162) is off unless `make(auto_find=True)`,
+    so the tests of the Find ropes button and of the loads see only what they do themselves. Every box is patched: errors and infos are recorded, `askyesno` (the damaged-rope-file
     question) answers `dialogs.yes_answer`, `askyesnocancel` (the unsaved-changes box) answers Discard, `askokcancel`
     (the save warnings) answers OK; the file dialogs return `dialogs.open_path` and `dialogs.save_path`."""
     roots = []  # one root per test: a second Tk root would break the first one's PhotoImages (the default root)
@@ -73,7 +74,7 @@ def make_editor(monkeypatch):
     monkeypatch.setattr(map_editor.filedialog, "askopenfilename", lambda **kw: dialogs.open_path)
     monkeypatch.setattr(map_editor.filedialog, "asksaveasfilename", lambda **kw: dialogs.save_path)
 
-    def make(frame=PLAIN):
+    def make(frame=PLAIN, auto_find=False):
         shared = SimpleNamespace(
             minimap_frame_lock=threading.Lock(),
             minimap_frame=np.full((FRAME_H, FRAME_W, 3), BACKGROUND, dtype=np.uint8) if frame is PLAIN else frame,
@@ -81,7 +82,7 @@ def make_editor(monkeypatch):
         if not roots:
             roots.append(_open_root())
         root = roots[0]
-        editor = map_editor.MapEditor(root, Controller(sharedInfo=shared), shared)
+        editor = map_editor.MapEditor(root, Controller(sharedInfo=shared), shared, auto_find_ropes=auto_find)
         return SimpleNamespace(editor=editor, dialogs=dialogs, scheduled=scheduled)
 
     yield make

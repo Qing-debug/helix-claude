@@ -21,7 +21,8 @@ from PIL import Image, ImageTk
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
-from src.controller.rope_file import RopeFile, RopeMark, free_x, near_rope_end, read_ropes, rope_file_for, write_ropes
+from src.controller.rope_file import (KEEP_OUT_X_PX, KEEP_OUT_Y_PX, RopeFile, RopeMark, free_x, near_rope_end, read_ropes,
+                                      rope_file_for, write_ropes)
 from src.controller.rope_finder import SAME_ROPE_PX, find_ropes, median_frame
 from returns.pipeline import is_successful
 
@@ -79,6 +80,32 @@ ADD_ROPE_BOTTOM_TEXT = "Now click its bottom end, where a node on the platform b
 MINIMAP_NOT_FOUND_TEXT = "Minimap not found yet"
 ROPE_BOX_LABELS = {"x": "x", "top_y": "top y", "bottom_y": "bottom y"}
 
+# The find that runs by itself (AUTOFIND162; Hong, 2026-11-12: "the attempt to find ropes should ways be done no matter what
+# and its implications should be displayed fom the tget go as opposed to me needing to click find ropes"). Its notice sits
+# under the status line and, unlike the status line, is not cleared by a click.
+ROPE_FINDING_NOTICE = "Finding ropes on the minimap (3 seconds)..."
+ROPE_HINT_TEXT = ("A character standing still on a rope can hide it from the find. Move the character, then press "
+                  "Find ropes if a rope seems missing.")
+ROPE_NOTICE_BG = '#fff2b3'     # pale yellow, so it reads as a notice and not as a second status line
+ROPE_NOTICE_FG = '#5c2a00'
+
+
+def ropeFindNotice(found: int, added: List[RopeMark]) -> str:
+    """The notice after a find that ended: `found` ropes seen on the minimap, `added` of them new to the map. It says what
+    was added, what that means for placing nodes and for Save, that a wrong rope can be deleted and that nothing is written
+    before Save; the hint about a character standing still on a rope is always the last line."""
+    if found == 0:
+        result = "No rope found on the minimap."
+    elif not added:
+        result = f"Found {found} rope{'' if found == 1 else 's'} on the minimap, all already marked in this map."
+    else:
+        where = ", ".join(f"x {mark.x}" for mark in added)
+        result = (f"Added {len(added)} rope{'' if len(added) == 1 else 's'} found on the minimap ({where}). "
+                  f"Nodes within {KEEP_OUT_X_PX} px sideways and {KEEP_OUT_Y_PX} px of where a rope meets a platform are "
+                  "refused and ringed red, and Save is blocked until they are moved. A wrong rope can be deleted: select "
+                  "it and press Delete. Ropes are written only when you press Save.")
+    return f"{result}\n{ROPE_HINT_TEXT}"
+
 # Arrow keys move the selected node (NODEMOVE159; Hong, 2026-11-12, QB240, QB241).
 NODE_MOVE_PX = 1               # native px per arrow press
 NODE_MOVE_SHIFT_PX = 5         # native px per Shift+arrow press
@@ -114,15 +141,18 @@ class MapEditorState:
 
 
 class MapEditor:
-    def __init__(self, parent_tk, controller, sharedInfo):
+    def __init__(self, parent_tk, controller, sharedInfo, *, auto_find_ropes: bool = True):
         """
         parent_tk:   the main GUI's tk.Tk instance (used as Toplevel parent).
         controller:  shared Controller; the editor uses controller.agent (buildPathGraphFor, characterClass, the edge
                      tolerance levels). It never looks for the character itself.
         sharedInfo:  shared minimap-frame buffer + lock.
+        auto_find_ropes: the editor runs the rope find by itself, once when its canvas is built and once after every
+                     successful load (AUTOFIND162). Tests turn it off so a window starts no scan of its own.
         """
         self.controller = controller
         self.sharedInfo = sharedInfo
+        self._auto_find_ropes = auto_find_ropes
         self.state = MapEditorState()
 
         # Saved baseline for state-comparison dirty tracking. Deep-copied on save/load so
@@ -139,6 +169,7 @@ class MapEditor:
         self._rope_scan_frames: Optional[List[np.ndarray]] = None
         self._rope_scan_ticks = 0
         self._rope_scan_generation = 0
+        self._rope_scan_auto = False  # the collection in flight (or last run) was started by the editor, not the button
 
         self.window = tk.Toplevel(parent_tk)
         self.window.title("Map Editor — untitled")
@@ -190,8 +221,17 @@ class MapEditor:
         )
         self._status_label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX)
 
+        # The rope notice (AUTOFIND162): what the find saw, what it means, the hint. Not packed until it has text, then
+        # packed right under the status line, so it is on screen without scrolling the panel. `_setRopeNotice` is its
+        # one writer.
+        self._rope_notice_label = tk.Label(
+            self.window, text="", anchor='nw', justify=tk.LEFT, wraplength=WINDOW_INITIAL_WIDTH - 2 * PANEL_PADX - 12,
+            bg=ROPE_NOTICE_BG, fg=ROPE_NOTICE_FG, font=self._font_body, relief=tk.SOLID, borderwidth=1, padx=6, pady=4,
+        )
+
         panel_outer = tk.Frame(self.window, bg='lightblue')
         panel_outer.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+        self._panel_outer = panel_outer  # `_setRopeNotice` packs the notice before it, which is right under the status line
 
         self._panel_canvas = tk.Canvas(
             panel_outer, bg='lightblue', highlightthickness=0, borderwidth=0,
@@ -431,6 +471,7 @@ class MapEditor:
         self._bindArrowKeys()
         self._refreshInspector()  # start with empty inspector since no node is selected yet
         self._refreshRotation()
+        self._autoFindRopes()  # the one find per open, now that there is a minimap to look at
 
     def _onPlacementChange(self):
         self.state.placement_nodetype = self._placement_var.get()
@@ -825,10 +866,11 @@ class MapEditor:
         self._refreshRopeBoxes()
         self._renderNodes()
 
-    def _findRopes(self):
+    def _findRopes(self, auto=False):
         """The Find ropes button: collect ROPE_SCAN_FRAMES minimap frames, one every ROPE_SCAN_EVERY_MS through the
         window's `after`, then find the ropes in their per-pixel median (`_onRopeScanTick`). Pressed while collecting,
-        it does nothing; before the minimap canvas exists it only says so."""
+        it does nothing; before the minimap canvas exists it only says so. `auto` marks the editor's own find
+        (`_autoFindRopes`): it differs only at the end, in `_finishRopeScan`."""
         if self.minimap_canvas is None:
             self._setStatus(MINIMAP_NOT_FOUND_TEXT)
             return
@@ -837,8 +879,27 @@ class MapEditor:
         self._rope_scan_generation += 1
         self._rope_scan_frames = []
         self._rope_scan_ticks = 0
+        self._rope_scan_auto = auto
         self._setStatus(FIND_ROPES_TEXT)
+        self._setRopeNotice(f"{ROPE_FINDING_NOTICE}\n{ROPE_HINT_TEXT}")
         self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, self._rope_scan_generation)
+
+    def _autoFindRopes(self):
+        """The find the editor starts by itself (AUTOFIND162): when its canvas is built and after every successful
+        load. Same collection as the button, same add-only rule (`_finishRopeScan`). With no canvas yet it does nothing
+        and says nothing: the canvas's own build ends in this call. Off when the editor was made with
+        `auto_find_ropes=False`."""
+        if self._auto_find_ropes and self.minimap_canvas is not None:
+            self._findRopes(auto=True)
+
+    def _setRopeNotice(self, text: str) -> None:
+        """Write the rope notice under the status line; no text takes the label off the window."""
+        label = self._rope_notice_label
+        label.config(text=text)
+        if text and not label.winfo_manager():
+            label.pack(side=tk.TOP, fill=tk.X, padx=PANEL_PADX, pady=(0, 4), before=self._panel_outer)
+        elif not text and label.winfo_manager():
+            label.pack_forget()
 
     def _onRopeScanTick(self, generation):
         """One step of the collection numbered `generation`. The frame is copied under `minimap_frame_lock` into a local
@@ -857,21 +918,32 @@ class MapEditor:
             self.window.after(ROPE_SCAN_EVERY_MS, self._onRopeScanTick, generation)
             return
         self._rope_scan_frames = None
-        self._finishRopeScan(frames)
+        self._finishRopeScan(frames, self._rope_scan_auto)
 
-    def _finishRopeScan(self, frames):
+    def _finishRopeScan(self, frames, auto=False):
+        """The end of a collection: add the ropes in the median of its frames that no earlier mark is within SAME_ROPE_PX
+        of (only adds: a saved mark is never touched), say so in the status line and in the notice. The added ropes make
+        the editor dirty and are written only by a save. The one exception is the editor's own find (`auto`) on an
+        untitled map with no nodes: it has nothing of his to lose and no file to save the ropes to, so the ropes it adds
+        join the saved baseline and the map stays clean, until he changes something (AUTOFIND162; Hong: "Only when I
+        press Save")."""
         median = median_frame(frames)
         if not is_successful(median):
             self._setStatus(median.failure())
+            self._setRopeNotice(f"Rope find failed: {median.failure()}\n{ROPE_HINT_TEXT}")
             return
         found = find_ropes(median.unwrap())
         marked = list(self.state.ropes)  # a found rope is skipped only when an earlier mark is that close, not one found now
         added = [rope for rope in found if all(abs(rope.x - mark.x) > SAME_ROPE_PX for mark in marked)]
         self.state.ropes.extend(added)
+        if auto and self.state.current_file is None and not self.state.nodes:
+            self._saved_ropes = self._saved_ropes + added  # an edit of his own to the ropes still differs from this
         if len(found) == 0:
             self._setStatus("Found no rope")
         else:
-            self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s"))
+            new = "" if len(added) == len(found) else (f", {len(added)} new" if added else ", none new")
+            self._setStatus(f"Found {len(found)} rope" + ("" if len(found) == 1 else "s") + new)
+        self._setRopeNotice(ropeFindNotice(len(found), added))
         self._recomputeDirty()
         self._renderNodes()
 
@@ -1229,6 +1301,7 @@ class MapEditor:
         if self._rope_scan_frames is not None:  # its frames are of the live minimap and must not add ropes to this map
             self._rope_scan_frames = None  # the pending tick of this collection sees that and stops
             self._setStatus("")  # "Finding ropes: ..." no longer says what is happening
+        self._setRopeNotice("")  # whatever it said was about the map this load replaces
         self.state.nodes = {n.local_id: n for n in nodes_list}
         self.state.rotation_order = list(rotation_order)
         self.state.selected_id = None
@@ -1257,6 +1330,7 @@ class MapEditor:
                 f"{rope_result.failure()}\n\n{ROPE_FILE_NOT_LOADED_TEXT}",
                 parent=self.window,
             )
+        self._autoFindRopes()  # after the box, so the collection runs while the loaded map is in front
 
     def _okToClose(self):
         """Hooked to WM_DELETE_WINDOW via gui.py. Returns True if the window should be
