@@ -10,7 +10,7 @@ What these tests pin (pass/fail, `==` and `is`, no tolerance anywhere):
   rebuilt graph.
 - (2) S3: for every `planned` event the preview's cost to go, `toward` and first move equal the logged ones (a coin-flip
   down is one of the two options); a `reached` event is an arrived preview; a `no_plan` event is a preview Failure with
-  the logged message (none occurs in either run today).
+  the logged message (none occurs in either run today); a rope move (`toward` None, C10 option B) is skipped.
 - (3) S3b, the pass/fail part (RV3-D5 A2): `s3b_problems` is empty for every `planned` event, i.e. each later hop equals
   `next_move` at the landing it starts from and the preview from the earlier landing gives exactly the rest.
 
@@ -57,8 +57,8 @@ TERRAIN = FIXTURES / "ff2_terrain.json"
 
 LAPS, SEED = 20, 1
 # The moves of each run: the 20-lap seed-1 runs, re-pinned at 12.5 px/s (H81) (`PINNED_REPORT` and `PINNED_OFFSET_REPORT` in
-# test_sim_steps.py; spec 7 gave 379 and 356 at 8 px/s).
-MOVES = {"plain": 355, "offset": 350}
+# test_sim_steps.py; spec 7 gave 379 and 356 at 8 px/s). Re-pinned again at C10 option B (355 and 350 before it).
+MOVES = {"plain": 371, "offset": 356}
 
 Pos = tuple[int, int]
 
@@ -152,7 +152,7 @@ def test_1_the_runs_read_back_whole_with_the_planned_counts_and_every_position_a
         assert events[-1].ev == "end" and events[-1].data["reason"] == "max_laps", run.name
         counts = {ev: sum(e.ev == ev for e in events) for ev in ("planned", "no_plan", "reached")}
         assert counts["planned"] == run.report.moves == MOVES[run.name], (run.name, counts, run.report.moves)
-        toward = [e.data["toward"] for e in events if e.ev == "planned"]
+        toward = [e.data["toward"] for e in events if e.ev == "planned" and e.data["toward"] is not None]  # not a rope move
         assert all(pos in run.by_pos for pos in toward), run.name
         coin = sum(len(pv.hops[0].options) == 2 for _, _, _, pv in _planned(run))
         print(f"inputs ({run.name}): planned {counts['planned']}, no_plan {counts['no_plan']}, "
@@ -162,6 +162,7 @@ def test_1_the_runs_read_back_whole_with_the_planned_counts_and_every_position_a
 # (2)
 def test_2_s3_the_preview_agrees_with_every_logged_event_exactly(runs):
     problems: list[str] = []
+    rope_moves: list[str] = []
     for run in runs:
         for i, ev, target in _steps(run.steps.events, run.by_pos):
             where, got = _where(run, i, ev, target), run.previews[i]
@@ -179,6 +180,11 @@ def test_2_s3_the_preview_agrees_with_every_logged_event_exactly(runs):
                 if not pv.arrived:
                     problems.append(f"{where}: logged reached, the preview is not arrived")
                 continue
+            if ev.data["toward"] is None:
+                # a rope move (C10 option B: a no-op at the rope-107 foot takes the rope order) is the walker's, not the
+                # planner's, and its logged cost is the leg's best so far: there is nothing for the preview to equal
+                rope_moves.append(ev.data["kind"])
+                continue
             logged = ev.data["cost_to_go_s"]
             if pv.arrived or not pv.hops:
                 problems.append(f"{where}: logged planned, the preview is arrived or has no hops")
@@ -193,6 +199,7 @@ def test_2_s3_the_preview_agrees_with_every_logged_event_exactly(runs):
             if _logged_move(ev) not in hop.options:
                 problems.append(f"{where}: logged move {_logged_move(ev)}, hop 1 offers {hop.options}")
     _assert_none(problems, "S3 over both sim runs")
+    assert rope_moves and set(rope_moves) <= {"teleport", "jump_off"}, rope_moves   # the runs do take the rope order now
 
 
 # (3)

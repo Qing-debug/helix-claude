@@ -116,7 +116,7 @@ def test_6_a_known_case_that_is_not_a_rotation_leg_is_never_attempted_and_fails(
 def _good_report(**changes):
     report = SimReport(
         laps_requested=10, laps_completed=10, legs=71, legs_reached=71, stalls=0, timeouts=0, link_down=0,
-        known_cases={}, single_error_legs=100, single_error_within_3=99, multi_error_legs=0,
+        known_cases={}, single_error_legs=100, single_error_within_bound=99, multi_error_legs=0,
         multi_error_within_bound=0, moves=1000, no_ops=50, drops=1, teleport_downs=1, sim_seconds=1.0,
         mean_lap_s=0.1,
     )
@@ -131,10 +131,10 @@ def test_judge_passes_a_good_report_and_says_none_listed_without_known_cases():
 
 
 @pytest.mark.parametrize("changes, minimum, ok", [
-    (dict(single_error_legs=0, single_error_within_3=0), 0, True),     # 0/0 passes only with a minimum of 0
-    (dict(single_error_legs=0, single_error_within_3=0), 1, False),
-    (dict(single_error_legs=100, single_error_within_3=98), 100, False),
-    (dict(single_error_legs=99, single_error_within_3=99), 100, False),  # too few single-error legs
+    (dict(single_error_legs=0, single_error_within_bound=0), 0, True),     # 0/0 passes only with a minimum of 0
+    (dict(single_error_legs=0, single_error_within_bound=0), 1, False),
+    (dict(single_error_legs=100, single_error_within_bound=98), 100, False),
+    (dict(single_error_legs=99, single_error_within_bound=99), 100, False),  # too few single-error legs
     (dict(multi_error_legs=100, multi_error_within_bound=99), 100, True),
     (dict(multi_error_legs=100, multi_error_within_bound=98), 100, False),
 ])
@@ -227,7 +227,7 @@ def test_run_counts_are_consistent_with_the_lap_structure():
     assert report.legs_reached == report.legs
     assert report.no_ops < report.moves
     assert report.single_error_legs + report.multi_error_legs <= report.legs
-    assert report.single_error_within_3 <= report.single_error_legs
+    assert report.single_error_within_bound <= report.single_error_legs
     assert report.multi_error_within_bound <= report.multi_error_legs
 
 

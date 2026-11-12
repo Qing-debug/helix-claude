@@ -205,6 +205,7 @@ class RouteWalker:
         still = _Stillness()  # the character cannot be placed on the map: how long it has read the same
         rope_at: int | None = None  # the rope the last rope move was for (an index into the zones), None before one
         rope_tries = 0  # how many moves of rope_move's order have been sent for it
+        sent_from: tuple[int, int] | None = None  # the read the last move was sent from; the same read again: no-op
 
         while True:
             if self._stop.is_set():  # 1
@@ -230,11 +231,18 @@ class RouteWalker:
                     self._emit(self._observer.read_failed, read_ns, read.failure())
                 clock.sleep(params.poll_s)
                 continue
-            pos = read.unwrap()
+            pos = read_pos = read.unwrap()
 
             planned = next_move(self._rg, pos, dst, self._rng)  # 5
             on_rope = False  # the move below is a rope move: it is not the planner's, and it is not progress
-            if not is_successful(planned):
+            rope = None  # the marked rope this pass gives the rope rule's move for, if any
+            if is_successful(planned):
+                if pos == sent_from:  # the move sent from this very read left it the same: it did nothing (C10, H93)
+                    rope = self._ropes.at(pos)  # asked only after a no-op: a placed read that moved costs no lookup
+                if rope is None:
+                    still.reset()
+                    rope_at, rope_tries = None, 0
+            else:
                 off_graph += 1
                 if self._observer is not None:
                     self._emit(self._observer.no_plan, read_ns, pos, planned.failure())
@@ -244,40 +252,42 @@ class RouteWalker:
                     clock.sleep(params.poll_s)
                     continue
                 rope = self._ropes.at(pos)  # only now: a read the map places never asks the zones
-                if rope is not None:  # on a marked rope (H88)
-                    if still.see(pos, read_ns) < params.rope_still_s:
-                        clock.sleep(params.poll_s)
-                        continue
-                    if rope != rope_at:
-                        rope_at, rope_tries = rope, 0
-                    mark = self._ropes.mark(rope)
-                    rope_choice = rope_move(mark, pos, dst, rope_tries, self._rg.reach_v, params.rope_blink_tries)
-                    if rope_choice is None:
-                        self._log_line(f"the character is on the rope at x {mark.x}, at ({pos[0]}, {pos[1]}), and "
-                                       "could not get off it; ending the run")
-                        outcome = LegOutcome.OFF_MAP
-                        break
+            if rope is not None:  # on a marked rope (H88), or a placed read there that a move left unchanged (C10)
+                if still.see(pos, read_ns) < params.rope_still_s:
+                    clock.sleep(params.poll_s)
+                    continue
+                if rope != rope_at:
+                    rope_at, rope_tries = rope, 0
+                mark = self._ropes.mark(rope)
+                rope_choice = rope_move(mark, pos, dst, rope_tries, self._rg.reach_v, params.rope_blink_tries)
+                if rope_choice is None and is_successful(planned):
+                    # the order is used up, but the map places this read: the run goes on (ROPE158-C10B-p2-D1). The order
+                    # starts again and the planner's move is sent; a read the map cannot place still ends the run below.
+                    rope_at, rope_tries = None, 0
+                elif rope_choice is None:
+                    self._log_line(f"the character is on the rope at x {mark.x}, at ({pos[0]}, {pos[1]}), and "
+                                   "could not get off it; ending the run")
+                    outcome = LegOutcome.OFF_MAP
+                    break
+                else:
                     rope_tries += 1
                     planned = Success(Decision(rope_choice, best if math.isfinite(best) else 0.0, None))
                     on_rope = True
-                else:
-                    if still.see(pos, read_ns) < params.standing_s:
-                        clock.sleep(params.poll_s)
-                        continue
-                    snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
-                    if not is_successful(snapped):
-                        self._log_line(f"the character is {snapped.failure()}; ending the run")
-                        outcome = LegOutcome.OFF_MAP
-                        break
-                    pos = snapped.unwrap()
-                    rope_at, rope_tries = None, 0  # standing on a platform line: off the rope, so its order starts again
-                    planned = next_move(self._rg, pos, dst, self._rng)
-                    if not is_successful(planned):
-                        clock.sleep(params.poll_s)
-                        continue
-            else:
-                still.reset()
-                rope_at, rope_tries = None, 0
+            elif not is_successful(planned):
+                if still.see(pos, read_ns) < params.standing_s:
+                    clock.sleep(params.poll_s)
+                    continue
+                snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
+                if not is_successful(snapped):
+                    self._log_line(f"the character is {snapped.failure()}; ending the run")
+                    outcome = LegOutcome.OFF_MAP
+                    break
+                pos = snapped.unwrap()
+                rope_at, rope_tries = None, 0  # standing on a platform line: off the rope, so its order starts again
+                planned = next_move(self._rg, pos, dst, self._rng)
+                if not is_successful(planned):
+                    clock.sleep(params.poll_s)
+                    continue
             decision = planned.unwrap()
             move = decision.move
             if move is None:
@@ -305,6 +315,9 @@ class RouteWalker:
             sent = execute(self._layer, move, stimulus_ns)
             failure = None if is_successful(sent) else sent.failure()
             still.reset()  # a move was sent: a no-op needs another 0.5 s in a row before the next loose attach
+            # the read, not a snapped point: the next read is compared with it. A send that failed pressed no key, so
+            # the same read after it is not a move that did nothing (C10 option B, ROPE159-C10B-F1 M3)
+            sent_from = read_pos if failure is None else None
             if self._observer is not None:
                 self._emit(self._observer.sent, clock.now_ns(), *_sent_values(sent))
             entry = MoveEntry(

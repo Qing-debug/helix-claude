@@ -127,10 +127,15 @@ class SimLink:
         return Success(SendReport(seq, now, now, None, now, None, Done(seq, DoneStatus.OK, None, 0, 0, ())))
 
 
+def read_of(pos: tuple[float, float], params: SimParams) -> tuple[int, int]:
+    """What the walker reads for a character at world position `pos`: rounded to ints, the dot drawn
+    `dot_above_foot_px` above the foot, then moved down by `foot_from_dot` (the default reads the rounded foot)."""
+    x, y = pos
+    return foot_from_dot((round(x), round(y) - params.dot_above_foot_px))
+
+
 class SimPositionSource:
-    """The world's position at the clock's time as the walker reads it: rounded to ints, the dot drawn
-    `dot_above_foot_px` above the foot, then moved down by `foot_from_dot` (the default reads the rounded foot);
-    `Failure("miss")` with `miss_p`."""
+    """The world's position at the clock's time as the walker reads it (`read_of`); `Failure("miss")` with `miss_p`."""
 
     def __init__(self, world: SimWorld, clock: SimClock, miss_p: float, rng: np.random.Generator) -> None:
         self.world = world
@@ -141,5 +146,4 @@ class SimPositionSource:
     def read(self) -> Result[tuple[int, int], str]:
         if self.rng.random() < self.miss_p:
             return Failure("miss")
-        x, y = self.world.position_at(self.clock.now_ns())
-        return Success(foot_from_dot((round(x), round(y) - self.world.params.dot_above_foot_px)))
+        return Success(read_of(self.world.position_at(self.clock.now_ns()), self.world.params))
