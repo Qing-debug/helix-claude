@@ -89,6 +89,13 @@ ROPE_HINT_TEXT = ("A character standing still on a rope can hide it from the fin
 # Shown instead of a find when the editor must not run one for the map it just loaded (AUTOFIND163).
 ROPE_SKIP_DAMAGED_TEXT = ("No automatic find after this load: the map's rope file could not be read, and a find would let "
                           "Save replace that file without asking first. Press Find ropes to look anyway.")
+# AUTOFIND163 M3: the one thing a map file keeps about the minimap it was made on is its `# minimap_size=` line, so a find after
+# a load runs only when that line is there and is the live minimap's size.
+ROPE_SKIP_NO_SIZE_TEXT = ("No automatic find after this load: the map file does not say which minimap size it was made on, so "
+                          "the editor cannot tell whether the game is showing this map. Press Find ropes to look on the live "
+                          "minimap.")
+ROPE_SKIP_OTHER_SIZE_TEXT = ("No automatic find after this load: the map was made on a different minimap size than the live "
+                             "one. Press Find ropes to look anyway.")
 ROPE_NOTICE_BG = '#fff2b3'     # pale yellow, so it reads as a notice and not as a second status line
 ROPE_NOTICE_FG = '#5c2a00'
 
@@ -164,6 +171,7 @@ class LoadedMap:
     """What the last successful load told the editor about the map, for deciding whether the editor's own find may run
     for it (`_ropeFindSkipReason`)."""
     rope_file_failed: bool   # the map's rope file existed but could not be read (the load opened the nodes with no ropes)
+    minimap_size: Optional[Tuple[int, int]]  # the CSV's `# minimap_size=` line (native px); None for a legacy CSV without one
 
 
 class MapEditor:
@@ -933,10 +941,23 @@ class MapEditor:
         """The notice text for why the editor's own find must not run for the map loaded now, or "" when it may. It
         reads what the load stored, so it also holds when the load came before the canvas and the canvas's build asks.
         A map whose rope file could not be read: ropes found now would fill `state.ropes`, and the Save after that
-        would replace the damaged file without asking Hong's question first (AUTOFIND163 I1, QB236)."""
+        would replace the damaged file without asking Hong's question first (AUTOFIND163 I1, QB236). A map that cannot say
+        it belongs to the minimap on screen: the find samples the live minimap, which need not be this map's (AUTOFIND163
+        M3). The only identity a map keeps is its `# minimap_size=` line (no map has a minimap.png of its own), so a legacy
+        CSV without one, or one made on another size than the live minimap (the load's own size gate is skipped while the
+        canvas is unknown, so this is where that case is caught), gets no find. Two different maps of one size still look
+        alike to it."""
         loaded = self._loaded_map
-        if loaded is not None and loaded.rope_file_failed:
+        if loaded is None:
+            return ""
+        if loaded.rope_file_failed:
             return ROPE_SKIP_DAMAGED_TEXT
+        if loaded.minimap_size is None:
+            return ROPE_SKIP_NO_SIZE_TEXT
+        if self.minimap_canvas_width is not None and self.minimap_canvas_height is not None:
+            live = (self.minimap_canvas_width // RENDER_SCALE, self.minimap_canvas_height // RENDER_SCALE)
+            if loaded.minimap_size != live:
+                return ROPE_SKIP_OTHER_SIZE_TEXT
         return ""
 
     def _setRopeNotice(self, text: str) -> None:
@@ -1387,7 +1408,7 @@ class MapEditor:
         self.state.add_rope_armed = False
         self.state.next_local_id = (max(self.state.nodes) + 1) if self.state.nodes else 1
         self.state.current_file = path
-        self._loaded_map = LoadedMap(rope_file_failed=not is_successful(rope_result))
+        self._loaded_map = LoadedMap(rope_file_failed=not is_successful(rope_result), minimap_size=metadata.get('minimap_size'))
         if is_successful(rope_result):
             rope_file = rope_result.unwrap()
             self.state.ropes = list(rope_file.ropes)

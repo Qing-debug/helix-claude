@@ -21,6 +21,7 @@ import pytest
 
 import src.gui.map_editor as map_editor
 import test_map_editor_ropes as ropes
+from src.controller.map_csv import EditorNode, write_editor_nodes
 from src.controller.rope_file import RopeFile, RopeMark, read_ropes, rope_file_for, write_ropes
 
 make_editor = ropes.make_editor  # the fixture, shared
@@ -699,3 +700,96 @@ def test_moving_a_rope_away_and_back_leaves_the_map_clean(make_editor, tmp_path)
     ropes.type_in_box(rig.editor, "x", "107")
 
     assert rig.editor.state.ropes == [ROPE_107] and not rig.editor.state.dirty
+
+
+# -- the find after a load only when the map says which minimap it was made on, and the live one is that size (AUTOFIND163 M3) --
+
+def map_made_on(tmp_path, size, ropes_in_file=None, name="made_on.csv") -> Path:
+    """A good map CSV whose `# minimap_size=` line says `size` (None: a legacy CSV with no such line), with a rope file of
+    `ropes_in_file` beside it (None: no rope file)."""
+    path = tmp_path / name
+    nodes = {1: EditorNode(1, "blue_node", (20, 20))}
+    assert write_editor_nodes(str(path), nodes, list(nodes), minimap_size=size).unwrap() is None
+    if ropes_in_file is not None:
+        write_ropes(rope_file_for(path), RopeFile(tuple(ropes_in_file), size, {}))
+    return path
+
+
+def build_the_canvas(rig):
+    """The minimap frame arrives and the editor's own poll builds its canvas (the editor was made with no frame)."""
+    rig.editor.sharedInfo.minimap_frame = rope_frame()
+    waits = [item for item in rig.scheduled if item[1] == rig.editor._waitForMinimapAndBuildCanvas]
+    waits[0][1](*waits[0][2])
+
+
+def test_a_legacy_csv_with_no_minimap_size_gets_no_automatic_find_and_the_notice_says_why(make_editor, tmp_path):
+    csv_path = map_made_on(tmp_path, None, ropes_in_file=[ROPE_46])
+    rig = make_editor(rope_frame(), auto_find=True)
+    editor = rig.editor
+    run_scan(rig)  # the open-time find, on the untitled map
+
+    load(rig, csv_path)
+
+    assert pending_ticks(rig) == []  # a find would take the live minimap's ropes for a map that cannot say it is that one
+    assert editor.state.ropes == [ROPE_46]  # the file's ropes, untouched
+    assert notice_shown(editor) and notice(editor) == map_editor.ROPE_SKIP_NO_SIZE_TEXT
+    assert "does not say which minimap size" in notice(editor) and "Find ropes" in notice(editor)
+    assert not editor.state.dirty
+
+
+def test_the_find_ropes_button_still_works_after_a_legacy_csv(make_editor, tmp_path):
+    csv_path = map_made_on(tmp_path, None, ropes_in_file=[ROPE_46])
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+    load(rig, csv_path)
+
+    rig.editor._findRopes()  # his own click, after he has read why the editor did not
+    run_scan(rig)
+
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+def test_a_map_made_on_the_live_minimap_size_still_gets_the_automatic_find(make_editor, tmp_path):
+    csv_path = map_made_on(tmp_path, (FRAME_W, FRAME_H), ropes_in_file=[ROPE_46])
+    rig = make_editor(rope_frame(), auto_find=True)
+    run_scan(rig)
+
+    load(rig, csv_path)
+    assert len(pending_ticks(rig)) == 1 and status(rig.editor) == map_editor.FIND_ROPES_TEXT
+    run_scan(rig)
+
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
+
+
+def test_a_legacy_csv_loaded_before_the_canvas_exists_gets_no_find_when_the_canvas_is_built(make_editor, tmp_path):
+    csv_path = map_made_on(tmp_path, None)
+    rig = make_editor(None, auto_find=True)
+    load(rig, csv_path)
+
+    build_the_canvas(rig)  # the one find per open is due, but not for this map
+
+    assert pending_ticks(rig) == [] and notice(rig.editor) == map_editor.ROPE_SKIP_NO_SIZE_TEXT
+
+
+def test_a_csv_made_on_another_minimap_size_loaded_before_the_canvas_exists_gets_no_find(make_editor, tmp_path):
+    # with no canvas the load's size gate is skipped, so the file opens; the live minimap that appears is another size
+    csv_path = map_made_on(tmp_path, (100, 50))
+    rig = make_editor(None, auto_find=True)
+    load(rig, csv_path)
+    assert rig.editor.state.current_file == str(csv_path)
+
+    build_the_canvas(rig)
+
+    assert pending_ticks(rig) == [] and notice(rig.editor) == map_editor.ROPE_SKIP_OTHER_SIZE_TEXT
+    assert "different minimap size" in notice(rig.editor) and "Find ropes" in notice(rig.editor)
+
+
+def test_a_csv_made_on_the_live_size_loaded_before_the_canvas_exists_gets_the_find_when_it_is_built(make_editor, tmp_path):
+    csv_path = map_made_on(tmp_path, (FRAME_W, FRAME_H), ropes_in_file=[ROPE_46])
+    rig = make_editor(None, auto_find=True)
+    load(rig, csv_path)
+
+    build_the_canvas(rig)
+    run_scan(rig)
+
+    assert rig.editor.state.ropes == [ROPE_46, ROPE_107]
