@@ -2826,3 +2826,35 @@ Affects: the plan (no 4 to 6 px rule; the rope zone is a lookup); no code outsid
 Cost if wrong: none (the question can be asked again). Undo: re-ask.
 
 Pointer: `ledger-ROPE.md:34,38`; `notes/ROPE146R.md`.
+
+## H96 (2026-11-12): The map editor finds ropes by itself once when it opens: it adds new ropes only, writes them only on Save, and hints to move the character (Hong's QB255, QB256 and QB257)
+
+Context: H92 has the editor find ropes when Hong clicks "Find ropes". Hong asked for the same find to run by itself when the editor opens, with no click, and was asked three questions on the Q&A page (set rope161) about how it should behave. His three answers:
+
+- What the find does with ropes already saved (rope161-2, QB255). Options shown: "Add new ropes only (Recommended)"; "Replace the saved ropes with the found ones"; "Only show the difference until you keep them". He chose, verbatim: "Add new ropes only (Recommended)". In plain words: a found rope that is not within 2 px sideways of a saved rope appears at once as a normal rope; saved ropes are never changed, moved or removed. Cost he was told: a rope he deleted on purpose comes back every time the editor opens, because the rope file does not remember deletions.
+- When found ropes are written to the rope file (rope161-3, QB256). Options shown: "Only when I press Save (Recommended)"; "Write the rope file at once, every time ropes are found". He chose, verbatim: "Only when I press Save (Recommended)". In plain words: found ropes live in the editor like any other change and only Save writes them, so he can delete a wrong rope first. Cost he was told: an older map with newly found ropes asks "Save before closing?" each time until he saves it.
+- When the editor looks for ropes (rope161-4, QB257). Options shown: "One find when the editor opens, plus a hint to move the character (Recommended)"; "Keep re-finding while the editor is open"; "One find when the editor opens, no hint". He chose, verbatim: "One find when the editor opens, plus a hint to move the character (Recommended)". In plain words: one find at open, the status line tells him to move the character if it stands still on a rope, and the "Find ropes" button stays as a manual retry. Cost he was told: a rope under a standing character is missed until he moves the character and clicks "Find ropes".
+
+Cost if wrong: a wrong found rope appears by itself and blocks Save (the editor's rule from H91) until Hong deletes it; one find can miss a rope. Undo: Hong says so; the other options above were costed in the Q&A set.
+
+Pointer: question bank QB255, QB256, QB257; `notes/ROPE161-AUTOFIND.md`.
+
+## H97 (2026-11-12): The minimap capture checks the minimap's corners on every picture and searches the whole screen at once when they no longer match; the 5-second search is dropped if the tests allow it (Hong's QB258)
+
+Context: Hong reported that when he moved a window over the minimap capture area the picture stayed black or frozen, and the command line went quiet. The capture looked again for the minimap only about every 22 s and showed the last picture without any message (`notes/VIS161-DBG.md`). He had also asked for a search every 5 seconds. He was asked how the capture should follow a moved minimap (set vis162, vis162-1). Options shown: 1, a 5-second search plus a corner check on every picture, a "lost" message, and one console line when lost and one when found; 2, a 5-second search alone, showing "Minimap lost" after a failed search, with no check on every picture; 3, a 5-second search alone and nothing else; 4, option 1 plus the walker counting missed pictures. He chose, verbatim, under "Other": "option 1, but drop the 5-second search if the tests allow it".
+
+In plain words: on every grab the app checks that the minimap's four corners are still where they were; when they no longer match it searches the whole screen at once; while the minimap is lost the window keeps the last frame and shows "Minimap lost: searching for it", and the console prints one line when it is lost and one when it is found. The walker is not changed. The periodic 5-second full search is built only if the tests show a case that the corner check on every grab misses (his words: "if the tests allow it"); otherwise it is left out.
+
+Cost if wrong: a few small extra matches on every grab; if the corner check cannot tell a minimap from a dark or light window, the 5-second search stays. Undo: Hong says so.
+
+Pointer: question bank QB258; `notes/VIS161-DBG.md`.
+
+## H98 (2026-11-12): The app is started from an administrator terminal; no code change to show its messages in the first terminal (Hong's QB259)
+
+Context: started from a normal terminal, the app starts a second copy as administrator (H82) and the first copy exits, so the lines the vision part prints appear in the new administrator window, not in the terminal Hong started from, and his terminal goes quiet. He was asked where the app's messages should show (set vis162, vis162-2). Options shown: A, "Start the app from an administrator terminal (no code change)"; B, "The administrator copy also writes its messages to a file, and the first terminal keeps showing them until the app closes" (the recommendation); C, "The first terminal prints one line saying where the new window is". He chose A, not the recommendation, verbatim: "Start the app from an administrator terminal (no code change)".
+
+In plain words: nothing is built. Hong opens Windows PowerShell with "Run as administrator", goes to the repo folder and runs `.\.venv\Scripts\python.exe -m src.main`; no second window opens and the messages stay in that terminal. A start from a normal terminal still relaunches as administrator (H82) and still goes quiet.
+
+Cost if wrong: Hong has to remember the administrator terminal each time. Undo: Hong asks for option B or C.
+
+Pointer: question bank QB259; H82.
