@@ -37,7 +37,7 @@ Checks, from the repo root (wall times measured on the dev PC when this text was
 
 ```
 python tools/check.py            # ruff, basedpyright, lint-imports, pytest -m "not slow": about 90 s
-python tools/check.py --full     # the same with the slow tests: about 179 s (178.5 s measured at 8208b2b); run it before you commit
+python tools/check.py --full     # the same with the slow tests: about 206 to 250 s (242.6 s measured at 95c8f10; 230.8 s and 206.2 s in two other runs); run it before you commit
 python -m pytest tests/route -q  # about 41 s (about 25 s without the slow tests; tests/route_view about 18 s, tests/controller about 24 s)
 python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0   # sim smoke: 6/6 PASS, same output every run (371 moves, 20 no-ops, 0 drops, 44 teleports down, 2 jump-offs since C10 option B; the 5% no-op bar depends on the seed since the 12.5 px/s walk speed, H81: seeds 0, 2 and 8 miss it, seed 2 with 4.58%)
 python -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0 --real-ground   # the same on Fossil Foundry 2's real ground (H86): 6/6 PASS, 364 moves, 23 no-ops, 0 drops, 46 teleports down, 2 knockbacks, 4 rope grabs, 2 rope moves, both teleports up (ropes from the fixture rope file, H88, H93; the same figures with C10 option B)
