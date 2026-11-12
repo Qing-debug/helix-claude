@@ -1,8 +1,9 @@
 """The rope zones (C1, H88): where a still off-graph read counts as "on this rope".
 
 A map's rope file (`src/controller/rope_file.py`) marks each rope by its column and the two platform rows it joins. The
-walker asks `RopeZones.at(pos)` only for a read that `next_move` and `locate.attach` have both failed to place, so the
-lookup is one dict get on a read that was off the map anyway and no work at all on one the map places. The table is
+walker asks `RopeZones.at(pos)` for a read that `next_move` and `locate.attach` have both failed to place, and for a
+placed read only after the move sent from it left it unchanged (C10, option B), so the lookup is one dict get on a read
+that was off the map or stuck and no work at all on a placed read that moved. The table is
 built once, from every cell of every zone, because a lookup in it is about 157 ns where a test of each mark's box is
 slower and grows with the marks (OUTLINE147).
 """
