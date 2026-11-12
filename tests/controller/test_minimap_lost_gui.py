@@ -6,15 +6,17 @@ import tkinter as tk
 from types import SimpleNamespace
 
 import test_gui_startup
+import test_live_minimap
 from test_gui_character_buttons import _with_icons
 from test_gui_startup import FRAME_H, FRAME_W, _frame, _lock_is_free
-from test_live_minimap import ICON_AT, make_minimap  # noqa: F401 (a fixture, used by name)
 
 from src.gui.live_minimap import NOT_FOUND_TEXT
 from src.gui.map_editor import MapEditor
 from src.gui.minimap_lost import LOST_TAG, LOST_TEXT, read_minimap
 
 make_gui = test_gui_startup.make_gui  # the fixture, shared (no conftest.py under tests/)
+make_minimap = test_live_minimap.make_minimap  # likewise
+ICON_AT = test_live_minimap.ICON_AT
 
 
 def _texts(canvas, tag):
