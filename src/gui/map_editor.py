@@ -654,9 +654,11 @@ class MapEditor:
         and the node's place in the rotation order stay. It does nothing with no node selected (a rope selected, or nothing),
         before the minimap canvas exists, or when the key was typed in a number box (the Spinbox's own binding ran first:
         Left and Right move its cursor, Up and Down change its value, and a typed value must not be hijacked, as for Delete).
-        A press that would put a coordinate off the minimap (outside 0..size-1) does nothing; a node that is already off it
-        (a map file can hold one, and Save warns) may still be moved toward the minimap. A move into a rope's keep-out is
-        allowed: `_renderNodes` draws the red ring and `_validateForSave` blocks Save until the node is moved out (Hong, QB241).
+        A press that would take a node on the minimap off it stops on the edge pixel (0 or size-1) if it can move at all: a
+        Shift+arrow from 1-4 px short of the edge does (Hong, NODEMOVE160 M3), a plain arrow from the edge pixel does nothing.
+        A node that is already off the minimap (a map file can hold one, and Save warns) may still be moved toward it, never
+        further out. A move into a rope's keep-out is allowed: `_renderNodes` draws the red ring and `_validateForSave` blocks
+        Save until the node is moved out (Hong, QB241).
         The window's binding does not `break`, and nothing else binds the arrow keys in the editor."""
         if isinstance(getattr(event, "widget", None), TEXT_BOX_WIDGETS):
             return
@@ -665,17 +667,21 @@ class MapEditor:
             return
         node = self.state.nodes[sid]
         x, y = node.pos
-        new_x, new_y = x + dx, y + dy
         native_w = self.minimap_canvas_width // RENDER_SCALE
         native_h = self.minimap_canvas_height // RENDER_SCALE
-        for old, new, size in ((x, new_x, native_w), (y, new_y, native_h)):
-            if new == old:
-                continue  # this axis does not move: an off-map coordinate on it must not stop the other one
+        moved = []
+        for old, delta, size in ((x, dx, native_w), (y, dy, native_h)):
+            new = old + delta
+            if delta and 0 <= old <= size - 1 and not 0 <= new <= size - 1:
+                new = min(max(new, 0), size - 1)  # a press that would leave the minimap from it stops on the edge pixel
+                if new == old:
+                    return  # already on the edge pixel: nothing moves
             off = max(-new, new - (size - 1), 0)  # px beyond the range 0..size-1
             off_before = max(-old, old - (size - 1), 0)
-            if off > 0 and off >= off_before:
-                return
-        node.pos = (new_x, new_y)
+            if delta and off > 0 and off >= off_before:
+                return  # an off-map node moved further out; an axis that does not move is not checked
+            moved.append(new)
+        node.pos = (moved[0], moved[1])
         self._recomputeDirty()
         self._refreshInspector()  # the "pos:" label
         self._refreshRotation()   # a blue node's row shows its position
