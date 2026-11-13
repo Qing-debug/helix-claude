@@ -5,7 +5,6 @@ are added. Each edge carries a `kind` and an estimated `cost_s` in seconds, so a
 route under the movement parameters.
 """
 
-import math
 from enum import StrEnum
 
 import networkx as nx
@@ -34,13 +33,16 @@ _TERRAIN_KIND = {
 
 
 def horizontal_cost_s(dx_px: float, reach_h: int, p: MovementParams) -> float:
-    """Seconds to cover `dx_px` horizontally: the cheapest of walking all of it, teleporting down then walking the
-    remainder, or overshooting with one more teleport and walking back."""
-    d = abs(dx_px)
-    n = math.floor(d / reach_h)
-    r = d - n * reach_h
+    """Seconds to cover `dx_px` horizontally, hop by hop as the planner's `_run` moves: a distance under
+    `walk_under_px` (QB266) is walked; otherwise one teleport is taken when it plus the walk of what is left beats
+    walking all of it, and the rule applies again from where it lands. A teleport that overshoots is walked back from,
+    never preferred to walking a short distance, so there is no "overshoot and walk back" option below the limit."""
+    d, total = abs(dx_px), 0.0
     v, t = p.walk_px_per_s, p.teleport_s
-    return min(d / v, n * t + r / v, (n + 1) * t + ((n + 1) * reach_h - d) / v)
+    while d >= p.walk_under_px and t + abs(d - reach_h) / v < d / v:
+        total += t
+        d = abs(d - reach_h)
+    return total + d / v
 
 
 def down_options(dy_px: float, src_can_fall: bool, reach_v: int, p: MovementParams) -> dict[str, float]:

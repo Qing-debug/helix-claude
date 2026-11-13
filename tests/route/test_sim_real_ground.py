@@ -49,18 +49,20 @@ def test_real_ground_run_passes():
     """The run the walker passes on the real ground (seed 2, 20 laps): 6/6 checks, no leg ends `off_map`, and the figures
     Rope fix Task 6 recorded, pinned exactly, so the quick `tools/check.py` sees any drift (ROPE155-R7 m1). Rope fix
     Task 7 (H88, H93): the sim grabs rope 107 (`rope_grab_p` 0.2) and the walker gets off it. The 4 grabs gave 2 rope
-    moves, both blinks up (`teleport up`), so `jump_offs` is 0 here: the other 2 grabs were moved by the planner or
-    placed by `attach` (Task 6's report)."""
+    moves, both blinks up (`teleport up`), so `jump_offs` was 0 here: the other 2 grabs were moved by the planner or
+    placed by `attach` (Task 6's report). Walk-fluid Task 1 (QB266, a node closer than 17 px is walked to) re-pinned the
+    figures: 354 moves, 22 no-ops, 52 teleports down, 5 knockbacks, 2 grabs, 3 jump-offs, 257.3093 s (it was 364, 23,
+    46, 2, 4, 0 and 241.6268 s)."""
     result = run_sim(CSV, REAL_GROUND_TERRAIN, 20, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
     assert is_successful(result), result
     report = result.unwrap()
     checks = judge(report, 0)
     assert len(checks) == 6 and all(check.ok for check in checks), [check for check in checks if not check.ok]
-    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 2 on seed 2"
+    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 5 on seed 2"
     assert report.rope_grabs >= 1 and report.off_map == 0
-    assert report.jump_offs == 0
-    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (364, 23, 0, 46)
-    assert (report.knockbacks, report.rope_grabs, round(report.sim_seconds, 4)) == (2, 4, 241.6268)
+    assert report.jump_offs == 3
+    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (354, 22, 0, 52)
+    assert (report.knockbacks, report.rope_grabs, round(report.sim_seconds, 4)) == (5, 2, 257.3093)
 
 
 def test_report_counts_the_knockbacks():

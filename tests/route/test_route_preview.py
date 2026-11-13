@@ -136,20 +136,16 @@ CASES = [
         (TP_DOWN, (105, 40), (105, 40)),
     ])),
     ("T11", syn([(10, 10), (25, 10), (29, 28), (45, 28), (5, 45), (20, 45), (35, 45), (50, 45)], can_fall=True),
-     (25, 10), 2, (6.5533333, [
-        (TP_L, 4, (6, 10)),
-        (walk(R, 320), 4, (10, 10)),
+     (25, 10), 2, (8.3633333, [  # QB266 (walk-fluid Task 1): the 15 and 16 px gaps are walked, not teleported past
+        (walk(L, 1200), 4, (10, 10)),
         (DROP, 4, (10, 45)),
         (TP_R, 3, (29, 45)),
-        (TP_R, 3, (48, 45)),
-        (walk(L, 240), 3, (45, 45)),
+        (walk(R, 1280), 3, (45, 45)),
         (TP_UP, 3, (45, 28)),
-        (TP_L, 2, (26, 28)),
-        (walk(R, 240), 2, (29, 28)),
+        (walk(L, 1280), 2, (29, 28)),
     ])),
-    ("T12", syn([(10, 60), (25, 60), (29, 50), (45, 50), (6, 38), (18, 38), (30, 38)]), (25, 60), 2, (4.29, [
-        (TP_L, 4, (6, 60)),
-        (walk(R, 320), 4, (10, 60)),
+    ("T12", syn([(10, 60), (25, 60), (29, 50), (45, 50), (6, 38), (18, 38), (30, 38)]), (25, 60), 2, (4.62, [
+        (walk(L, 1200), 4, (10, 60)),  # QB266 (walk-fluid Task 1): 15 px is walked, not teleported past
         (TP_UP, 4, (10, 38)),
         (TP_R, 2, (29, 38)),
         (TP_DOWN, 2, (29, 50)),
@@ -192,29 +188,31 @@ CASES = [
         (TP_UP, (48, 45), (48, 45)),
         (walk(R, 800), (58, 46), (58, 46)),
     ])),
-    ("D1", FF2, (129, 60), (97, 43), (2.62, [
+    ("D1", FF2, (129, 60), (97, 43), (3.11, [  # 2.62 before QB266 (walk-fluid Task 1); the hops are the same
         (TP_L, (105, 42), (110, 60)),
         (walk(L, 400), (105, 42), (105, 60)),
         (TP_UP, (105, 42), (105, 42)),
         (walk(L, 640), (97, 43), (97, 43)),
     ])),
-    # D2: the hops leave `path`. The first hop walks to x 101 on the (101,42) piece, and the re-plan from there (4.51 s,
-    # against 4.69 s for the other start) goes down to (99,60) and along the bottom, where `path` (4.37 s) went via
-    # (101,24) and the upper route. Not a tie. The literals are the preview's at 12.5 px/s, each checked by S3b against
-    # `next_move`, not derived by hand (added for review finding WALKSPD-R m1).
-    ("D2", FF2, (105, 42), (58, 46), (4.37, [
-        (walk(L, 320), (101, 24), (101, 42)),
-        (TP_DOWN, (99, 60), (101, 60)),  # was COIN (DROP, TP_DOWN) before H87
-        (TP_L, (48, 45), (82, 60)),
-        (TP_L, (48, 45), (63, 60)),
-        (TP_L, (48, 45), (44, 61)),
-        (walk(R, 320), (48, 45), (48, 61)),
+    # D2: the hops used to leave `path`: the first hop walked to x 101 on the (101,42) piece, and the re-plan from there
+    # (4.51 s, against 4.69 s for the other start) went down to (99,60) and along the bottom, where `path` (4.37 s) went
+    # via (101,24) and the upper route (added for review finding WALKSPD-R m1; the old hops were walk(L, 320) toward
+    # (101,24), TP_DOWN (99,60), three TP_L, walk(R, 320), TP_UP and walk(R, 800)). Since QB266 (walk-fluid Task 1) the
+    # route graph prices the walk past 16 px and under, the first hop is the teleport down at x 105 and the hops follow
+    # `path` (4.51 s). The literals are the preview's at 12.5 px/s, each checked by S3b against `next_move`, not derived
+    # by hand.
+    ("D2", FF2, (105, 42), (58, 46), (4.51, [
+        (TP_DOWN, (105, 60), (105, 60)),
+        (TP_L, (48, 45), (86, 60)),
+        (TP_L, (48, 45), (67, 60)),
+        (TP_L, (48, 45), (48, 61)),
         (TP_UP, (48, 45), (48, 45)),
         (walk(R, 800), (58, 46), (58, 46)),
     ])),
 ]
-# Where the hops leave `path` (RV3-D5 A2): S3b still holds, and `follows` is False.
-LEAVES_PATH = {"D2"}
+# Where the hops leave `path` (RV3-D5 A2): S3b still holds, and `follows` is False. D2 was the one such case until QB266
+# (walk-fluid Task 1); the table has none now, and the FF2 sweep below still pins the pairs that leave their path.
+LEAVES_PATH: set[str] = set()
 # Where two routes cost exactly the same, `rg.path` breaks the tie on its own and the hops may break it the other way, so
 # `follows` is not asserted for these; `test_d1_is_an_exact_cost_tie...` pins the tie instead.
 TIED = {"D1"}
@@ -356,12 +354,12 @@ def test_the_table_literals(built, case_id):
 # ---- 3. the six planner branches are really taken (spec S3) ----
 
 _BRANCH_LINES = {
-    154: "return None",
-    176: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
-    177: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
-    218: "return Failure(anchor_result.failure())",
-    230: 'return Failure(f"no path from ',
-    260: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    157: "return None",
+    179: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
+    180: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
+    221: "return Failure(anchor_result.failure())",
+    233: 'return Failure(f"no path from ',
+    263: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
 }
 
 
@@ -369,7 +367,7 @@ def test_s3_the_table_takes_the_six_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 230:
+        if number != 233:
             assert lines[number - 1].strip() == text, (number, lines[number - 1])
 
     planner_file = planner.__file__
@@ -491,7 +489,7 @@ def test_a_down_hop_has_one_option_a_teleport_in_reach_else_a_drop(built):
     assert _preview(built["T2"]).hops[1].options == (TP_DOWN,)
     assert [hop.options for hop in _preview(built["T7"]).hops] == [(TP_DOWN,)]
     assert [hop.options for hop in _preview(built["T8"]).hops] == [(TP_DOWN,)]
-    assert _preview(built["T11"]).hops[2].options == (DROP,)  # 35 px down, beyond a teleport's reach
+    assert _preview(built["T11"]).hops[1].options == (DROP,)  # 35 px down, beyond a teleport's reach (hop 2 before QB266)
 
 
 # ---- 8. the landing rule, case by case ----
@@ -591,14 +589,18 @@ def test_s3b_problems_and_follows_report_a_wrong_hop_a_cut_expansion_and_a_stray
 
 # The set at 12.5 px/s (H81); at 8 px/s it held nine pairs, among them D1 (the tie: still a tie at 12.5, but `path` and the
 # hops now break it the same way from (129,60)) and the pairs to (66,28) and (42,28). D2 is the first pair below.
+# QB266 (walk-fluid Task 1) changed it: the pairs to (58,46) from (105,42) and (118,43) and the four pairs from (65,60) left
+# the set (their hops now follow `path`), and six pairs to (118,43) joined it: along the floor the hops teleport right to
+# (105,60) and up at x 105, where `path` walks on to (113,60) and goes up there. S3b still holds on every pair (the sweep
+# asserts it), so each hop is `next_move`'s own move.
 NOT_FOLLOWING = {
-    ((105, 42), (58, 46)),  # the first hop walks to x 101 on the (101,42) piece; the re-plan from there goes down to
-    ((118, 43), (58, 46)),  # (99,60) and along the bottom, where `path` went via (101,24) and the upper route
     ((109, 23), (48, 45)),  # the re-plan from (105,24) goes via (79,24) and the upper route, where `path` went down
-    ((65, 60), (90, 24)),  # two teleports right overshoot the launch x 97; (103,60) anchors on (105,60)
-    ((65, 60), (97, 43)),
-    ((65, 60), (101, 24)),
-    ((65, 60), (109, 23)),
+    ((42, 28), (118, 43)),
+    ((48, 45), (118, 43)),
+    ((48, 61), (118, 43)),
+    ((49, 28), (118, 43)),
+    ((58, 46), (118, 43)),
+    ((65, 60), (118, 43)),
 }
 
 

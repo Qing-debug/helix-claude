@@ -57,8 +57,9 @@ TERRAIN = FIXTURES / "ff2_terrain.json"
 
 LAPS, SEED = 20, 1
 # The moves of each run: the 20-lap seed-1 runs, re-pinned at 12.5 px/s (H81) (`PINNED_REPORT` and `PINNED_OFFSET_REPORT` in
-# test_sim_steps.py; spec 7 gave 379 and 356 at 8 px/s). Re-pinned again at C10 option B (355 and 350 before it).
-MOVES = {"plain": 371, "offset": 356}
+# test_sim_steps.py; spec 7 gave 379 and 356 at 8 px/s). Re-pinned again at C10 option B (355 and 350 before it), and at
+# QB266 (walk-fluid Task 1; 371 and 356 before it).
+MOVES = {"plain": 348, "offset": 332}
 
 Pos = tuple[int, int]
 

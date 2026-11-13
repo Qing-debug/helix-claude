@@ -91,9 +91,12 @@ def _walk(rg: RouteGraph, px: int, goal_x: int) -> Move:
 
 
 def _run(rg: RouteGraph, px: int, goal_x: int) -> Move:
-    """P4's off-slope rule: teleport when one teleport plus the walk to the goal beats walking all of it."""
+    """P4's off-slope rule: walk when the goal is closer than `walk_under_px` (QB266: a teleport would land past it);
+    otherwise teleport when one teleport plus the walk to the goal beats walking all of it."""
     d = abs(goal_x - px)
     p = rg.params
+    if d < p.walk_under_px:
+        return _walk(rg, px, goal_x)
     if p.teleport_s + abs(d - rg.reach_h) / p.walk_px_per_s < d / p.walk_px_per_s:
         return Move(MoveKind.TELEPORT, _direction(px, goal_x), None)
     return _walk(rg, px, goal_x)
