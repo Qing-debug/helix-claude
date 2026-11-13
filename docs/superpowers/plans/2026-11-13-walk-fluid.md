@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Hong's order: "1, 2 and 4 can be built now (2's no-pause part is final only after the key-timing check). Then my 10-lap walk ... Then 3." Item 1 does not need item 2, so it is Task 1.
+- Hong's order: "1, 2 and 4 can be built now (2's no-pause part is final only after the key-timing check). Then my 10-lap walk ... Then 3." Item 1 does not need item 2, so it is Task 1. Hong's 10-lap walk waits for Task 10B's result (the key-timing check, HONG-GATED) as well as Tasks 1-12: the pause it sets is part of what his walk checks.
 - Done, for each item (Hong): "tested in the simulator, every check passing, reviewed by a second agent, and checked by my own walk". So every task that changes behaviour has a simulator test, and `python tools/check.py` is green at the end of every task; the last task runs `python tools/check.py --full`.
 - Item 1 is kept only if Hong's next FF2 10-lap walk is "no slower than 221 s"; otherwise the 17 px limit moves "in the direction my walk shows is faster ... or undo it". So the limit is a named setting, `MovementParams.walk_under_px = 17`, never a literal in a rule.
 - Item 1: "No allowance for sliding: the character does not slide, the picture is late, so do not aim walks short." No task shortens a walk.
@@ -29,8 +29,9 @@
 
 ## Review Focus
 
-1. A map with no platform-end marks at all (the test fixture `tests/fixtures/fossil_foundry_2.csv`, older maps): platforms, edges and the sideways-teleport rule must be exactly today's apart from item 1. Task 2 pins "no GAP edge and the same platforms on the fixture"; Task 3 pins "no mark, full reach".
-2. A teleport toward a marked end node that would carry onto the next platform (the character is within reach of the next platform's start): the planner must not count it as "stops on the end node". Task 3 pins `test_carry_over_is_not_a_stop_on_the_end`.
+1. A map with no platform-end marks at all (the test fixture `tests/fixtures/fossil_foundry_2.csv`, older maps): platforms, edges and the sideways-teleport rule must be exactly today's apart from item 1. Task 2 pins "no GAP edge and the same platforms on the fixture" and "an edge between two terrain platforms with no mark at either end stays WALK" (an edge is GAP only where it crosses a mark, review I4); Task 3 pins "no mark, full reach".
+2. A teleport toward a marked end node that would carry onto the next platform (the character is within reach of the next platform's start): the planner must not count it as "stops on the end node". Task 3 pins `test_carry_over_is_not_a_stop_on_the_end`. The end-node rule fires only when a marked end stopped the teleport short of its full reach, so it never catches an ordinary 17-21 px move, and a raised `walk_under_px` still makes those walk (review I1; Task 3 pins `test_raised_limit_walks_17_to_19`).
+2a. A teleport across a gap is launched only when the planner's own landing rule says it carries onto the far platform from where the character stands: from 1-2 px short of the launch x (inside `arrive_px`) the planner walks to the launch first (review I2; Task 3 pins it from x 29 and 30 on map M, Task 5 in the simulator from x 67 on Hong's marked map).
 3. A lower platform beyond the end (more than 4 px down): planner and simulator stop at the end, never fall to it. Tasks 3 and 4 each pin it.
 4. Node objects built without the mark arguments (`is_left_platform_edge=None`, the `Node` default, `src/controller/node.py:11`): every mark read goes through `bool(...)`. Task 2 pins a `None`-marked map.
 5. A character read just past a marked end (the real ground reaches 80 where the end node is 78 on Hong's map): `locate._beyond_end` (locate.py:68) still anchors it to that platform and the planner plans from it. Task 3 pins `test_read_two_px_past_a_marked_end_plans`.
@@ -49,7 +50,7 @@ Expected: `Junction created for ...`. Remove it at the very end with `cmd //c rm
 - [ ] **Step 2: Baseline**
 
 Run (worktree root): `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe tools/check.py`
-Expected: all steps pass (10 skips in `tests/input/test_protocol.py`). Then the three sim runs and record their figures in `notes/WALKFIX169-build.md` as "baseline": smoke `python -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0` (371 moves, 20 no-ops, 237.642 s, 6/6), real ground `... --seed 2 --min-single-error-legs 0 --real-ground` (364 moves, 241.6268 s, 6/6), 1000 laps `python -m src.route.sim.run --laps 1000 --seed 1 --known-case 49,28:101,24 --known-case 101,24:105,42` (18359 moves, 11891.9525 s, 6/6).
+Expected: all steps pass (10 skips in `tests/input/test_protocol.py`). Then the three sim runs and record their figures in `notes/WALKFIX169-build.md` as "baseline". Every sim command in this plan runs in the junction venv with the elevation check off (bare `python` would pick whatever interpreter is first on PATH): smoke `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe -m src.route.sim.run --laps 20 --seed 1 --min-single-error-legs 0` (371 moves, 20 no-ops, 237.642 s, 6/6), real ground `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe -m src.route.sim.run --laps 20 --seed 2 --min-single-error-legs 0 --real-ground` (364 moves, 241.6268 s, 6/6), 1000 laps `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe -m src.route.sim.run --laps 1000 --seed 1 --known-case 49,28:101,24 --known-case 101,24:105,42` (18359 moves, 11891.9525 s, 6/6).
 
 ---
 
@@ -116,7 +117,7 @@ Expected: the new tests pass. Frozen tests that pin the old overshoot (`test_rou
 
 - [ ] **Step 5: Sim runs, check, commit**
 
-Run the three Task 0 sim runs; each must print 6/6 PASS; record the figures in `notes/WALKFIX169-build.md`. Run `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe tools/check.py` -> green.
+Run the three Task 0 sim runs with Task 0's exact commands (`HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe -m src.route.sim.run ...`, never bare `python`); each must print 6/6 PASS; record the figures in `notes/WALKFIX169-build.md`. Run `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe tools/check.py` -> green.
 ```bash
 git add src/route/params.py src/route/planner.py src/route/route_graph.py tests/route
 git commit -m "feat(route): walk to a node closer than 17 px instead of teleporting past it (WALKFIX Task 1, QB266 A)"
@@ -140,10 +141,11 @@ The rule (Hong, QB282): "a sideways teleport goes up to its full 19 px; it stops
 - Consumes: Task 1's `horizontal_cost_s`.
 - Produces (Task 3 and Task 5 rely on these exact names):
   - `MovementParams.side_teleport_land_dy_px: int = 4`
-  - `EdgeKind.GAP = "gap"`: a sideways teleport from one platform onto another (only between platforms split by marks; there is no other way two nodes within reach and aligned end up on different platforms).
+  - `EdgeKind.GAP = "gap"`: a sideways teleport from one platform onto another, only for a side edge that crosses a mark (review I4): `u` and `v` are on different terrain platforms and the end of `u`'s platform toward `v` is `is_marked_end(.., sign)` or the start of `v`'s platform is `is_marked_end(.., -sign)`. A side edge between two terrain platforms with no mark at either of those ends stays `WALK`, as today (terrain links only the nearest walkable node on each side, terrain.py:63-78, and PathGraph chooses its edges by its own rule, so such an edge can exist on an unmarked map; dropping it could make a target unreachable).
   - `def is_marked_end(node: Node, sign: int) -> bool` in `route_graph.py`: `bool(node.is_right_platform_edge)` for `sign > 0`, `bool(node.is_left_platform_edge)` otherwise.
+  - `def _side_kind(terrain: Terrain, u: Node, v: Node) -> EdgeKind` in `route_graph.py` (private, tested directly): `GAP` by the rule above, else `WALK`.
   - `RouteGraph.side_landing(self, platform: int, px: int, sign: int) -> tuple[int, int]`: `(x, platform index)` where a sideways teleport from `px` on `platform` toward `sign` (+1 right, -1 left) stops.
-  - `RouteGraph.gap_launch(self, u: Node, v: Node) -> int | None`: the x on `u`'s platform to teleport from so the teleport lands on `v`'s platform, or None when none does.
+  - `RouteGraph.gap_launch(self, u: Node, v: Node) -> int | None`: the x on `u`'s platform to teleport from so the teleport lands on `v`'s platform, or None when none does. This is the one place where the open launch-point question (WALKFIX169-D1, QB284, provisionally A) is answered: exact A is `v.x - sign * self.reach_h`; the margin variant A' (WALKFIX171-D1) would be `v.x - sign * (self.reach_h - self.params.arrive_px)` (FF2: x 71, landing 88-90, "at" (88, 43)); C would be the x of `u`'s platform end node toward `v`. A pick of A' or C changes only this function and its tests (Task 2's `test_gap_launch` and GAP cost, Task 3's line-up tests, Task 5's gap scenarios); the planner's P4/P5, the I2 guard and `route_preview` are unchanged by it. B ("teleport from wherever it stands if that carries over") also needs the character's x, so it changes this function (given `px`) plus its one P4 call and the mirrored `route_preview` call.
   - `horizontal_cost_s(dx_px, reach_h, p, *, to_end: bool = False)`.
 
 - [ ] **Step 1: Write the failing tests** in `tests/route/test_platform_ends.py`. Map M (Kanna, defaults; neighbours 16 px apart, inside the 19 px reach that terrain and PathGraph links need): platform A nodes (24, 50), (40, 50) with (40, 50) marked right end; platform B nodes (50, 52) marked left end, (66, 52). Map M0: the same four nodes with no marks. Map MN: the same with every mark `None`. `M_b_at(y)`: M with B's two nodes at height `y`.
@@ -171,9 +173,18 @@ def test_a_platform_more_than_4_px_off_does_not_count():   # 4 px off carries, 5
     assert route_graph_of(M_b_at(54)).side_landing(a, 33, +1)[1] == b
     assert route_graph_of(M_b_at(55)).side_landing(a, 33, +1) == (40, a)
 
-def test_gap_launch():   # asked only for existing GAP edges
+def test_gap_launch():   # asked only for existing GAP edges; exact A (WALKFIX169-D1); A' would give 33 and 57
     rg = route_graph_of(M)
     assert rg.gap_launch(n40, n50) == 31 and rg.gap_launch(n50, n40) == 59
+
+def test_one_mark_is_enough_for_a_gap_edge():   # M with only (40,50) marked: still split, still GAP both ways
+    rg = route_graph_of(M_right_mark_only)
+    assert rg.graph.edges[n40, n50]["kind"] == EdgeKind.GAP
+
+def test_unmarked_split_stays_walk():   # review I4: two terrain platforms, no mark at either facing end
+    t = Terrain(links=(), platforms=((u24, u40), (u50, u66)))   # built by hand from M0's unmarked nodes
+    assert _side_kind(t, u40, u50) == EdgeKind.WALK and _side_kind(t, u50, u40) == EdgeKind.WALK
+    assert _side_kind(terrain_of(M), n40, n50) == EdgeKind.GAP
 
 def test_fixture_map_is_unchanged():   # tests/fixtures/fossil_foundry_2.csv has no marks
     rg = route_graph_of_fixture()
@@ -193,16 +204,17 @@ Run: `.venv/Scripts/python.exe -m pytest tests/route/test_platform_ends.py -q`  
 
 - `params.py`: `side_teleport_land_dy_px: int = 4  # QB282 (2026-11-13): a sideways teleport carries onto a platform this close in height`.
 - `terrain._walk_links`: after `best` is chosen for a side, emit nothing for that side when `bool(a.is_right_platform_edge if side > 0 else a.is_left_platform_edge)` or `bool(b.is_left_platform_edge if side > 0 else b.is_right_platform_edge)` (b = `nodes[best[1]]`). Choose the nearest as today first, then drop: never link past the nearest to a farther node. Docstring R1 says so.
-- `route_graph.build`: a PathGraph edge with `dx >= abs(dy)` whose ends are on different terrain platforms (`terrain.platform_index`) gets `EdgeKind.GAP` instead of `WALK`.
+- `route_graph.build`: a PathGraph edge with `dx >= abs(dy)` gets `_side_kind(terrain, u, v)` instead of a plain `WALK`: `GAP` only when `u` and `v` are on different terrain platforms (`terrain.platform_index`) and a facing end is marked (`platforms[pu][-1 if sign > 0 else 0]` is `is_marked_end(.., sign)` or `platforms[pv][0 if sign > 0 else -1]` is `is_marked_end(.., -sign)`); otherwise `WALK`, exactly as today (review I4).
 - `side_landing(platform, px, sign)`: let `nodes = self.terrain.platforms[platform]`, `end = nodes[-1] if sign > 0 else nodes[0]`, `full = px + sign * self.reach_h`. If `end` is not `is_marked_end(end, sign)` or `full` does not pass `end.x` -> `(full, platform)`. Else look at every other platform's near end `n` (`first` for `sign > 0`, `last` otherwise) with `sign * (n.x - end.x) > 0`, `0 < sign * (n.x - px) <= self.reach_h` and `abs(n.y - end.y) <= params.side_teleport_land_dy_px`; the nearest to `px` wins (ties: lower platform index) and the result is `(full clamped into that platform's [first.x, last.x], its index)`; with none, `(end.x, platform)`.
-- `gap_launch(u, v)`: `sign` from `v.x - u.x`; `target = v.x - sign * self.reach_h` clamped into `u`'s platform's `[first.x, last.x]`; return it if `side_landing(platform(u), target, sign)[1] == platform(v)`, else None.
+- `gap_launch(u, v)`: `sign` from `v.x - u.x`; `target = v.x - sign * self.reach_h` (exact A; the docstring names A' and C as the alternatives of WALKFIX169-D1 and says this line is where they differ) clamped into `u`'s platform's `[first.x, last.x]`; return it if `side_landing(platform(u), target, sign)[1] == platform(v)`, else None.
 - `_edge_cost` for `GAP`: `launch = self.gap_launch(u, v)`; None -> no edge; else `abs(u.x - launch) / v + teleport_s + abs(landing_x - v.x) / v`, landing from `side_landing(platform(u), launch, sign)`.
-- `_edge_cost` for `WALK`: `horizontal_cost_s(dx, reach_h, p, to_end=is_marked_end(v, sign))`.
-- `horizontal_cost_s(..., to_end=False)`: at the top of each pass of Task 1's loop (made `while d > 0`, breaking when neither rule applies), when `to_end` and `d <= reach_h`, add one `t`, set `d = 0` and stop; otherwise Task 1's rule. Docstring: a teleport stops on a marked end; whether it would carry onto the next platform from that spot is not priced (the planner's move choice in Task 3 is exact; the graph cost stays a heuristic, as it always was across a walk run).
+- `_edge_cost` for `WALK`: `horizontal_cost_s(dx, reach_h, p, to_end=is_marked_end(v, sign) and self.side_landing(platform(u), u.x, sign)[1] == platform(u))` (review m1: a teleport from `u` that would carry onto the next platform is not a stop on the end, so it is not priced as one).
+- `horizontal_cost_s(..., to_end=False)`: at the top of each pass of Task 1's loop (made `while d > 0`, breaking when neither rule applies), when `to_end` and `d <= reach_h`, add one `t`, set `d = 0` and stop; otherwise Task 1's rule. Docstring: a teleport stops on a marked end; the callers pass `to_end` only when a teleport from the start x stops on the own platform (`side_landing`), which is exact for a single hop (d <= reach); for a longer run, whether the last hop would carry over is not priced (the planner's move choice in Task 3 is exact; the graph cost stays a heuristic, as it always was across a walk run).
+- Add to the tests: `test_carry_over_is_not_priced_as_a_stop`: on M, `side_landing(a, 33, +1)` carries onto B, so the cost of a WALK edge from a node at x 33 to `n40` would be the walk 7 / 12.5, not 0.55 (build the case as a `horizontal_cost_s(7, 19, MovementParams(), to_end=False)` check plus one `_edge_cost` check on a map M33 = M with an extra node (33, 50) on A).
 
 - [ ] **Step 4: Run the tests**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/route -q`  Expected: the new tests pass; nothing else moves (no test map or fixture has marks). If a fixture test moves, a PathGraph edge crossed terrain platforms on an unmarked map: stop and report it (Review Focus 1).
+Run: `.venv/Scripts/python.exe -m pytest tests/route -q`  Expected: the new tests pass; nothing else moves (no test map or fixture has marks, and an unmarked side edge stays WALK whatever platforms its ends are on). If a fixture test moves, a mark-free map changed: stop and report it (Review Focus 1).
 
 - [ ] **Step 5: Check and commit**
 
@@ -222,13 +234,15 @@ Frozen-file opening (Hong, QB282): "Build it: the walker reads the platform-end 
 **Files:**
 - Modify: `src/route/planner.py` (`_run` :93-99, `_starts` :70-81, P4 :240-252, P5 :254-264)
 - Modify: `src/route/route_preview.py` (`_plan` :134 onward, the same statements; `_run` call sites)
-- Test: `tests/route/test_platform_ends.py` (add), re-pin `tests/route/test_route_preview.py` `_BRANCH_LINES` (and add the new GAP branch line to it), `tests/route/test_planner.py` call sites of `_run` if any
+- Test: `tests/route/test_platform_ends.py` (add), re-pin `tests/route/test_route_preview.py` `_BRANCH_LINES` (and add the new GAP branch lines to it). `tests/route/test_planner.py` has no `_run(` call (grep, review m5) and gets value re-pins only, if any.
 
 **Interfaces:**
 - Consumes: Task 2's `RouteGraph.side_landing`, `RouteGraph.gap_launch`, `EdgeKind.GAP`, `is_marked_end`, `horizontal_cost_s(..., to_end=)`; Task 1's `walk_under_px`.
 - Produces: `_run(rg: RouteGraph, px: int, goal_x: int, platform: int | None) -> Move` (route_preview imports it with this signature).
 
-Launch point across a gap (provisional, WALKFIX169-D1 option A, undo = change `RouteGraph.gap_launch` alone): the planner lines up on the x from which a full-reach teleport lands on the GAP edge's far node (`v.x - sign * reach`, clamped to the own platform), so it never teleports past that node; on FF2 no rotation leg crosses the gap, so this acts on detours only.
+Launch point across a gap (provisional, WALKFIX169-D1 option A, QB284 open; undo or a pick of A' or C = change `RouteGraph.gap_launch` and its tests alone, see Task 2's Interfaces): the planner lines up on the x from which a full-reach teleport lands on the GAP edge's far node (`v.x - sign * reach`, clamped to the own platform), so it never teleports past that node; on FF2 no rotation leg crosses the gap, so this acts on detours only.
+
+Guard before the launch (review I2; it holds for every launch-point option): P4 counts the character as lined up within `arrive_px` of the launch, and from 1-2 px short of an exact-A launch the planner's own `side_landing` says the teleport stops at the platform end (map M from x 29: B starts 21 px away, 21 > 19; FF2 from x 67-68). So P5 teleports across a gap only when `rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h)`; otherwise it walks to the launch x. Exact A still has zero margin against a teleport shorter than 19 px (the recorded jumps are 18-19 px); that is WALKFIX171-D1 (add A' to QB284), and Task 5's short-teleport scenario pins what then happens.
 
 - [ ] **Step 1: Write the failing tests** (in `test_platform_ends.py`, map M of Task 2, nodes `n24`, `n40`, `n50`, `n66`; `rng = np.random.default_rng(0)`). Hand-checked: from (25, 50) toward `n66` the cheapest start is `n40` (approach 0.55 by the end-node teleport, then GAP 1.27, then 16 px walked 1.28) and the GAP edge's launch x is 31:
 
@@ -260,20 +274,35 @@ def test_no_walk_crosses_the_gap():                           # every x on A tow
 
 def test_read_two_px_past_a_marked_end_plans():               # Review Focus 5
     assert is_successful(next_move(rg, (42, 50), n24, rng))
+
+@pytest.mark.parametrize("x", [43, 42, 41])                   # review I1: d = 17, 18, 19 on an unmarked platform
+def test_raised_limit_walks_17_to_19(x):                      # flat platform of Task 1 (30, 45, 60), toward node_60
+    rg20 = graph_with(MovementParams(walk_under_px=20))       # plus nodes far enough on the left to stand at 41-43
+    assert next_move(rg20, (x, 50), node_60_of(rg20), rng).unwrap().move.kind == MoveKind.WALK
+
+def test_raised_limit_keeps_the_end_node_teleport():          # Hong (QB282): "even under the 17 px limit"
+    rg20 = route_graph_of(M, MovementParams(walk_under_px=20))
+    assert next_move(rg20, (28, 50), n40_of(rg20), rng).unwrap().move == Move(MoveKind.TELEPORT, Key.RIGHT, None)
+
+@pytest.mark.parametrize("x, walk_ms", [(29, 160.0), (30, 80.0)])   # review I2: inside arrive_px of launch 31,
+def test_short_of_the_launch_walks_to_it(x, walk_ms):               # but the teleport would stop at 40
+    d = next_move(rg, (x, 50), n66, rng).unwrap()
+    assert d.move == Move(MoveKind.WALK, Key.RIGHT, walk_ms)
 ```
+(`test_raised_limit_walks_17_to_19` uses Task 1's flat unmarked platform (30, 50), (45, 50), (60, 50): from x 43, 42 and 41 the start is (45, 50) and the walk run ends at (60, 50), so P4's `_run` sees d = 17, 18 and 19 toward an unmarked node; with the default limit each of these teleports (Task 1's `test_at_the_limit_teleports` pins x 43), with `walk_under_px=20` each walks. The end-node rule must not fire here: node 60 is not a marked end, so `side_landing` returns the full reach.)
 and `test_preview_matches_next_move_on_marked_map`: for every x on A and both targets, `route_preview` `_plan(...)`'s first option equals `next_move(...)`'s move (the pattern of `tests/route/test_route_preview.py`'s S3 check; reuse its helper).
 
 - [ ] **Step 2: Run to see them fail** — `.venv/Scripts/python.exe -m pytest tests/route/test_platform_ends.py -q` -> FAIL (d = 12 walks; the gap is walked or unplanned).
 
 - [ ] **Step 3: Implement**
 
-- `_run(rg, px, goal_x, platform)`: `d = abs(goal_x - px)`, `sign`; if `platform is None` the landing is `px + sign * rg.reach_h` on no platform, else `land_x, land_p = rg.side_landing(platform, px, sign)`. Order: (1) `land_p == platform and abs(land_x - goal_x) <= arrive_px` -> TELEPORT (the end-node rule; with full reach this is also every d in [17, 19]); (2) `d < walk_under_px` -> WALK; (3) `land_p == platform` and `teleport_s + abs(land_x - goal_x) / v < d / v` -> TELEPORT; (4) WALK. Docstring cites QB266 and QB282.
+- `_run(rg, px, goal_x, platform)`: `d = abs(goal_x - px)`, `sign`; if `platform is None` the landing is `px + sign * rg.reach_h` on no platform, else `land_x, land_p = rg.side_landing(platform, px, sign)`. Order: (1) the end-node rule: `land_p == platform and land_x != px + sign * rg.reach_h and abs(land_x - goal_x) <= arrive_px` -> TELEPORT (it fires only when a marked end stopped the teleport short of its full reach, review I1, so it never catches an ordinary 17-21 px move and a raised `walk_under_px` keeps those walks); (2) `d < walk_under_px` -> WALK; (3) `land_p == platform` and `teleport_s + abs(land_x - goal_x) / v < d / v` -> TELEPORT; (4) WALK. With the default limit, rules (2) and (3) give every unmarked d in [17, 21] the teleport Task 1 gave it. Docstring cites QB266 and QB282.
 - Every `_run` call passes `anchor.platform` (P4 launch :248, P4 goal :251, P5 WALK :261).
-- `_starts`: the approach to an end uses `horizontal_cost_s(d, rg.reach_h, rg.params, to_end=is_marked_end(end, sign))`, sign from `end.x - pos.x`.
+- `_starts`: the approach to an end uses `horizontal_cost_s(d, rg.reach_h, rg.params, to_end=is_marked_end(end, sign) and anchor.platform is not None and rg.side_landing(anchor.platform, pos[0], sign)[1] == anchor.platform)`, sign from `end.x - pos.x` (review m1: a teleport that carries onto the next platform is not priced as a stop on the end).
 - P4: the line-up applies to a GAP edge as to UP/DOWN: `if _edge_kind(rg, g, h) in (UP, DOWN): launch = _launch_x(rg, g, h)`; `elif ... == GAP: launch = rg.gap_launch(g, h)` (never None: `_edge_cost` added no GAP edge without a launch); the rest of P4 is unchanged.
-- P5: `if kind == EdgeKind.GAP: return Success(Decision(Move(MoveKind.TELEPORT, _direction(px, h.minimap_position[0]), None), total, h))`.
-- `route_preview._plan`: the same statements in the same order; a GAP hop's aim is `_Edge(g, h)` (check how `src/route_view` draws an `_Edge` whose two nodes are level; if it would draw something new for the user, stop and raise it instead of changing the viewer).
-- Re-pin `_BRANCH_LINES` to the new line numbers and add the P5 GAP line to it with a hand-built-table row that reaches it.
+- P5 (with the I2 guard): `if kind == EdgeKind.GAP:` with `sign` from `h.x - px`: if `rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h)` -> `Success(Decision(Move(MoveKind.TELEPORT, _direction(px, h.minimap_position[0]), None), total, h))`; else `Success(Decision(_walk(rg, px, rg.gap_launch(g, h)), total, h))` (only reachable from inside `arrive_px` short of the launch, since P4 lines up from farther; from the launch itself the guard holds by `gap_launch`'s own check, so this cannot loop).
+- `route_preview._plan`: the same statements in the same order, the guard included; a GAP hop's aim is `_Edge(g, h)` (check how `src/route_view` draws an `_Edge` whose two nodes are level; if it would draw something new for the user, stop and raise it instead of changing the viewer).
+- Re-pin `_BRANCH_LINES` to the new line numbers and add the two P5 GAP lines (teleport, walk to the launch) to it, each with a hand-built-table row that reaches it.
 
 - [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/route -q` -> pass (the slow `test_preview_sim.py` included: `-m slow` once).
 
@@ -314,7 +343,7 @@ each asserting `world.teleport(Key.RIGHT, 0).pos == expected` (or the effect's p
 
 - [ ] **Step 2: Run to see them fail** — `.venv/Scripts/python.exe -m pytest tests/route/test_sim_side_teleport.py -q` -> FAIL.
 
-- [ ] **Step 3: Implement** `_side_target`: `current = self._platform_at((x, y))`; if None (air or rope) return the old `surface_below(x + sign * length, y - _SIDE_TELEPORT_RISE_PX)` landing. Else with `P` and its end in `sign`'s direction (`points[-1]` / `points[0]`): `x_new = x + sign * length`; inside `P`'s span -> `(x_new, P.surface_y(x_new))`; else the nearest other platform whose near end `q` has `sign * (q.x - end.x) > 0`, `sign * (q.x - x) <= length` and `abs(q.y - end.y) <= self.params.side_teleport_land_dy_px` -> `x_new` clamped into its span, at its surface; else `(end.x, end.y)`. In `teleport`, the sideways branch uses `length = self.reach_h + side_teleport_extra_px + draw.overshoot_px`, then adds `draw.landing_px` and clamps the result into the landing platform's span (noise never puts it in the air). `fall` is computed as today from the landing y.
+- [ ] **Step 3: Implement** `_side_target`: `current = self._platform_at((x, y))`; if None (air or rope) return the old `surface_below(x + sign * length, y - _SIDE_TELEPORT_RISE_PX)` landing. Else with `P` and its end in `sign`'s direction (`points[-1]` / `points[0]`): `x_new = x + sign * length`; inside `P`'s span -> `(x_new, P.surface_y(x_new))`; else the nearest other platform whose near end `q` has `sign * (q.x - end.x) > 0`, `sign * (q.x - x) <= length` and `abs(q.y - end.y) <= self.params.side_teleport_land_dy_px` -> `x_new` clamped into its span, at its surface; else `(end.x, end.y)`. In `teleport`, the sideways branch uses `length = self.reach_h + side_teleport_extra_px + draw.overshoot_px` (the overshoot is never negative, `overshoot_px = (2, 4)`, world.py:163, so a teleport shorter than the reach comes only from a negative `side_teleport_extra_px`, which Task 5's short-teleport scenario uses; nothing here may reject a negative extra), then adds `draw.landing_px` and clamps the result into the landing platform's span (noise never puts it in the air). `fall` is computed as today from the landing y.
 
 - [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/route -q`; re-pin moved sim figures (the default worlds' platform ends now stop teleports that used to go nowhere or fall). Every run must stay 6/6 with 0 off map; if not, stop and report.
 
@@ -350,7 +379,19 @@ def test_marked_map_middle_platforms_are_two():  # route graph of ff2_marked.csv
 def test_marked_map_crosses_the_gap_by_teleport():  # a known case from (59, 46) to (100, 42) (run_sim's known-case
                                                     # argument): reached; in its steps no planned WALK starts left of
                                                     # x 80 and ends right of 88, or the reverse
+def test_short_line_up_still_crosses():   # review I3 + I2, NoiseConfig.off(), REAL_GROUND_SIM: start at x 67 on the
+                                          # mid-left platform (its surface y; if a known case must start on a node, set
+                                          # the world's start the way the existing known-case tests do), target
+                                          # (100, 42): reached, off_map 0, no fall, no stall; the planned teleport
+                                          # across the gap starts at x 69 (the walker walked 67 -> 69 first)
+def test_short_teleport_stops_at_the_end_and_replans():   # review I3: the 18 px teleport (recorded jumps: 18-19 px)
+    # SimWorld on ff2_marked_terrain.json with replace(REAL_GROUND_SIM, side_teleport_extra_px=-1.0) (SimParams is a
+    # plain frozen dataclass with no check on the sign, world.py:150) and NoiseConfig.off(); character at the launch
+    # (69, its surface y): world.teleport(Key.RIGHT, 0) lands at (80, 46), the real end, not in the 80-88 gap and not
+    # on the floor (no fall); the read the walker makes there (SimPositionSource) is placed by locate (not off_map);
+    # next_move toward (100, 42) from that read is a Success that walks LEFT back to the launch x 69.
 ```
+On `test_short_teleport_stops_at_the_end_and_replans` (why it does not assert that the crossing completes): with 18 px teleports, exact A never carries over (69 + 18 = 87 < 88, and Hong's rule then stops the teleport at the end), so a full run would walk back and retry until the 10 s `stall_s` trips. The test pins that this failure is safe (no fall, no off_map, a plan from the end) and leaves the margin to WALKFIX171-D1. If Hong picks A' (launch 71: 71 + 18 = 89, inside `arrive_px` of 88), the same scenario becomes a `run_sim` known case from (67, 46) to (100, 42) that must be reached with 0 off_map, no fall and no stall, as part of the `gap_launch` change.
 
 - [ ] **Step 3: Check the real-ground teleport length** (26c9 finding): `REAL_GROUND_SIM.side_teleport_extra_px` is 1.0 because `test_preset_teleport_matches_the_recordings` takes the median of `ff2_live_reads.json`'s `side_teleports` pairs (20) minus 19; those pairs are the walker's planned-to-planned reads, which the picture delay inflates. The recorded frames show 64 flat sideways jumps of 18-19 px, median 19.0 (workspace `notes/q-20261113-153031-26c9-qa-answer.md`, Q1). Set the extra to 0.0; rewrite the preset test to assert 0.0 with that source in a comment. Its second assertion (`>= 1`, the slope-freeze guard of the off-graph fix's Task 3): keep that guard as its own scenario if no test already holds it with an explicit extra (`tests/route/test_sim_real_world.py:83` builds a world with `side_teleport_extra_px=2`; read it; if it is that scenario, drop the assertion, else add a scenario test with `SimParams(side_teleport_extra_px=1.0)` that shows the freeze path still being exercised).
 
@@ -371,14 +412,14 @@ Spec for Tasks 6-10 (Hong, QB283, chat paste 2026-11-13, verbatim): "2. Fresher 
 
 Contract with piece 1: Tasks 6-13 change nothing Tasks 1-5 produce (`walk_under_px`, `side_teleport_land_dy_px`, `side_landing`, `gap_launch`, `EdgeKind.GAP`, `is_marked_end`, `SimParams.side_teleport_land_dy_px`, the `ff2_marked*` fixtures). No piece-2 task touches the planner, the route graph, the terrain or the simulator's world, so every pinned sim figure stays exactly what Task 5 left (the sim has no picture delay and no capture: `SimPositionSource.read`, `sim/link.py:146-150`, reads the world at the clock's time). Each of Tasks 6-9 runs the four sim runs of the build notes and records "unchanged" or stops and reports.
 
-WALKFIX169-D1 (where to teleport from across a gap; question bank QB284, provisionally A, open with Hong): nothing in Tasks 6-10, 12 or 13 depends on it. If Hong picks B or C, the change is `RouteGraph.gap_launch` and the Task 3 tests (piece 1), plus the wording of one decisions entry in Task 11 (marked there).
+WALKFIX169-D1 (where to teleport from across a gap; question bank QB284, provisionally A, open with Hong; WALKFIX171-D1 proposes adding the margin variant A'): nothing in Tasks 6-10, 12 or 13 depends on it. If Hong picks A' or C, the change is `RouteGraph.gap_launch` and its tests (Tasks 2, 3 and 5; B also touches its one P4 call and the mirrored preview call, Task 2's Interfaces), plus the wording of one decisions entry in Task 11 (marked there).
 
 ### Review Focus (piece 2)
 
 6. "None of this changes how the character moves" (Hong): the settle's stillness test must not become "two pictures a few milliseconds apart". With pictures every 4-22 ms and a walk moving 1 px per 80 ms (12.5 px/s), two consecutive pictures are nearly always equal while the character still moves. Task 7 keeps the two reads the settle compares at least `poll_s` apart (WALKFIX170-D1, provisional A) and pins it with `test_settle_keeps_its_reads_poll_s_apart`.
 7. The frame stamp must belong to the picture it is stored with: frame and stamp are written together under `minimap_frame_lock` and read together under it (Task 6 pins a publisher thread that changes both on every publish against a reader that checks they match).
 8. A walker with no picture waiter (the simulator, `tools/route_tab_sim.py`, every existing test fake) must behave exactly as today: `wait_frame=None` falls back to `clock.sleep(poll_s)` (Task 7).
-9. The key-timing check asks "Is MapleStory closed? y/n" exactly once per run, before the listener, the link or any key, through `soak.maple_check` (Task 10A pins it with a counter on `soak._read_answer`); no agent answers it (H66, this plan's Global Constraints).
+9. The key-timing check asks "Is MapleStory closed? y/n" exactly once per run, before the listener, the link or any key, through `soak.maple_check` (Task 10A pins it with a counter on `soak._read_answer`); no agent answers it (H66, this plan's Global Constraints). Each arm's soak accepts only the "answered y" text the tool passes on (`_check_processes(answered=)` refuses any other), and a missed sink click at an arm's start stops the check cleanly with the arms so far kept; Part B lists exactly when Hong is needed (his answer and a click at each arm's start).
 
 ---
 
@@ -469,6 +510,7 @@ Provisional (WALKFIX170-D1, option A; undo: one line in `_settle`): inside `_set
 - Modify: `src/vision/minimap_follow.py` (`publish` notifies), the three holders (a condition), `src/route/position.py` (`wait_new`), `src/route/session.py` (pass the waiter)
 - Test (new): `tests/route/test_walker_wake.py`; add to `tests/route/test_frame_stamps.py` or a new `tests/route/test_frame_wait_walker.py` the real-thread tests below
 - Frozen walker tests (`test_walker_leg.py`, `test_walker_run.py`) are not touched: their fakes pass no waiter.
+- Update (not frozen): any holder fake that a type check or test now finds short of `minimap_frame_new` (review m8): `LostTracker.publish` calls `notify_all()` on every holder it publishes to, so the holders in `tests/vision/test_minimap_follow.py` and the recorder and session test fakes get `minimap_frame_new = threading.Condition(minimap_frame_lock)`; change nothing they assert.
 
 **Interfaces:**
 - Every holder: `minimap_frame_new = threading.Condition(self.minimap_frame_lock)` (the condition shares the lock, so every existing `with minimap_frame_lock:` reader is unchanged). `LostTracker.publish` calls `self._shared.minimap_frame_new.notify_all()` inside its `with` block. Verified (Python 3, run 2026-11-13): `notify_all()` inside `with lock:` on a `Condition(lock)` works; outside it raises `RuntimeError: cannot notify on un-acquired lock` (docs: https://docs.python.org/3/library/threading.html#condition-objects).
@@ -490,7 +532,10 @@ Real-thread tests (no walker):
 ```python
 def test_wait_new_returns_when_a_picture_is_published():        # publisher thread publishes after 30 ms; wait_new(1.0)
                                                                 # returns in < 0.5 s and the next read is not STALE
-def test_wait_new_times_out_without_a_picture():                # returns after about timeout_s (0.05), read is STALE
+def test_wait_new_times_out_without_a_picture():                # returns after about timeout_s (0.05), read is STALE;
+                                                                # bounds >= 0.04 s and < 0.5 s: `Condition.wait_for(.., 0.05)`
+                                                                # took about 60 ms on this PC (review m10, Windows timer);
+                                                                # harmless, since no timer counts waits (Task 7 intro)
 def test_wait_new_returns_at_once_when_a_newer_frame_is_there():
 def test_session_passes_the_picture_wait():                     # RunSession with a MinimapPositionSource: the walker's
                                                                 # wait_frame is positions.wait_new; with a SimPositionSource it is None
@@ -593,14 +638,15 @@ Where: `tools/`, because import-linter contract a forbids `src.input` from impor
 - Create: `tools/capture_load_window.py` (the test window), `tools/key_timing_check.py` (the check)
 - Modify: `src/input/harness/soak.py` (`run_soak` :587 and `_check_processes` :552-556 gain one optional keyword each; nothing renamed or moved, src/input/CLAUDE.md Traps first bullet)
 - Test (new): `tests/tools/test_key_timing_check.py` (or under `tests/input/` if `tests/tools/` does not exist; Windows-only, as the soak tests: soak imports winrt), `tests/input/test_soak_answered.py`
+- Modify: `tests/input/test_guard_targets.py` (review m2): the tool is a key-sending entry point that calls `maple_check`, so `test_the_other_tools_call_the_guard_through_soak` gains `assert {"soak", "maple_check"} <= set(key_timing_check.run_check.__code__.co_names)` (import it with `importlib.import_module("tools.key_timing_check")`; `tools/` has no `__init__.py`, so it imports as a namespace package from the repo root, `pytest.ini` `pythonpath = .`), and `test_every_key_sending_entry_point_calls_its_check_processes` keeps its `run_soak` line (the tool's arms go through it)
 
 **The test window** (`capture_load_window.py`, run as its own process, like the game would be): a borderless Tk window that never takes focus (do as the route view's live window does: `src/route_view/CLAUDE.md`, its focus rules), DPI-aware before Tk starts (`ctypes.windll.shcore.SetProcessDpiAwareness(2)`, so the corners are drawn 1:1), showing a minimap the capture finds: the four real corner templates (`assets/brds/*_grayscale.png` where their masks are set) around an inside of about 200 x 140 px that changes on every redraw (a dot that moves 1 px per redraw over a fixed background; never all black, `isMinimapBlack`), redrawn with `after(1)`. Build the picture in a pure function `load_picture(t: int) -> np.ndarray` (copy how `tests/vision/test_minimap_follow.py` builds its synthetic screens from the templates). `--at X,Y` places it (default: x = the primary screen's width, y = 0, the usual place of a second screen on the right).
 
 **The check** (`key_timing_check.py`), in this order:
 1. Parse `--out data/keytiming/<name> --commands 2000 --seed 1` (defaults); refuse an `--out` outside the repo's `data/` (exit 2), as `record_minimap._resolve_out`.
 2. Start the test window process; start the capture in this process with `runtime.start_capture(holder)` where `holder` is a `runtime.SharedFrame` subclass that counts the pictures published (a `minimap_frame` property whose setter counts); start a walker stand-in thread that loops `positions.wait_new(0.05); positions.read()` on `runtime.make_positions(holder)` (the walker's real per-picture load: lock, copy, template match). Wait up to 30 s for the first picture (`runtime.wait_first_frame`); none -> print "the capture did not find the test window's minimap: put the window on the second screen (python tools/capture_load_window.py --at X,Y) and start again", close the window, exit 3. No question asked yet, no listener, no link.
-3. Ask the one question: `ok, text = soak.maple_check()` (through the module, so the tests' patch of `soak._read_answer` reaches it). Not ok -> print `text`, close the window, exit 2, before any listener, link or key (H60).
-4. Run the arms, each a soak of `--commands` commands with the same `--seed` (the same commands and the same timing draws in every arm, so the arms differ in the capture pause only): set `src.vision.vision.THREAD_SLEEP_DURATION_S = pause_ms / 1000` (read by the loop on every pass), reset the picture counter, then `soak.run_soak(cfg, soak._new_link(), soak._start_sink, answered=text)` with `cfg = soak.config_from_args(soak.parse_args(["--commands", N, "--seed", S, "--out", <out>/<k>-pause<P>ms, "--short"]))` and `soak.validate(cfg)` checked first. A non-zero exit from an arm stops the check (exit 1, the arms so far kept).
+3. Ask the one question, in `run_check` (the function that does steps 3 to 6, so the guard test can find it): `ok, text = soak.maple_check()` (through the module, so the tests' patch of `soak._read_answer` reaches it). Not ok -> print `text`, close the window, exit 2, before any listener, link or key (H60). This is the only time the tool asks; no arm asks again (RTS95-D1, H60 Affects).
+4. Run the arms, each a soak of `--commands` commands with the same `--seed` (the same commands and the same timing draws in every arm, so the arms differ in the capture pause only): set `src.vision.vision.THREAD_SLEEP_DURATION_S = pause_ms / 1000` (read by the loop on every pass), reset the picture counter, then `soak.run_soak(cfg, soak._new_link(), soak._start_sink, answered=text)` with `cfg = soak.config_from_args(soak.parse_args(["--commands", N, "--seed", S, "--out", <out>/<k>-pause<P>ms, "--short"]))` and `soak.validate(cfg)` checked first. Right before each `run_soak`, print one line to the console, with a bell (`\a`) so Hong hears it: `>>> Arm <k> of up to 6 (pause <P> ms) is starting. If the window titled 'Helix input test sink' does not come to the front by itself, click it now (mouse only, no keys). The soak waits up to 120 s for it.` (the number from `soak.START_WAIT_S`, soak.py:84; the soak tries the bring-to-front once and then waits for a click, `wait_for_click`, soak.py:321-336; each arm starts a new sink, soak.py:598-603). A non-zero exit from an arm (a missed click is `EXIT_ABORT` with "the sink did not take the foreground", soak.py:603) stops the check cleanly: exit 1, the finished arms' folders and `arm.json` files kept, `result.json` written with `"stopped": "arm <k>: <the soak's exit code>"` and no result, and a last console line saying which arm stopped and that the arms so far are kept. The board is untouched by a missed click (the click wait comes before `connect`, soak.py:602-604).
 5. After each arm, write `<arm>/arm.json`: `pause_ms`, capture pictures per second over the arm, and from `analyze.load_run` + `analyze.match_delivery` (importable, analyze.py docstring) the Delivery verdict and the reaction residual's p50/p99 computed with realism's rule (copy the six lines of `realism.reaction_residual`, citing realism.py:224-238; a test pins that both give the same p50 on a run dir fixture). The agent never opens `keys.jsonl` itself; the analysis code reads it.
 6. Arms and the decision rule (all numbers in the tool as named constants):
    - Order: B1 = pause 20 ms (H80, what every walk so far ran with), N = pause 0, B2 = pause 20 ms.
@@ -610,7 +656,7 @@ Where: `tools/`, because import-linter contract a forbids `src.input` from impor
    - Write `<out>/result.json` and print one line per arm (pause, pictures/s, residual p50/p99, Delivery, later yes/no) and the result.
 7. Close the test window; the capture and stand-in threads are daemons.
 
-`soak.py` change: `_check_processes(writer, answered: str | None = None)`: None -> asks as today; a text -> writes it to `writer.session["process_check"]` and asks nothing. `run_soak(cfg, link, start_sink, *, answered: str | None = None)` passes it through. `soak.main` is unchanged, so `python -m src.input.harness.soak` still asks once per run.
+`soak.py` change: `_check_processes(writer, answered: str | None = None)`: None -> asks as today (`maple_check()`); a text -> writes it to `writer.session["process_check"]`, asks nothing, and accepts only the text `maple_check` returns for a `y` (`"answered y: MapleStory closed"`, soak.py:521): any other text raises `_Refused(answered)`, so `run_soak` exits `EXIT_REFUSED` before the listener, the link or any key (review m2). `run_soak(cfg, link, start_sink, *, answered: str | None = None)` passes it through. `soak.main` is unchanged, so `python -m src.input.harness.soak` still asks once per run. `_check_processes` still calls `maple_check` by name (test_guard_targets.py:86) and `run_soak` still calls `_check_processes` (:90).
 
 - [ ] **Step 1: Failing tests** (fakes for the window process, `runtime.start_capture`, `soak.run_soak` and `analyze`; nothing real is opened or sent):
 ```python
@@ -624,8 +670,14 @@ def test_inconclusive_when_the_capture_did_not_run_fast():
 def test_out_must_be_under_data():
 def test_load_picture_is_found_by_the_capture():   # load_picture(t) through the capture's corner match and follow lock
                                                    # (as test_minimap_follow does): found, and still_there holds from t to t+1
+def test_a_missed_click_stops_with_the_arms_so_far_kept():  # review I5: fake run_soak returns 0 for arm 1 and
+                                                   # EXIT_ABORT for arm 2: exit 1, arm 1's arm.json kept, result.json has
+                                                   # "stopped": "arm 2: 1" and no result, run_soak not called a third time,
+                                                   # _read_answer called once, window closed
+def test_each_arm_announces_itself():              # the ">>> Arm <k> of up to 6 (pause <P> ms) is starting" line is
+                                                   # printed before each run_soak call, with the arm's pause
 ```
-`tests/input/test_soak_answered.py`: `_check_processes(writer, answered="answered y: MapleStory closed")` asks nothing and records the text; with no keyword it asks as before (existing soak tests stay green untouched).
+`tests/input/test_soak_answered.py`: `_check_processes(writer, answered="answered y: MapleStory closed")` asks nothing and records the text; `answered="refused: ..."` or any other text records it and raises `_Refused` (and `run_soak(..., answered="x")` returns `EXIT_REFUSED` without calling `start_sink` or `link.connect`); with no keyword it asks as before (existing soak tests stay green untouched).
 - [ ] **Step 2: Run to see them fail.**
 - [ ] **Step 3: Implement** as above.
 - [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/input tests/test_anti_cheat_names.py <the new test file> -q` -> pass.
@@ -638,10 +690,16 @@ Done: tests pass, `tools/check.py` green. Nothing was run against the board.
 
 ### Part B: run the check (HONG-GATED)
 
-Before it: the orchestrator asks Hong (Q&A page or chat) to confirm that MapleStory is closed and that nobody will use the PC for about three hours, and that he is at the PC to answer the tool's question. No agent runs Part B before that answer, and no agent ever answers the tool's "Is MapleStory closed? y/n" (H66; the brief's binding rule): the agent starts the tool in a new console window on Hong's screen, and Hong types the answer there.
+Before it: the orchestrator asks Hong (Q&A page or chat) to confirm that MapleStory is closed and will stay closed until the tool has ended, and gives him the list below of when he is needed. No agent runs Part B before that answer, and no agent ever answers the tool's "Is MapleStory closed? y/n" (H66; the brief's binding rule): the agent starts the tool in a new console window on Hong's screen, and Hong types the answer there.
 
-- [ ] **Step 1:** Board connected and bonded (as for any soak, `src/input/CLAUDE.md`). From the worktree root, the agent opens a console window for Hong: `cmd //c start "Helix key-timing check" cmd /k ".venv\Scripts\python.exe tools/key_timing_check.py --out data/keytiming/walkfix-<date>"` (in Git Bash). The tool first shows the test window and waits for the capture to find it; if it exits 3, Hong moves the window (`--at X,Y`) and the agent starts it again.
-- [ ] **Step 2:** Hong answers the question in that window. The agent waits for the tool to end (it can read `result.json` and the `arm.json` files; it never opens `keys.jsonl`).
+Why Hong is needed during the run (review I5): each arm is its own soak, and each soak starts a new sink window and must have it in front before it connects (soak.py:598-604). It tries the bring-to-front once; Windows may refuse it to a program that did not get the last input, and then the soak needs a click on the sink within 120 s, or the arm aborts (soak.py:321-336, :603). No click is needed while an arm runs, and every click comes before the arm connects, so no key is in flight when he clicks. When Hong is needed (the whole list; the run takes about 1.5 h with three arms and up to about 2.7 h with six, at about 27 min an arm):
+1. Before the start: confirm to the orchestrator that MapleStory is closed.
+2. At the start: type `y` (or anything else to refuse) in the console window titled "Helix key-timing check", once. The tool never asks again.
+3. At the start of each arm (3 arms at about 0, 27 and 54 min after his answer; if the search runs, up to 3 more at about 81, 108 and 135 min): when the console beeps and prints `>>> Arm <k> of up to 6 ... is starting`, click the window titled "Helix input test sink" if it is not already in front. Mouse only.
+Between those moments: no key at all on the PC (every key is an extra key event that fails the arm's Delivery check, root CLAUDE.md), and no click anywhere (a click on another window takes the focus from the sink; after 10 s without it back the arm aborts with FOCUS_LOST, soak.py:620-621). So Hong stays near the PC for the whole run, but touches it only for those clicks. Place the windows first (review m9): keep the console window and the sink window on the primary screen, so that neither covers the test window on the second screen (a covered test window makes the capture slow and the run "inconclusive").
+
+- [ ] **Step 1:** Board connected and bonded (as for any soak, `src/input/CLAUDE.md`). From the worktree root, the agent opens a console window for Hong: `cmd //c start "Helix key-timing check" cmd /k ".venv\Scripts\python.exe tools/key_timing_check.py --out data/keytiming/walkfix-<date>"` (in Git Bash). The tool first shows the test window and waits for the capture to find it; if it exits 3, the agent starts it again with `--at X,Y` for Hong's second screen (Hong says where it is, or moves the window there).
+- [ ] **Step 2:** Hong answers the question in that window, and clicks the sink at each arm's start when the tool asks (the list above). The agent waits for the tool to end (it can read `result.json` and the `arm.json` files; it never opens `keys.jsonl`). If the tool stopped at an arm (a missed click: `result.json` `"stopped"`), the agent reports which arm and the arms so far to the orchestrator; a re-run is a new HONG-GATED start (same list).
 - [ ] **Step 3:** Result:
   - 0 ms: nothing to change; `THREAD_SLEEP_DURATION_S` stays 0.0.
   - P ms (1, 2, 5, 10 or 20): set `THREAD_SLEEP_DURATION_S = P / 1000` with a comment citing the result folder, re-pin `test_loop_pause_is_the_setting`, `tools/check.py` green, commit `fix(vision): capture pause P ms, the smallest that keeps the keys on time (WALKFIX Task 10B, QB283 2b)`.
@@ -662,14 +720,14 @@ Done: the result is recorded; the setting is the number found (or 0); Hong is to
 Entries, each in the file's format (heading, Question/Context, Ruling with Hong's words verbatim, In plain words, Affects, Cost if wrong, Undo, Pointer):
 - **"Speed and fluidity are both the goal"**: Hong, Q&A page q-20261113-134259-6e30, 2026-11-13, verbatim "SPeed + fluidity are both the goal. " (ledger-ROPE.md: about the overshoot fix; not itself an answer to fluid165-1).
 - **Item 1, walk to a node closer than 17 px** (QB266 verbatim; the keep rule: kept only if his next FF2 10-lap walk is no slower than 221 s, else move the limit or undo; no sliding allowance, with the 8db2 finding that the "slide" is picture delay, workspace `notes/q-20261113-140306-8db2-qa-answer.md` Q2). Affects: Task 1's files; `walk_under_px`.
-- **Item 4, sideways teleports stop at a platform's end** (QB282 verbatim, his word as the game confirmation; the game fact as he stated it, workspace `notes/q-20261113-155322-cd0c-qa-answer.md`; the 4 px setting; the measured teleport length 18-19 px, median 19.0 over 64 recorded jumps, and the real-ground sim's extra from 1.0 to 0.0, workspace `notes/q-20261113-153031-26c9-qa-answer.md` Q1; the GAP launch point: WALKFIX169-D1 / QB284 with Hong's answer if given by then, else "provisionally A, open"; if he picks B or C, this entry says so and points to the `gap_launch` change). Affects: Tasks 2-5's files.
+- **Item 4, sideways teleports stop at a platform's end** (QB282 verbatim, his word as the game confirmation; the game fact in his own words, quoted verbatim, typos included, from workspace `ledger-ROPE.md:404` (the line `Decision (Hong) (page, q-20261113-155322-cd0c, 2026-11-13; game fact)`), not from the cd0c answer notes, which paraphrase it (review m7); the 4 px setting; the measured teleport length 18-19 px, median 19.0 over 64 recorded jumps, and the real-ground sim's extra from 1.0 to 0.0, workspace `notes/q-20261113-153031-26c9-qa-answer.md` Q1; the GAP launch point: WALKFIX169-D1 / QB284 with Hong's answer if given by then, else "provisionally A, open"; if he picks B or C, this entry says so and points to the `gap_launch` change). Affects: Tasks 2-5's files.
 - **Item 2, fresher pictures; amends H80** (QB283 item 2 verbatim; H80's 20 ms floor lifted, with Hong's earlier page message that the floor was arbitrary and more processor time is fine, workspace `notes/q-20261113-154947-0927-qa-answer.md`; re-find every 22 s; stamps; the walker's wake and the settle spacing (WALKFIX170-D1 with the orchestrator's or Hong's ruling); the key-timing check's result, or "pending Task 10B" if it has not run). Add one line under H80: "Amended by H<n> (2026-11-13): the floor is lifted; see there." (the only edit to an old entry).
 - **Item 3, the stopped check after his walk** (QB283 item 3 verbatim; decided, not built; Task 13).
 - **The rope fix and the off-map fix are signed off** (QB267, page 2026-11-13 16:22, verbatim "Yes, sign off both the rope fix and the off-map fix"; option A; a sign-off merges nothing).
 - The order and the done rule (ledger-ROPE.md `Decision (Hong) (chat paste`): "1, 2 and 4 can be built now (2's no-pause part is final only after the key-timing check). Then my 10-lap walk ... Then 3." and "tested in the simulator, every check passing, reviewed by a second agent, and checked by my own walk": in the item 1 entry, pointed to from the others.
 
 CLAUDE.md updates (make each true; a fact lives in one file, the others point to it):
-- Root `CLAUDE.md`: Vision: the stamp, re-find every 22 s, "no fixed pause between pictures (H<n>, amends H80)" or the number Task 10B set; Threads: `minimap_frame_ns` and `minimap_frame_new` written with the frame under the lock, the walker waking on it; Running: both sim smoke lines with the figures from `notes/WALKFIX169-build.md` (the last recorded run of each command), and the marked-map run if Task 5 made it a documented command; Safety rules: `tools/key_timing_check.py` sends keys through the soak, asks the MapleStory question once, HONG-GATED.
+- Root `CLAUDE.md`: Vision: the stamp, re-find every 22 s, "no fixed pause between pictures (H<n>, amends H80)" or the number Task 10B set; Threads: `minimap_frame_ns` and `minimap_frame_new` written with the frame under the lock, the walker waking on it; Running: both sim smoke lines with the figures from `notes/WALKFIX169-build.md` (the last recorded run of each command), and the marked-map run if Task 5 made it a documented command; Safety rules: `tools/key_timing_check.py` sends keys through the soak, asks the MapleStory question once, HONG-GATED, with Hong at the PC to click the sink at each arm's start (Task 10B's list).
 - `src/vision/CLAUDE.md`: the pause bullet (value, its setting, `time.sleep(0)` yields on Windows), the re-find bullet, the stamp (`grab_new_frame_stamped`, `_grab_stamped`, the tests' patch of `vision._grab_stamped`), the closing bullet's "floor at vision.py:82".
 - `src/route/CLAUDE.md`: frozen-file exceptions (walker: the `wait_frame` keyword and the six waits, Task 7; planner/route_graph/terrain/params: Tasks 1-3); the position source's `frame_ns` and `wait_new`; the step log's `EXTRA_FIELDS`; the recorder's `frame_ns`; the new tests and fixtures; the real-ground preset's 0.0 extra.
 - `src/input/CLAUDE.md`: `run_soak`'s and `_check_processes`'s `answered` keyword and that `tools/key_timing_check.py` uses soak's private names (`_new_link`, `_start_sink`), in the "soak.py is a library in practice" bullet.
@@ -688,7 +746,7 @@ Done: every entry above exists with Hong's words verbatim; every CLAUDE.md fact 
 - [ ] **Step 2:** The four sim runs once more; figures equal the last recorded ones and root CLAUDE.md's.
 - [ ] **Step 3:** `git status` clean apart from the `.venv` junction, which is gitignored; remove it with `cmd //c rmdir "C:\Users\Qing_programming\Desktop\helix-fluid\.venv"` only (Task 0: a recursive delete would follow it into the main clone's venv).
 
-Done: `--full` green on the branch head; nothing to commit. Merging and Hong's 10-lap walk are the orchestrator's (the walk is Hong's).
+Done: `--full` green on the branch head; nothing to commit. Merging and Hong's 10-lap walk are the orchestrator's (the walk is Hong's). The walk waits for Task 10B's result as well (Hong: "2's no-pause part is final only after the key-timing check. Then my 10-lap walk"); if Task 10B set a pause after this task ran, Task 12 runs again on the new head first.
 
 ---
 
@@ -699,7 +757,7 @@ Hong (QB283): "3. Knowing when the character has stopped, after my next walk. Fr
 Starts only after Hong's 10-lap walk with Tasks 1-12 built (Hong's order: "Then my 10-lap walk ... Then 3.").
 
 Outline:
-1. Measure (an agent, from his run folder, no key): key-down and key-up times from `steps.jsonl` (`planned` t_ns + `sent` waited_ms, then the `keys` deltas in 100 µs units); picture times from `frames/index.jsonl` `frame_ns` (Task 6) with the character found in each PNG by `CharacterLocator`, and the walker's own reads' `frame_ns` on `planned`/`settled` lines. Delays: key-down of a sideways teleport to the first picture showing the jump (|dx| >= 8); key-up of a walk to the first picture after which the position no longer changes. The recorder saves 10 pictures a second (`RECORD_FPS`, session.py:87), so each move's delay is known to within 0.1 s; over the walk's ~200 moves the median is good to about 0.01 s (see WALKFIX170-D2). Report median, p90, p99 per kind.
+1. Measure (an agent, from his run folder, no key): key-down and key-up times from `steps.jsonl` (`planned` t_ns + `sent` waited_ms, then the `keys` deltas in 100 µs units); picture times from `frames/index.jsonl` `frame_ns` (Task 6) with the character found in each PNG by `CharacterLocator`, and the walker's own reads' `frame_ns` on `planned`/`settled` lines. Delays, each measured from the two pictures bracketing it (WALKFIX170-D2 = A, with the reviewer's caveat, review m4): for a sideways teleport, the last picture not yet showing the jump (|dx| >= 8) and the first picture showing it; for the end of a walk, the last picture in which the position still changes and the first after which it no longer does. Each move's delay lies between (earlier picture's `frame_ns` − key time) and (later picture's `frame_ns` − key time); its estimate is the midpoint of that bracket, not the later picture alone (the later picture alone is late by half the interval, about 0.05 s on average at the recorder's 10 pictures a second, `RECORD_FPS`, session.py:87). Where the walker's own reads (`frame_ns` on `planned`/`settled` lines) fall inside a bracket, they narrow it. Over the walk's ~200 moves, with random phase, the median of the midpoints is good to about 0.01 s; p90 and p99 are not resolved at a 0.1 s bracket, so report them with their bracket width. Report median, p90, p99 per kind.
 2. Decide with Hong (raised by the orchestrator): D = which percentile, the margin ("a small margin for a slow Bluetooth key": the V3 soak's residual p99 − p50 is about 46 ms, spec :141).
 3. Build (frozen `walker.py` and `params.py`, Hong's QB283 item 3 opens them): new settings `picture_delay_s`, `key_margin_s`; the walker learns each move's key-up time from the `ActionRecord` `execute` returns and the picture's stamp from the position source (a protocol extension: `frame_ns` from Task 6, decided then); `_settle` waits (Task 7's waiter) for a picture with `frame_ns >= key_up_ns + D + margin` and plans from it, replacing the two-equal-reads rule and `min_settle_s`'s role (WALKFIX170-D1 ends here). The simulator gets a picture delay (`SimPositionSource` reads `position_at(now − D)`) so the new rule has a simulator test; sim figures will move and are re-pinned there.
 4. Done rule as for every item: simulator test, every check, a second agent's review, Hong's walk.
