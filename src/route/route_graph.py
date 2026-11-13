@@ -121,7 +121,9 @@ class RouteGraph:
         self.reach_h = reach_h
         self.reach_v = reach_v
         self.params = params
-        self.split_ends = split_ends  # (platform index, sign) for each platform end a GAP edge leaves from (re-review N1)
+        # (platform index, sign) for both ends of every gap a mark types GAP (re-review N1), collected before pricing,
+        # so also the ends of a GAP edge that `_edge_cost` then drops for having no launch (T2R m2)
+        self.split_ends = split_ends
 
     @classmethod
     def build(cls, path_graph: PathGraph, params: MovementParams) -> Result["RouteGraph", str]:
@@ -139,7 +141,8 @@ class RouteGraph:
             return Failure(f"terrain inference failed: {terrain_result.failure()}")
         terrain = terrain_result.unwrap()
 
-        # a first pass types the PathGraph edges and collects the platform ends a GAP edge leaves from; the graph is
+        # a first pass types the PathGraph edges and collects both platform ends of every gap typed GAP (an edge that
+        # pricing later drops for having no launch point still counts: the ends stay stops, T2R m2); the graph is
         # built with them, and only then are the edges priced, because the GAP and WALK costs call `side_landing`
         typed: list[tuple[Node, Node, EdgeKind]] = []
         seen: set[tuple[Node, Node]] = set()
@@ -172,9 +175,10 @@ class RouteGraph:
 
     def is_stop_end(self, node: Node, sign: int) -> bool:
         """`node` is the end of its terrain platform toward `sign` and that end stops a sideways teleport: it is marked
-        (`is_marked_end`) or a GAP edge leaves from it (`split_ends`, so the unmarked end of a gap whose other side is
-        marked counts too, re-review N1). The one test of "a platform's end" that `side_landing`, the WALK cost's
-        `to_end` and the planner use."""
+        (`is_marked_end`) or it is an end of a gap a mark types GAP (`split_ends`, so the unmarked end of a gap whose
+        other side is marked counts too, re-review N1; also when no teleport launch lands across that gap, T2R m2:
+        the teleport still stops at the end of the platform it is on). The one test of "a platform's end" that
+        `side_landing`, the WALK cost's `to_end` and the planner use."""
         p = self.terrain.platform_index(node)
         platform = self.terrain.platforms[p]
         if node is not (platform[-1] if sign > 0 else platform[0]):
@@ -249,6 +253,7 @@ class RouteGraph:
             # review m1: a teleport from `u` that would carry onto the next platform is not a stop on the end
             to_end = (
                 sign != 0
+                and self.terrain.platform_index(v) == platform  # T2R m1: a walk onto another platform stops on no end
                 and self.is_stop_end(v, sign)
                 and self.side_landing(platform, u.minimap_position[0], sign)[1] == platform
             )

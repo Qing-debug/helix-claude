@@ -84,7 +84,15 @@ def syn(points, can_fall=False, **params):
     return ("syn", tuple(points), can_fall, tuple(sorted(params.items())))
 
 
+def marked(rows):
+    """A map with platform-end marks, `rows` of (x, y, left-end mark, right-end mark): `_synthetic` builds none."""
+    return ("marked", tuple(rows))
+
+
 FF2 = ff2()
+# walk-fluid Task 3 (QB282): platform A (24, 50), (40, 50) marked right; platform B (50, 52) marked left, (66, 52); the
+# gap between them is crossed by a teleport from x 31 (the exact launch, WALKFIX169-D1 A; A2 would be 34)
+GAP_MAP = marked([(24, 50, False, False), (40, 50, False, True), (50, 52, True, False), (66, 52, False, False)])
 STRANGER = "a node not in the graph"  # T16's target, made when the graphs are built (not at import)
 
 
@@ -188,6 +196,18 @@ CASES = [
         (TP_UP, (48, 45), (48, 45)),
         (walk(R, 800), (58, 46), (58, 46)),
     ])),
+    # T25 and T26: P5's GAP branch. T25 from the launch x: the sideways teleport onto (50, 52), then the 16 px walk (the cost
+    # is the approach 0.72 + the GAP edge 1.27 + the walk 1.28); T26 from 2 px short of it, where the teleport would stop at the
+    # end (B starts 21 px away), so the I2 guard walks to the launch first (cost 0.55 + 1.27 + 1.28)
+    ("T25", GAP_MAP, (31, 50), 3, (3.27, [
+        (TP_R, 2, (50, 52)),
+        (walk(R, 1280), 3, (66, 52)),
+    ])),
+    ("T26", GAP_MAP, (29, 50), 3, (3.10, [
+        (walk(R, 160), 2, (31, 50)),
+        (TP_R, 2, (50, 52)),
+        (walk(R, 1280), 3, (66, 52)),
+    ])),
     ("D1", FF2, (129, 60), (97, 43), (3.11, [  # 2.62 before QB266 (walk-fluid Task 1); the hops are the same
         (TP_L, (105, 42), (110, 60)),
         (walk(L, 400), (105, 42), (105, 60)),
@@ -240,6 +260,13 @@ def _build(graph, tmp_path_factory):
             return _node(agent, spec)
 
         return rg, node
+    if graph[0] == "marked":
+        nodes = {i: Node("blue_node", (x, y), False, False, left, right) for i, (x, y, left, right) in enumerate(graph[1])}
+        pg = MapleAgent(characterClass=Kanna()).buildPathGraphFor(nodes).unwrap()
+        assert is_successful(pg.buildGraph())
+        result = RouteGraph.build(pg, MovementParams())
+        assert is_successful(result)
+        return result.unwrap(), nodes.__getitem__
     _, points, can_fall, params = graph
     nodes, rg = _synthetic_with(points, can_fall, **dict(params))
     return rg, nodes.__getitem__
@@ -354,12 +381,15 @@ def test_the_table_literals(built, case_id):
 # ---- 3. the six planner branches are really taken (spec S3) ----
 
 _BRANCH_LINES = {
-    157: "return None",
-    179: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
-    180: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
-    221: "return Failure(anchor_result.failure())",
-    233: 'return Failure(f"no path from ',
-    263: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    189: "return None",
+    211: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
+    212: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
+    253: "return Failure(anchor_result.failure())",
+    265: 'return Failure(f"no path from ',
+    299: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25), and the I2 guard's walk to the launch (T26)
+    309: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
+    311: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
 }
 
 
@@ -367,7 +397,7 @@ def test_s3_the_table_takes_the_six_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 233:
+        if number != 265:
             assert lines[number - 1].strip() == text, (number, lines[number - 1])
 
     planner_file = planner.__file__

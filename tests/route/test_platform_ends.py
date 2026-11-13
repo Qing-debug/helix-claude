@@ -11,15 +11,21 @@ end, and (66, 52). M0 has the same four nodes with no marks, MN with every mark 
 
 from pathlib import Path
 
+import networkx as nx
+import numpy as np
 import pytest
 from returns.pipeline import is_successful
+from test_route_preview import _first_hop_problems
 
 from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
 from src.controller.node import Node
+from src.input.protocol import Key
 from src.route import planner
 from src.route.params import MovementParams, validate
+from src.route.planner import Move, MoveKind, next_move
 from src.route.route_graph import EdgeKind, RouteGraph, _side_kind, horizontal_cost_s, is_marked_end
+from src.route.route_preview import preview
 from src.route.terrain import Terrain
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "fossil_foundry_2.csv"
@@ -223,3 +229,170 @@ def test_offered_keeps_the_split_ends(monkeypatch):
     assert view is not built.rg
     assert view.split_ends == built.rg.split_ends and view.split_ends
     assert view.side_landing(built.p(24), 28, +1) == built.rg.side_landing(built.p(24), 28, +1) == (40, built.p(24))
+
+
+# ---- Task 3: the planner plays the landing rule (QB282) ----
+
+RNG = np.random.default_rng(0)
+TP_R = Move(MoveKind.TELEPORT, Key.RIGHT, None)
+TP_L = Move(MoveKind.TELEPORT, Key.LEFT, None)
+M19 = [(21, 50, False, False), (40, 50, False, True)]  # one platform, 19 px long, its right end marked
+FLAT = [(30, 50, False, False), (45, 50, False, False), (60, 50, False, False)]  # Task 1's unmarked platform
+# A (24, 50), (40, 50) marked right; C (70, 52) marked left, (86, 52): C starts 30 px from A's end, out of reach
+M_far = [(24, 50, False, False), (40, 50, False, True), (70, 52, True, False), (86, 52, False, False)]
+
+
+def walk(direction: Key, ms: float) -> Move:
+    return Move(MoveKind.WALK, direction, ms)
+
+
+def decide(built: Built, pos: tuple[int, int], target_x: int):
+    result = next_move(built.rg, pos, built.n[target_x], RNG)
+    assert is_successful(result), result
+    return result.unwrap()
+
+
+def test_teleport_stops_on_the_marked_end_even_under_17():  # d = 12, B is 22 px away
+    d = decide(Built(M), (28, 50), 40)
+    assert d.move == TP_R
+    assert d.cost_to_go_s == pytest.approx(0.55)  # `_starts` prices the approach to the end node as the teleport
+
+
+def test_without_the_mark_the_same_move_walks():
+    assert decide(Built(M0), (28, 50), 40).move == walk(Key.RIGHT, 960.0)
+
+
+def test_an_unmarked_split_end_stops_the_teleport_too():  # re-review N1: only (50, 52) is marked, (40, 50) is not
+    assert decide(Built(M_left_mark_only), (28, 50), 40).move == TP_R
+
+
+def test_carry_over_is_not_a_stop_on_the_end():  # from 33 the teleport carries onto B
+    d = decide(Built(M), (33, 50), 40)
+    assert d.move == walk(Key.RIGHT, 560.0)
+    assert d.cost_to_go_s == pytest.approx(7 / 12.5)  # review m1: not priced as a stop on the end
+
+
+def test_lower_platform_does_not_count():  # B at y 56: from 33 the teleport stops at 40
+    assert decide(Built(M_b_at(56)), (33, 50), 40).move.kind == MoveKind.TELEPORT
+
+
+def test_crossing_the_gap_lines_up_then_teleports():
+    built = Built(M)
+    d1 = decide(built, (25, 50), 66)
+    assert d1.move == walk(Key.RIGHT, 480.0) and d1.toward is built.n[50]  # to the launch x 31 (A2: 720.0 to x 34)
+    d2 = decide(built, (31, 50), 66)  # A2: from (34, 50)
+    assert d2.move == TP_R and d2.toward is built.n[50]  # a GAP edge plays as a sideways teleport, not a down move
+    assert d2.cost_to_go_s == pytest.approx(0.72 + (0.72 + 0.55) + 1.28)  # approach to (40, 50) + GAP edge + 16 px walked
+
+
+def test_crossing_the_gap_leftwards():  # B's launch toward A is 40 + 19 = 59 (A2: 56)
+    built = Built(M)
+    assert decide(built, (59, 52), 24).move == TP_L  # P5 with sign -1
+    d1 = decide(built, (63, 52), 24)
+    assert d1.move == walk(Key.LEFT, 320.0) and d1.toward is built.n[40]  # 4 px to the launch (A2: 7 px, 560.0)
+
+
+def test_no_walk_crosses_the_gap():  # every x on A toward every B node, and from B toward A
+    built = Built(M)
+    for x in range(24, 41):
+        for target in (50, 66):
+            move = decide(built, (x, 50), target).move
+            assert not (move.kind == MoveKind.WALK and move.direction == Key.RIGHT
+                        and x + 12.5 * (move.walk_ms or 0) / 1000 > 40 + 2), (x, target, move)
+    for x in range(50, 67):
+        for target in (24, 40):
+            move = decide(built, (x, 52), target).move
+            assert not (move.kind == MoveKind.WALK and move.direction == Key.LEFT
+                        and x - 12.5 * (move.walk_ms or 0) / 1000 < 50 - 2), (x, target, move)
+
+
+def test_read_two_px_past_a_marked_end_plans():  # Review Focus 5
+    built = Built(M)
+    assert is_successful(next_move(built.rg, (42, 50), built.n[24], RNG))
+
+
+def test_a_read_past_a_stop_end_with_nothing_in_reach_walks_back():
+    """`side_landing` from a px already past the stop end with no platform in reach is (end.x, platform): a landing
+    behind the character (Task 2's wording, kept). The planner never asks it that way round: a goal on the platform
+    lies behind the read, so `_run` asks toward the other end (not a stop), and `_starts` gives `to_end` False for an
+    end that is behind (its `sign` points away from it). So the read plans like any other and walks back onto the
+    platform."""
+    built = Built(M_far)
+    a = built.p(24)
+    assert built.rg.side_landing(a, 42, +1) == (40, a)  # behind the character, as Task 2 returns it
+    assert decide(built, (43, 50), 40).move == walk(Key.LEFT, 240.0)
+    assert decide(built, (43, 50), 24).move.kind == MoveKind.TELEPORT  # d = 19 toward the unmarked left end
+
+
+@pytest.mark.parametrize("x", [43, 42, 41])  # review I1: d = 17, 18, 19 on an unmarked platform, toward (60, 50)
+def test_raised_limit_walks_17_to_19(x):
+    assert decide(Built(FLAT), (x, 50), 60).move.kind == MoveKind.TELEPORT  # the default limit: Task 1's range
+    raised = Built(FLAT, MovementParams(walk_under_px=20))
+    assert decide(raised, (x, 50), 60).move.kind == MoveKind.WALK  # the end-node rule does not fire: 60 is no marked end
+
+
+def test_raised_limit_keeps_the_end_node_teleport():  # Hong (QB282): "even under the 17 px limit"
+    raised = Built(M, MovementParams(walk_under_px=20))
+    assert decide(raised, (28, 50), 40).move == TP_R
+
+
+@pytest.mark.parametrize("x, walk_ms", [(29, 160.0), (30, 80.0)])  # review I2: inside arrive_px of launch 31, but the
+def test_short_of_the_launch_walks_to_it(x, walk_ms):               # teleport would stop at 40 (A2: x 29 / 30 walk 400.0 / 320.0)
+    built = Built(M)
+    d = decide(built, (x, 50), 66)
+    assert d.move == walk(Key.RIGHT, walk_ms) and d.toward is built.n[50]  # the I2 guard's walk (P5), toward the GAP edge's far node
+
+
+@pytest.mark.parametrize("walk_under_px", [17, 20])  # re-review m-a: the full reach lands exactly on the marked end
+def test_full_reach_onto_a_marked_end_teleports(walk_under_px):  # node (d = 19), even with the raised limit
+    built = Built(M19, MovementParams(walk_under_px=walk_under_px))
+    assert decide(built, (21, 50), 40).move == TP_R
+
+
+def test_run_without_a_platform_uses_the_full_reach():  # m-f: rule (1) needs `platform is not None`
+    built = Built(M)
+    assert planner._run(built.rg, 28, 40, None) == walk(Key.RIGHT, 960.0)  # no platform: no end node, d = 12 is walked
+    assert planner._run(built.rg, 28, 40, built.p(24)) == TP_R
+
+
+@pytest.mark.parametrize("one_sided", [M_right_mark_only, M_left_mark_only])  # re-review N1
+def test_one_sided_mark_crosses_the_gap(one_sided):
+    built = Built(one_sided)
+    assert decide(built, (25, 50), 66).move == walk(Key.RIGHT, 480.0)  # A2: 720.0 to x 34
+    d = decide(built, (31, 50), 66)  # A2: from (34, 50)
+    assert d.move == TP_R and d.toward is built.n[50]
+
+
+def test_preview_lands_sideways_teleports_by_side_landing():  # re-review m-b
+    built = Built(M)
+    assert preview(built.rg, (31, 50), built.n[66]).unwrap().hops[0].landing == (50, 52)  # A2: from (34, 50), (53, 52)
+    assert preview(built.rg, (28, 50), built.n[40]).unwrap().hops[0].landing == (40, 50)  # stops at the end node
+
+
+def test_preview_matches_next_move_on_marked_map():
+    built = Built(M)
+    problems: list[str] = []
+    for x, y, targets in [(x, 50, (50, 66)) for x in range(24, 41)] + [(x, 52, (24, 40)) for x in range(50, 67)]:
+        for target in targets:
+            problems += _first_hop_problems(built.rg, (x, y), built.n[target])
+    assert problems == []
+
+
+def test_no_move_across_the_gap_goes_down():  # T2R fyi: a GAP edge must not fall into `_go_down` (M has no down edge at all)
+    built = Built(M)
+    for x, y, targets in [(x, 50, (50, 66)) for x in range(24, 41)] + [(x, 52, (24, 40)) for x in range(50, 67)]:
+        for target in targets:
+            move = decide(built, (x, y), target).move
+            assert move.kind != MoveKind.DROP and not (move.kind == MoveKind.TELEPORT and move.direction == Key.DOWN), (x, target, move)
+
+
+def test_a_walk_edge_onto_another_platform_is_not_priced_as_a_stop_on_its_end():
+    """T2R m1: an unmarked split (review I4 keeps such an edge WALK) onto a one-node platform whose only mark is its
+    right mark. `is_stop_end(v, +1)` holds for that node, but the teleport from `u` would not stop on the end of `u`'s
+    own platform, so the edge costs the walk, 6 / 12.5, not 0.55."""
+    base = Built(M0)
+    u40, u46 = base.n[40], Node("blue_node", (46, 50), False, False, False, True)
+    terrain = Terrain(links=(), platforms=((base.n[24], u40), (u46,)))
+    rg = RouteGraph(nx.DiGraph(), terrain, base.rg.align_px, base.rg.reach_h, base.rg.reach_v, base.rg.params)
+    assert rg.is_stop_end(u46, +1)
+    assert rg._edge_cost(u40, u46, EdgeKind.WALK) == pytest.approx(6 / 12.5)
