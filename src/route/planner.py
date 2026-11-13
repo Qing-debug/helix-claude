@@ -167,7 +167,7 @@ def _offered(rg: RouteGraph) -> RouteGraph:
     if not blocked:
         return rg
     view = nx.subgraph_view(rg.graph, filter_edge=lambda u, v: (u, v) not in blocked)
-    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params)
+    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params, split_ends=rg.split_ends)
 
 
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:

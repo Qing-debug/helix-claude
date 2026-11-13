@@ -22,6 +22,7 @@ class EdgeKind(StrEnum):
     SLOPE = "slope"
     UP = "up"
     DOWN = "down"
+    GAP = "gap"  # a sideways teleport from one platform onto another, across a platform-end mark (QB282)
 
 
 _TERRAIN_KIND = {
@@ -32,17 +33,56 @@ _TERRAIN_KIND = {
 }
 
 
-def horizontal_cost_s(dx_px: float, reach_h: int, p: MovementParams) -> float:
+def is_marked_end(node: Node, sign: int) -> bool:
+    """The map marks `node` as the end of its platform toward `sign` (+1 right, otherwise left). A mark that is None
+    (a `Node` built without the argument) is no mark."""
+    return bool(node.is_right_platform_edge) if sign > 0 else bool(node.is_left_platform_edge)
+
+
+def horizontal_cost_s(dx_px: float, reach_h: int, p: MovementParams, *, to_end: bool = False) -> float:
     """Seconds to cover `dx_px` horizontally, hop by hop as the planner's `_run` moves: a distance under
     `walk_under_px` (QB266) is walked; otherwise one teleport is taken when it plus the walk of what is left beats
     walking all of it, and the rule applies again from where it lands. A teleport that overshoots is walked back from,
-    never preferred to walking a short distance, so there is no "overshoot and walk back" option below the limit."""
+    never preferred to walking a short distance, so there is no "overshoot and walk back" option below the limit.
+
+    `to_end` (QB282): the run ends on a platform end that stops a teleport, so the last hop, when what is left is
+    within `reach_h`, is a teleport that stops there, even under `walk_under_px`. Callers pass `to_end` only when a
+    teleport from the start x stops on the own platform (`RouteGraph.side_landing`), which is exact for a single hop
+    (`dx_px <= reach_h`); for a longer run, whether the last hop would carry over is not priced (the planner's move
+    choice is exact, the graph cost stays a heuristic, as it always was across a walk run)."""
     d, total = abs(dx_px), 0.0
     v, t = p.walk_px_per_s, p.teleport_s
-    while d >= p.walk_under_px and t + abs(d - reach_h) / v < d / v:
-        total += t
-        d = abs(d - reach_h)
+    while d > 0:
+        if to_end and d <= reach_h:
+            total += t
+            d = 0.0
+            break
+        if d >= p.walk_under_px and t + abs(d - reach_h) / v < d / v:
+            total += t
+            d = abs(d - reach_h)
+        else:
+            break
     return total + d / v
+
+
+def _sign(dx: int) -> int:
+    return (dx > 0) - (dx < 0)
+
+
+def _side_kind(terrain: Terrain, u: Node, v: Node) -> EdgeKind:
+    """The kind of a side edge u -> v: GAP when `u` and `v` are on different terrain platforms and the end of `u`'s
+    platform toward `v`, or the start of `v`'s platform, is a marked end; otherwise WALK, as before the marks. An edge
+    between two platforms with no mark at either facing end stays WALK (review I4): terrain links only the nearest
+    walkable node on each side and PathGraph chooses its edges by its own rule, so such an edge can exist."""
+    sign = _sign(v.minimap_position[0] - u.minimap_position[0])
+    pu, pv = terrain.platform_index(u), terrain.platform_index(v)
+    if sign == 0 or pu == pv:
+        return EdgeKind.WALK
+    end_of_u = terrain.platforms[pu][-1 if sign > 0 else 0]
+    start_of_v = terrain.platforms[pv][0 if sign > 0 else -1]
+    if is_marked_end(end_of_u, sign) or is_marked_end(start_of_v, -sign):
+        return EdgeKind.GAP
+    return EdgeKind.WALK
 
 
 def down_options(dy_px: float, src_can_fall: bool, reach_v: int, p: MovementParams) -> dict[str, float]:
@@ -63,6 +103,7 @@ class RouteGraph:
     reach_h: int
     reach_v: int
     params: MovementParams
+    split_ends: frozenset[tuple[int, int]]
 
     def __init__(
         self,
@@ -72,6 +113,7 @@ class RouteGraph:
         reach_h: int,
         reach_v: int,
         params: MovementParams,
+        split_ends: frozenset[tuple[int, int]] = frozenset(),
     ) -> None:
         self.graph = graph
         self.terrain = terrain
@@ -79,6 +121,7 @@ class RouteGraph:
         self.reach_h = reach_h
         self.reach_v = reach_v
         self.params = params
+        self.split_ends = split_ends  # (platform index, sign) for each platform end a GAP edge leaves from (re-review N1)
 
     @classmethod
     def build(cls, path_graph: PathGraph, params: MovementParams) -> Result["RouteGraph", str]:
@@ -96,31 +139,120 @@ class RouteGraph:
             return Failure(f"terrain inference failed: {terrain_result.failure()}")
         terrain = terrain_result.unwrap()
 
-        graph = nx.DiGraph()
-        graph.add_nodes_from(nodes)
-        rg = cls(graph, terrain, align_px, reach_h, reach_v, params)
+        # a first pass types the PathGraph edges and collects the platform ends a GAP edge leaves from; the graph is
+        # built with them, and only then are the edges priced, because the GAP and WALK costs call `side_landing`
+        typed: list[tuple[Node, Node, EdgeKind]] = []
+        seen: set[tuple[Node, Node]] = set()
+        split: set[tuple[int, int]] = set()
         for u, v in path_graph.graph.edges():
-            if graph.has_edge(u, v):
+            if (u, v) in seen:
                 continue
+            seen.add((u, v))
             dx = abs(v.minimap_position[0] - u.minimap_position[0])
             dy = v.minimap_position[1] - u.minimap_position[1]
             if dx >= abs(dy):
-                kind = EdgeKind.WALK
+                kind = _side_kind(terrain, u, v)
+                if kind == EdgeKind.GAP:
+                    sign = _sign(v.minimap_position[0] - u.minimap_position[0])
+                    split.add((terrain.platform_index(u), sign))
+                    split.add((terrain.platform_index(v), -sign))
             else:
                 kind = EdgeKind.UP if dy < 0 else EdgeKind.DOWN
+            typed.append((u, v, kind))
+
+        graph = nx.DiGraph()
+        graph.add_nodes_from(nodes)
+        rg = cls(graph, terrain, align_px, reach_h, reach_v, params, frozenset(split))
+        for u, v, kind in typed:
             rg._add_edge(u, v, kind)
         for link in terrain.links:
             if not graph.has_edge(link.src, link.dst):
                 rg._add_edge(link.src, link.dst, _TERRAIN_KIND[link.kind])
         return Success(rg)
 
+    def is_stop_end(self, node: Node, sign: int) -> bool:
+        """`node` is the end of its terrain platform toward `sign` and that end stops a sideways teleport: it is marked
+        (`is_marked_end`) or a GAP edge leaves from it (`split_ends`, so the unmarked end of a gap whose other side is
+        marked counts too, re-review N1). The one test of "a platform's end" that `side_landing`, the WALK cost's
+        `to_end` and the planner use."""
+        p = self.terrain.platform_index(node)
+        platform = self.terrain.platforms[p]
+        if node is not (platform[-1] if sign > 0 else platform[0]):
+            return False
+        return is_marked_end(node, sign) or (p, sign) in self.split_ends
+
+    def side_landing(self, platform: int, px: int, sign: int) -> tuple[int, int]:
+        """`(x, platform index)` where a sideways teleport from `px` on `platform` toward `sign` (+1 right, -1 left)
+        stops (Hong, QB282): it goes the full reach, unless the end of the platform toward `sign` is a stop
+        (`is_stop_end`) that the full reach passes. Then it stops at that end, or, when another platform starts within
+        the reach in that direction and within `side_teleport_land_dy_px` of the end's height, it lands on that
+        platform (the full reach, clamped into that platform's span); with several the nearest to `px` wins, a tie goes
+        to the lower platform index. A much lower platform does not count: the teleport stops at the edge."""
+        nodes = self.terrain.platforms[platform]
+        end = nodes[-1] if sign > 0 else nodes[0]
+        end_x, end_y = end.minimap_position
+        full = px + sign * self.reach_h
+        if not self.is_stop_end(end, sign) or sign * (full - end_x) <= 0:
+            return full, platform
+        best: tuple[int, int] | None = None  # (distance from px, platform index)
+        for index, other in enumerate(self.terrain.platforms):
+            if index == platform:
+                continue
+            near_x, near_y = (other[0] if sign > 0 else other[-1]).minimap_position
+            distance = sign * (near_x - px)
+            if (
+                sign * (near_x - end_x) > 0
+                and 0 < distance <= self.reach_h
+                and abs(near_y - end_y) <= self.params.side_teleport_land_dy_px
+                and (best is None or distance < best[0])
+            ):
+                best = (distance, index)
+        if best is None:
+            return end_x, platform
+        landing = self.terrain.platforms[best[1]]
+        return min(max(full, landing[0].minimap_position[0]), landing[-1].minimap_position[0]), best[1]
+
+    def gap_launch(self, u: Node, v: Node) -> int | None:
+        """The x on `u`'s platform to teleport from so that the teleport lands on `v`'s platform, or None when none does.
+
+        This is the one place where the open launch-point question (WALKFIX169-D1, QB284) is answered. Exact A, the
+        provisional pick, launches from `v.x - sign * reach_h`, so a full-reach teleport lands exactly on `v`. The
+        alternatives change only the `target` line and its tests: A2 ("A with a margin", WALKFIX172-D1 = B) launches
+        from `v.x - sign * (reach_h - arrive_px - 1)`, a margin of 3 px (the planner counts the character lined up
+        within `arrive_px`, and the shortest recorded teleport is 1 px under the reach), and C launches from the x of
+        the platform end node toward `v`. The target is clamped into `u`'s platform and checked with `side_landing`."""
+        sign = _sign(v.minimap_position[0] - u.minimap_position[0])
+        platform = self.terrain.platform_index(u)
+        nodes = self.terrain.platforms[platform]
+        target = v.minimap_position[0] - sign * self.reach_h  # exact A
+        target = min(max(target, nodes[0].minimap_position[0]), nodes[-1].minimap_position[0])
+        if self.side_landing(platform, target, sign)[1] == self.terrain.platform_index(v):
+            return target
+        return None
+
     def _edge_cost(self, u: Node, v: Node, kind: EdgeKind) -> float | None:
         """Seconds for the move u -> v, or None when no ability can make it."""
         p = self.params
         dx = abs(v.minimap_position[0] - u.minimap_position[0])
         dy = abs(v.minimap_position[1] - u.minimap_position[1])
+        if kind == EdgeKind.GAP:
+            launch = self.gap_launch(u, v)
+            if launch is None:
+                return None
+            sign = _sign(v.minimap_position[0] - u.minimap_position[0])
+            landing_x = self.side_landing(self.terrain.platform_index(u), launch, sign)[0]
+            walked = abs(u.minimap_position[0] - launch) + abs(landing_x - v.minimap_position[0])
+            return walked / p.walk_px_per_s + p.teleport_s
         if kind == EdgeKind.WALK:
-            return horizontal_cost_s(dx, self.reach_h, p)
+            sign = _sign(v.minimap_position[0] - u.minimap_position[0])
+            platform = self.terrain.platform_index(u)
+            # review m1: a teleport from `u` that would carry onto the next platform is not a stop on the end
+            to_end = (
+                sign != 0
+                and self.is_stop_end(v, sign)
+                and self.side_landing(platform, u.minimap_position[0], sign)[1] == platform
+            )
+            return horizontal_cost_s(dx, self.reach_h, p, to_end=to_end)
         if kind == EdgeKind.SLOPE:
             return dx / p.walk_px_per_s
         if kind == EdgeKind.UP:
