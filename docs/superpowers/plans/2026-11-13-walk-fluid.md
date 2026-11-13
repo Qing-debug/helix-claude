@@ -365,6 +365,341 @@ Done: the marked-map run and the real-ground run 6/6 with 0 off map, figures rec
 
 ---
 
-## Piece 2 (not yet written)
+## Piece 2: item 2 (fresher pictures), docs, the full check, item 3 in outline
 
-Tasks 6 onward are written by a second planning pass (contract in workspace `notes/WALKFIX169-plan.md`): 6 item 2d picture time stamps; 7 item 2a wake the walker on a new picture (with the SWEEP165-D3 docstring fix at `walker.py:38`); 8 item 2c re-find the minimap by time; 9 item 2b no fixed capture pause (code); 10 HONG-GATED key-timing check; 11 docs (decisions entries, CLAUDE.md files, root CLAUDE.md sim figures from `notes/WALKFIX169-build.md`); 12 `python tools/check.py --full`; 13 AFTER-WALK item 3 (outline).
+Spec for Tasks 6-10 (Hong, QB283, chat paste 2026-11-13, verbatim): "2. Fresher pictures. I lift the "a picture every 20 ms" rule; the capture may use more processor time. a. Wake the walker the moment a new picture arrives, instead of it looking every 0.05 s. b. Take every new screen picture Windows hands over, with no fixed pause between them. Check that this does not make the keys late: with MapleStory closed and nobody using the PC, run the key-timing check (a test window that changes every frame on the second screen, so the capture runs flat out, with the keys timed as in the long input test). If the keys get later, bring back the smallest pause that fixes it and tell me the number. Ask me before this check, so I can confirm MapleStory is closed. c. Re-find the minimap every so many seconds (about every 22 s, as now) instead of every 1000 pictures. d. Stamp every picture with the moment Windows handed it over: the pictures the walker reads and the ones saved with each walk. None of this changes how the character moves."
+
+Contract with piece 1: Tasks 6-13 change nothing Tasks 1-5 produce (`walk_under_px`, `side_teleport_land_dy_px`, `side_landing`, `gap_launch`, `EdgeKind.GAP`, `is_marked_end`, `SimParams.side_teleport_land_dy_px`, the `ff2_marked*` fixtures). No piece-2 task touches the planner, the route graph, the terrain or the simulator's world, so every pinned sim figure stays exactly what Task 5 left (the sim has no picture delay and no capture: `SimPositionSource.read`, `sim/link.py:146-150`, reads the world at the clock's time). Each of Tasks 6-9 runs the four sim runs of the build notes and records "unchanged" or stops and reports.
+
+WALKFIX169-D1 (where to teleport from across a gap; question bank QB284, provisionally A, open with Hong): nothing in Tasks 6-10, 12 or 13 depends on it. If Hong picks B or C, the change is `RouteGraph.gap_launch` and the Task 3 tests (piece 1), plus the wording of one decisions entry in Task 11 (marked there).
+
+### Review Focus (piece 2)
+
+6. "None of this changes how the character moves" (Hong): the settle's stillness test must not become "two pictures a few milliseconds apart". With pictures every 4-22 ms and a walk moving 1 px per 80 ms (12.5 px/s), two consecutive pictures are nearly always equal while the character still moves. Task 7 keeps the two reads the settle compares at least `poll_s` apart (WALKFIX170-D1, provisional A) and pins it with `test_settle_keeps_its_reads_poll_s_apart`.
+7. The frame stamp must belong to the picture it is stored with: frame and stamp are written together under `minimap_frame_lock` and read together under it (Task 6 pins a publisher thread that changes both on every publish against a reader that checks they match).
+8. A walker with no picture waiter (the simulator, `tools/route_tab_sim.py`, every existing test fake) must behave exactly as today: `wait_frame=None` falls back to `clock.sleep(poll_s)` (Task 7).
+9. The key-timing check asks "Is MapleStory closed? y/n" exactly once per run, before the listener, the link or any key, through `soak.maple_check` (Task 10A pins it with a counter on `soak._read_answer`); no agent answers it (H66, this plan's Global Constraints).
+
+---
+
+## Task 6: Item 2d, stamp every picture with the moment Windows handed it over (subtle: yes; size: L)
+
+Hong (QB283): "d. Stamp every picture with the moment Windows handed it over: the pictures the walker reads and the ones saved with each walk." No frozen file is opened.
+
+The stamp is `time.perf_counter_ns()` read right after `AcquireNextFrame` returns a desktop image (frame_wait.py:77). That is the clock of `RealClock.now_ns` (walker.py:139-140), of `InputLayer`'s stimulus and of the recorder's `t_ns` (record_minimap.py docstring), so a stamp compares directly with every key time in `steps.jsonl`. Python docs (https://docs.python.org/3/library/time.html, `perf_counter`): "The clock is the same for all processes" (3.10+, Windows). Not used: `DXGI_OUTDUPL_FRAME_INFO.LastPresentTime` (Microsoft: "The time stamp of the last update of the desktop image. The operating system calls the QueryPerformanceCounter function to obtain the value", https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_outdupl_frame_info), which is when the image was made, not when Windows handed it over; once the capture has no pause (Task 9) the two differ by the wake-up only.
+
+**Files:**
+- Modify: `src/vision/frame_wait.py` (`grab_new_frame` :62-98 split into a stamped body and a wrapper; a `_clock` seam), `src/vision/vision.py` (one helper; the minimap loop's grab :75 and publish :87), `src/vision/minimap_follow.py` (`LostTracker.publish` :92-100)
+- Modify: `src/main.py` (`SharedInfo` :9-13), `src/route/runtime.py` (`SharedFrame` :368-373), `src/route/harness/record_minimap.py` (`record` :62-112, `shared_frames` :116-125, its holder :141-142, the docstring), `src/route/session.py` (`FrameHolder` :110-117, `_record_guarded` :276-300 docstring, the `StepLog` built at :496), `src/route/position.py` (`MinimapPositionSource` :34-51), `src/route/step_log.py` (the format: `FIELDS` :62-73 stay; `event_line` :168-188, `parse_line`, `StepLog.planned` :546-550 and `.settled` :558-561, the module docstring)
+- Test (new): `tests/vision/test_frame_stamps.py`, `tests/route/test_frame_stamps.py`
+- Update (not frozen): `tests/vision/test_minimap_follow.py` (the `publish(...)` calls at :153-187 pass a stamp; `run_loop` :225-232 also patches `vision._grab_stamped`), `tests/route/test_record_minimap.py` and the recorder tests in `tests/route/test_session.py` (their `frames` fakes return `(frame, stamp)` pairs), any holder fake that a type check or test now finds short of `minimap_frame_ns`
+
+**Interfaces (Tasks 7, 10 and 13 rely on these names):**
+- `frame_wait.grab_new_frame_stamped(camera, region=None) -> tuple[np.ndarray, int] | None`; `grab_new_frame` keeps its signature and returns `got[0]` or None. `frame_wait._clock = time.perf_counter_ns` (a module seam, as `input_layer._clock`).
+- `vision._grab_stamped(camera, region) -> tuple[np.ndarray, int]`: `cameraGrab`'s retry loop over `grab_new_frame_stamped`.
+- Every frame holder (`SharedInfo`, `runtime.SharedFrame`, `record_minimap`'s holder) has `minimap_frame_ns: int | None = None`, written with `minimap_frame` under `minimap_frame_lock`, by `LostTracker.publish(frame_rgb, frame_ns: int)` only.
+- `MinimapPositionSource.frame_ns: int | None`: the stamp of the picture of its last *successful* read (set after the locator succeeds, from the stamp taken under the lock with the frame).
+- `record(frames, ...)`: `frames()` returns `tuple[np.ndarray, int | None] | None`; each `index.jsonl` line gains `"frame_ns"` (int, or null when the holder had no stamp) after `"t_ns"`. `shared_frames(shared)` returns that pair, read under the lock.
+- Step log: `EXTRA_FIELDS: dict[str, tuple[str, ...]] = {"planned": ("frame_ns",), "settled": ("frame_ns",)}`; `StepLog(..., frame_ns: Callable[[], int | None] | None = None)`. With a `frame_ns` source, every `planned` and `settled` line carries `"frame_ns"` (null on a `settled` whose `pos` is null); without one the lines are byte for byte today's. `parse_line` puts `frame_ns` into `data` only when the line has it; a `frame_ns` that is neither an int nor null makes the line bad. `VERSION` stays 1 (the key is optional, `parse_line` already ignores keys it does not know).
+
+- [ ] **Step 1: Write the failing tests.**
+
+`tests/vision/test_frame_stamps.py` (Windows; reuse `test_frame_wait.py`'s fake camera and its `_query_texture` patch):
+```python
+def test_stamped_grab_returns_the_time_after_acquire(monkeypatch):   # _clock patched to a counter: 1 before, 2 after
+    frame, t_ns = frame_wait.grab_new_frame_stamped(fake_camera_with_one_image())
+    assert t_ns == clock_value_right_after_acquire
+def test_pointer_only_update_has_no_stamp():                          # LastPresentTime 0 -> None, as grab_new_frame
+def test_plain_grab_is_unchanged():                                   # grab_new_frame returns the same array as before
+def test_publish_writes_frame_and_stamp_together():                   # LostTracker.publish(f, 123): holder has both
+def test_capture_loop_publishes_the_grab_stamp(monkeypatch):          # run_loop with _grab_stamped stamps 1, 2, 3...:
+                                                                      # the published (frame, frame_ns) pairs carry them
+```
+`tests/route/test_frame_stamps.py`:
+```python
+def test_position_source_keeps_the_stamp_of_its_last_good_read():   # holder frame A stamp 10 -> read ok, frame_ns 10;
+                                                                    # frame B stamp 20, locator fails -> frame_ns still 10
+def test_frame_and_stamp_never_mix():                               # a thread publishes (frame_k, k) 10_000 times;
+                                                                    # shared_frames() pairs always match (frame[0,0,0] == k % 256)
+def test_index_lines_carry_frame_ns(tmp_path):                      # record() over pairs: every line has "frame_ns",
+                                                                    # equal to the pair's stamp; null for a None stamp
+def test_step_log_writes_frame_ns_when_given_a_source(tmp_path):    # StepLog(frame_ns=lambda: 77): planned/settled lines
+                                                                    # have "frame_ns": 77; settled with pos None -> null
+def test_step_log_without_a_source_is_unchanged(tmp_path):          # lines equal today's encoding exactly
+def test_parse_line_reads_frame_ns_only_when_present():             # old line: "frame_ns" not in data; new line: 77;
+                                                                    # "frame_ns": "x" -> Failure
+def test_session_wires_the_stamp_source():                          # RunSession with make_positions returning a
+                                                                    # MinimapPositionSource over runtime.SharedFrame: the
+                                                                    # StepLog's frame_ns source reads positions.frame_ns
+```
+
+- [ ] **Step 2: Run them to see them fail** — `.venv/Scripts/python.exe -m pytest tests/vision/test_frame_stamps.py tests/route/test_frame_stamps.py -q` -> FAIL (names missing).
+
+- [ ] **Step 3: Implement.**
+- `frame_wait.py`: move the body of `grab_new_frame` into `grab_new_frame_stamped`; read `t_ns = _clock()` on the line after `AcquireNextFrame` (inside the `try`, after the call returned without a COM error) and return `(frame, t_ns)`. `grab_new_frame` = `got = grab_new_frame_stamped(camera, region); return None if got is None else got[0]`. Docstrings say which is which.
+- `vision.py`: `import src.vision.frame_wait as frame_wait` at the top (vision.py already loads bettercam at module scope, vision.py:1; the in-function import in `cameraGrab` exists for `detection_check`, which imports `vision_helper_lib`, not `vision`). Add `_grab_stamped` (a `while True` loop returning the first non-None `grab_new_frame_stamped(camera, region)`). In the minimap loop: `box_frame, frame_ns = _grab_stamped(camera, lock.box)` (:75) and `tracker.publish(cv2.cvtColor(...), frame_ns)` (:87). The whole-screen search keeps `vision.cameraGrab` (:45): it publishes nothing. Change nothing else in the file (src/vision/CLAUDE.md, Traps, first bullet: Feature C ports from it).
+- `minimap_follow.LostTracker.publish(frame_rgb, frame_ns)`: set `minimap_frame_ns = frame_ns` in the same `with` block as `minimap_frame`.
+- Holders: `self.minimap_frame_ns = None` with a one-line comment (stamp of `minimap_frame`, `time.perf_counter_ns()` when Windows handed the picture over, QB283 2d) in `SharedInfo`, `runtime.SharedFrame` and `record_minimap`'s holder. `session.FrameHolder` gets the read-only property `minimap_frame_ns -> int | None`.
+- `position.py`: in `read`, take `stamp = self._shared.minimap_frame_ns` under the lock with the frame; after `locate` succeeds set `self.frame_ns = stamp`. Docstring: what `frame_ns` is and that it is read on the walker's own thread (the step log reads it there, below), so it needs no lock.
+- `record_minimap.py`: `record`'s loop unpacks `frames()`'s pair (None stays "no frame"), keeps the `is` test on the array and writes `"frame_ns"`; `shared_frames` returns `(shared.minimap_frame, shared.minimap_frame_ns)` under the lock, or None when the frame is None. Update the module docstring's index line format and the `t_ns` bullet (t_ns is the poll's time, frame_ns the picture's).
+- `session.py`: `_record_guarded` is unchanged in code (its `frames()` passes the pair through); fix its docstring's "`record` is not edited". Build the step log as `StepLog(log=self._error_line, frame_ns=(lambda: positions.frame_ns) if isinstance(positions, MinimapPositionSource) else None)` (`src.route.position` is already below `session` in import-linter contract f).
+- `step_log.py`: `EXTRA_FIELDS`; `event_line` accepts `len(FIELDS[ev])` values or, for an event in `EXTRA_FIELDS`, that many plus its extras (checked int-or-None); `parse_line` copies an extra key into `data` when present and checks its shape; `StepLog.planned`/`settled` append `self._frame_ns()` when the source is set (`settled`: None when `pos` is None). Add a "Where the plan is silent" bullet to the docstring.
+
+- [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/vision tests/route -q` -> the new tests pass; update the non-frozen tests listed under Files where they fail only because of the new argument or pair (change nothing they assert). The route view's readers (`src/route_view/model.py:249-266` reads `t_ns` and `file` of index lines; `parse_line` ignores unknown keys) need no change: `tests/route_view` must pass untouched.
+
+- [ ] **Step 5: Sim runs, check, commit.** The four build-notes sim runs: figures identical to Task 5's (record "unchanged"). `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe tools/check.py` -> green.
+```bash
+git add src/vision src/main.py src/route/runtime.py src/route/harness/record_minimap.py src/route/session.py src/route/position.py src/route/step_log.py tests/vision tests/route
+git commit -m "feat(vision): stamp every picture with the time Windows handed it over; the walker's reads and the recorder save the stamp (WALKFIX Task 6, QB283 2d)"
+```
+Done: tests pass, sim figures unchanged, `tools/check.py` green.
+
+---
+
+## Task 7: Item 2a, wake the walker on a new picture (subtle: yes; size: M)
+
+Frozen-file opening (Hong, QB283): "a. Wake the walker the moment a new picture arrives, instead of it looking every 0.05 s." Opens `walker.py` only (and its docstring fix, SWEEP165-D3 ruling). `params.py` is not changed: `poll_s` stays the longest wait, so stop checks and timeouts keep today's pace.
+
+Where it acts: the walker sleeps `poll_s` at six places (walker.py:234 after a failed or STALE read, :254 placed but no path, :259 rope hold, :280 standing hold, :291 no plan after attaching, :466 in `_settle`). The biggest waste is the first read after every settle: it sees the frame the settle's last read already copied, so today it is STALE and the walker sleeps 50 ms before planning (:226-235). Each of these waits now ends at the next picture (at most `poll_s`). The still and rope timers count clock time (`_Stillness.see(pos, read_ns)`), not reads, so reading more often changes neither `standing_s` nor `rope_still_s`.
+
+Provisional (WALKFIX170-D1, option A; undo: one line in `_settle`): inside `_settle`, after a *successful* read, the walker still sleeps `poll_s` before the next read, so the two reads it compares stay at least 50 ms apart, as today; after a failed or STALE read it waits for the next picture. Reason: Hong's "None of this changes how the character moves"; two pictures a few ms apart are equal while a walk is still moving (Review Focus 6). Item 3 (Task 13) replaces the settle after his walk.
+
+**Files:**
+- Modify: `src/route/walker.py` (`RouteWalker.__init__` :159-189, the six waits above, `_settle` :444-466, the module docstring :9-46 including the fix at :37-38)
+- Modify: `src/vision/minimap_follow.py` (`publish` notifies), the three holders (a condition), `src/route/position.py` (`wait_new`), `src/route/session.py` (pass the waiter)
+- Test (new): `tests/route/test_walker_wake.py`; add to `tests/route/test_frame_stamps.py` or a new `tests/route/test_frame_wait_walker.py` the real-thread tests below
+- Frozen walker tests (`test_walker_leg.py`, `test_walker_run.py`) are not touched: their fakes pass no waiter.
+
+**Interfaces:**
+- Every holder: `minimap_frame_new = threading.Condition(self.minimap_frame_lock)` (the condition shares the lock, so every existing `with minimap_frame_lock:` reader is unchanged). `LostTracker.publish` calls `self._shared.minimap_frame_new.notify_all()` inside its `with` block. Verified (Python 3, run 2026-11-13): `notify_all()` inside `with lock:` on a `Condition(lock)` works; outside it raises `RuntimeError: cannot notify on un-acquired lock` (docs: https://docs.python.org/3/library/threading.html#condition-objects).
+- `MinimapPositionSource.wait_new(self, timeout_s: float) -> None`: `with cond: cond.wait_for(lambda: self._shared.minimap_frame is not self._last_frame, timeout_s)`; returns at once when a newer frame is already there.
+- `walker.py`: `class FrameWaiter(Protocol): def __call__(self, timeout_s: float) -> object: ...` and `RouteWalker(..., *, observer=None, log=_print_error, ropes=RopeZones.EMPTY, wait_frame: FrameWaiter | None = None)`; a private `_wait(self, seconds)` = `self._wait_frame(seconds)` if set, else `self._clock.sleep(seconds)`.
+- `RunSession` passes `wait_frame=positions.wait_new if isinstance(positions, MinimapPositionSource) else None`. `sim/run.py` and `tools/route_tab_sim.py` pass nothing.
+
+- [ ] **Step 1: Write the failing tests** in `tests/route/test_walker_wake.py` with the walker test pattern (`tests/route/test_walker_standing.py`'s fake clock, layer and sink) and a `_Pictures` fake: picture times every 4 ms on the fake clock, each showing a scripted position; `read()` returns `Failure(STALE)` unless a picture newer than the last one read exists at `clock.now_ns()`; `wait(timeout_s)` advances the fake clock to the next picture time or by `timeout_s`, whichever is first.
+```python
+def test_first_read_after_a_settle_waits_for_the_next_picture():
+    # the planned event after a settled event is at most 4 ms after it, not 50 ms
+def test_settle_keeps_its_reads_poll_s_apart():                 # Review Focus 6, WALKFIX170-D1 A
+    # pictures every 4 ms, the position changes every 80 ms: the two equal reads that end a settle are >= poll_s apart,
+    # and the settle does not end while the scripted position is still changing
+def test_without_a_waiter_the_walker_sleeps_poll_s():          # Review Focus 8: the sleep log equals today's
+def test_still_timer_counts_time_not_reads():                   # standing_s 0.5 s still holds with reads every 4 ms
+```
+Real-thread tests (no walker):
+```python
+def test_wait_new_returns_when_a_picture_is_published():        # publisher thread publishes after 30 ms; wait_new(1.0)
+                                                                # returns in < 0.5 s and the next read is not STALE
+def test_wait_new_times_out_without_a_picture():                # returns after about timeout_s (0.05), read is STALE
+def test_wait_new_returns_at_once_when_a_newer_frame_is_there():
+def test_session_passes_the_picture_wait():                     # RunSession with a MinimapPositionSource: the walker's
+                                                                # wait_frame is positions.wait_new; with a SimPositionSource it is None
+```
+
+- [ ] **Step 2: Run to see them fail** — `.venv/Scripts/python.exe -m pytest tests/route/test_walker_wake.py -q` -> FAIL.
+
+- [ ] **Step 3: Implement** the interfaces above. In `walk_leg` replace `clock.sleep(params.poll_s)` by `self._wait(params.poll_s)` at :234, :254, :259, :280 and :291. `_settle`:
+```python
+        while clock.now_ns() - start_ns < timeout_ns:
+            if self._stop.is_set():
+                return last, True
+            read = self._positions.read()
+            if is_successful(read):
+                current = read.unwrap()
+                if current == last:
+                    return current, False
+                last = current
+                clock.sleep(params.poll_s)  # WALKFIX170-D1 A: the two reads compared stay poll_s apart (item 3 replaces this)
+            else:
+                self._wait(params.poll_s)   # no new picture yet, or a miss: wake on the next picture (QB283 2a)
+        return last, False
+```
+Docstrings: the `_settle` docstring and a new "Where the plan is silent" bullet (the waits end at the next picture when a waiter is given; the settle's spacing; no waiter = today). The SWEEP165-D3 fix (workspace `notes/SWEEP165.md`, M4): replace walker.py:37-38's "With the order used up the leg ends `OFF_MAP` with one line." by "With the order used up, a read the map places goes on with the planner's move (the order starts again); a read the map cannot place ends the leg `OFF_MAP` with one line." (the code at walker.py:266-273 already does this).
+
+- [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/route tests/vision -q` -> pass; the frozen walker tests pass untouched (if one fails, the fallback is not today's behaviour: fix the code, not the test).
+
+- [ ] **Step 5: Sim runs, check, commit.** Sim figures identical to Task 5's (the sim passes no waiter). `tools/check.py` green.
+```bash
+git add src/route/walker.py src/route/position.py src/route/session.py src/route/runtime.py src/route/harness/record_minimap.py src/vision/minimap_follow.py src/main.py tests/route tests/vision
+git commit -m "feat(route): the walker wakes on each new picture instead of polling every 50 ms; the settle keeps its 50 ms spacing (WALKFIX Task 7, QB283 2a)"
+```
+Done: tests pass, frozen walker tests untouched and green, sim figures unchanged, `tools/check.py` green.
+
+---
+
+## Task 8: Item 2c, re-find the minimap by time (about every 22 s) (subtle: no; size: S)
+
+Hong (QB283): "c. Re-find the minimap every so many seconds (about every 22 s, as now) instead of every 1000 pictures." Today: `MINIMAP_POSITION_RECALC_INTERVAL = 1000` (vision.py:10) counted in the minimap loop (vision.py:70-72, :88); at 45.7 pictures a second that is about 22 s (H80 Scope). It must land before Task 9, which would otherwise make it every 4-7 s.
+
+**Files:**
+- Modify: `src/vision/vision.py` (:10, :70-72, :88)
+- Test: `tests/vision/test_minimap_follow.py` (add two loop tests; `run_loop` gains a fake monotonic clock)
+
+**Interfaces:** `MINIMAP_POSITION_RECALC_S = 22.0` replaces `MINIMAP_POSITION_RECALC_INTERVAL` (grep the repo for the old name: CLAUDE.md files and specs are Task 11's; code and tests here). `vision._monotonic = time.monotonic` (a module seam, so the tests do not patch the global `time.monotonic`).
+
+- [ ] **Step 1: Failing tests**
+```python
+def test_minimap_is_re_found_after_22_seconds(monkeypatch):    # fake _monotonic advances 1 s per grab: the loop goes
+                                                               # back to the whole-screen search after 22 publishes
+def test_fast_pictures_do_not_re_find_early(monkeypatch):      # clock frozen: 2000 publishes, one whole-screen search
+```
+- [ ] **Step 2: Run** `.venv/Scripts/python.exe -m pytest tests/vision -q` -> FAIL.
+- [ ] **Step 3: Implement.** `locked_at = _monotonic()` where `minimap_frame_counter` was set (:70); the loop condition `minimap_valid and _monotonic() - locked_at < MINIMAP_POSITION_RECALC_S`; drop the counter and its increment (:88).
+- [ ] **Step 4: Run** the vision tests and `tests/test_anti_cheat_names.py` -> pass.
+- [ ] **Step 5: Sim runs (unchanged), check, commit.**
+```bash
+git add src/vision/vision.py tests/vision
+git commit -m "feat(vision): re-find the minimap every 22 s instead of every 1000 pictures (WALKFIX Task 8, QB283 2c)"
+```
+Done: tests pass, `tools/check.py` green.
+
+---
+
+## Task 9: Item 2b (code), no fixed pause between pictures, behind its setting (subtle: no; size: S)
+
+Hong (QB283): "I lift the "a picture every 20 ms" rule ... b. Take every new screen picture Windows hands over, with no fixed pause between them." This is the code only; it is final after Task 10B ("2's no-pause part is final only after the key-timing check").
+
+**Files:**
+- Modify: `src/vision/vision.py` (:11, the comment at :89)
+- Modify: `tests/test_anti_cheat_names.py` (`test_capture_loop_keeps_its_pause` docstring :108-112 only)
+- Test: `tests/vision/test_minimap_follow.py` (one test)
+
+**Interfaces:** `THREAD_SLEEP_DURATION_S = 0.0` keeps its name (it is the setting; Task 10B may set it to the number it finds). The line `time.sleep(THREAD_SLEEP_DURATION_S)` stays as it is, so `test_capture_loop_keeps_its_pause` still finds it: Python docs (https://docs.python.org/3/library/time.html, `time.sleep`, "Windows implementation"): "On Windows, if seconds is zero, the thread relinquishes the remainder of its time slice to any other thread that is ready to run. If there are no other threads ready to run, the function returns immediately". So with 0.0 the loop still lets the walker and the key thread run between pictures; the grab's wait in Windows (H77, `NEW_FRAME_TIMEOUT_MS = 100`) paces it at the screen's new images.
+
+- [ ] **Step 1: Failing test** `test_loop_pause_is_the_setting`: `vision.THREAD_SLEEP_DURATION_S == 0.0` and, in `run_loop`, every publish is followed by exactly one `sleep(0.0)` (the recorded sleeps list).
+- [ ] **Step 2: Run** -> FAIL.
+- [ ] **Step 3: Implement.** `THREAD_SLEEP_DURATION_S = 0.0  # pause between pictures: none (Hong QB283 2b, lifts H80's 20 ms); Task 10B's key-timing check sets the smallest pause that keeps the keys on time, if one is needed`. The comment at :89 says the same in short. The anti-cheat test's docstring: "the loop keeps its pause line (H77; its value is the setting, 0 since QB283 2b)".
+- [ ] **Step 4: Run** the vision tests and `tests/test_anti_cheat_names.py` -> pass.
+- [ ] **Step 5: Sim runs (unchanged), check, commit.**
+```bash
+git add src/vision/vision.py tests/test_anti_cheat_names.py tests/vision
+git commit -m "feat(vision): no fixed pause between pictures, behind THREAD_SLEEP_DURATION_S (WALKFIX Task 9, QB283 2b, final after the key-timing check)"
+```
+Done: tests pass, `tools/check.py` green.
+
+---
+
+## Task 10: Item 2b, the key-timing check (Part A: build the tool, subtle: yes, size: L; Part B: run it, HONG-GATED, size: M)
+
+Hong (QB283): "Check that this does not make the keys late: with MapleStory closed and nobody using the PC, run the key-timing check (a test window that changes every frame on the second screen, so the capture runs flat out, with the keys timed as in the long input test). If the keys get later, bring back the smallest pause that fixes it and tell me the number. Ask me before this check, so I can confirm MapleStory is closed."
+
+What is checked: in a real walk the capture thread, the walker and the key timing (`InputLayer` waits the reaction time on the PC, then `BleLink` sends) share one Python process. A capture that runs flat out could delay the key thread's wake-ups. The long input test (the soak, `src/input/harness/soak.py`) measures exactly the figure that would show it: the reaction residual, "first key-down − stimulus − R, the send → key-down latency" (`realism.reaction_residual`, realism.py:224-238; V3 soak: p50 29.6 ms, p99 75.6 ms, spec `docs/superpowers/specs/2026-10-21-p1a-input-over-bluetooth-design.md:141`). A PC-side oversleep adds to it; the board and Bluetooth part is the same in every arm.
+
+### Part A: build `tools/key_timing_check.py` and `tools/capture_load_window.py` (an agent; no key, no window opened on Hong's screen)
+
+Where: `tools/`, because import-linter contract a forbids `src.input` from importing `src.vision`/`src.route` and `src/route/harness/` may not import `src.input.harness` (`tests/route/test_import_rules.py:242`). `tools/` is scanned by `tests/test_anti_cheat_names.py` (`scanned_files`): write none of its banned names (the tool calls soak's functions by their own names).
+
+**Files:**
+- Create: `tools/capture_load_window.py` (the test window), `tools/key_timing_check.py` (the check)
+- Modify: `src/input/harness/soak.py` (`run_soak` :587 and `_check_processes` :552-556 gain one optional keyword each; nothing renamed or moved, src/input/CLAUDE.md Traps first bullet)
+- Test (new): `tests/tools/test_key_timing_check.py` (or under `tests/input/` if `tests/tools/` does not exist; Windows-only, as the soak tests: soak imports winrt), `tests/input/test_soak_answered.py`
+
+**The test window** (`capture_load_window.py`, run as its own process, like the game would be): a borderless Tk window that never takes focus (do as the route view's live window does: `src/route_view/CLAUDE.md`, its focus rules), DPI-aware before Tk starts (`ctypes.windll.shcore.SetProcessDpiAwareness(2)`, so the corners are drawn 1:1), showing a minimap the capture finds: the four real corner templates (`assets/brds/*_grayscale.png` where their masks are set) around an inside of about 200 x 140 px that changes on every redraw (a dot that moves 1 px per redraw over a fixed background; never all black, `isMinimapBlack`), redrawn with `after(1)`. Build the picture in a pure function `load_picture(t: int) -> np.ndarray` (copy how `tests/vision/test_minimap_follow.py` builds its synthetic screens from the templates). `--at X,Y` places it (default: x = the primary screen's width, y = 0, the usual place of a second screen on the right).
+
+**The check** (`key_timing_check.py`), in this order:
+1. Parse `--out data/keytiming/<name> --commands 2000 --seed 1` (defaults); refuse an `--out` outside the repo's `data/` (exit 2), as `record_minimap._resolve_out`.
+2. Start the test window process; start the capture in this process with `runtime.start_capture(holder)` where `holder` is a `runtime.SharedFrame` subclass that counts the pictures published (a `minimap_frame` property whose setter counts); start a walker stand-in thread that loops `positions.wait_new(0.05); positions.read()` on `runtime.make_positions(holder)` (the walker's real per-picture load: lock, copy, template match). Wait up to 30 s for the first picture (`runtime.wait_first_frame`); none -> print "the capture did not find the test window's minimap: put the window on the second screen (python tools/capture_load_window.py --at X,Y) and start again", close the window, exit 3. No question asked yet, no listener, no link.
+3. Ask the one question: `ok, text = soak.maple_check()` (through the module, so the tests' patch of `soak._read_answer` reaches it). Not ok -> print `text`, close the window, exit 2, before any listener, link or key (H60).
+4. Run the arms, each a soak of `--commands` commands with the same `--seed` (the same commands and the same timing draws in every arm, so the arms differ in the capture pause only): set `src.vision.vision.THREAD_SLEEP_DURATION_S = pause_ms / 1000` (read by the loop on every pass), reset the picture counter, then `soak.run_soak(cfg, soak._new_link(), soak._start_sink, answered=text)` with `cfg = soak.config_from_args(soak.parse_args(["--commands", N, "--seed", S, "--out", <out>/<k>-pause<P>ms, "--short"]))` and `soak.validate(cfg)` checked first. A non-zero exit from an arm stops the check (exit 1, the arms so far kept).
+5. After each arm, write `<arm>/arm.json`: `pause_ms`, capture pictures per second over the arm, and from `analyze.load_run` + `analyze.match_delivery` (importable, analyze.py docstring) the Delivery verdict and the reaction residual's p50/p99 computed with realism's rule (copy the six lines of `realism.reaction_residual`, citing realism.py:224-238; a test pins that both give the same p50 on a run dir fixture). The agent never opens `keys.jsonl` itself; the analysis code reads it.
+6. Arms and the decision rule (all numbers in the tool as named constants):
+   - Order: B1 = pause 20 ms (H80, what every walk so far ran with), N = pause 0, B2 = pause 20 ms.
+   - Valid only if all three pass Delivery, N's capture rate is at least twice B1's (B is about 45 pictures a second, H80; if N is not well above it, the window did not change every frame) and the baselines agree: |p50(B1) − p50(B2)| <= 2 ms and |p99(B1) − p99(B2)| <= 10 ms. Otherwise: result "inconclusive", no search.
+   - "Keys later" for an arm X: p50(X) > max(p50(B1), p50(B2)) + 2 ms, or p99(X) > max(p99(B1), p99(B2)) + 10 ms.
+   - N not later -> result 0 ms (no pause). N later -> search the smallest pause in {1, 2, 5, 10} ms that is not later: run 5; if 5 is not later run 2, and if 2 is not later run 1; if 5 is later run 10; the smallest arm that was not later is the result; if 10 is later too, the result is 20 ms (today's value). At most six arms, about 27 minutes each at the V3 soak's pace (10 000 commands in 2.23 h).
+   - Write `<out>/result.json` and print one line per arm (pause, pictures/s, residual p50/p99, Delivery, later yes/no) and the result.
+7. Close the test window; the capture and stand-in threads are daemons.
+
+`soak.py` change: `_check_processes(writer, answered: str | None = None)`: None -> asks as today; a text -> writes it to `writer.session["process_check"]` and asks nothing. `run_soak(cfg, link, start_sink, *, answered: str | None = None)` passes it through. `soak.main` is unchanged, so `python -m src.input.harness.soak` still asks once per run.
+
+- [ ] **Step 1: Failing tests** (fakes for the window process, `runtime.start_capture`, `soak.run_soak` and `analyze`; nothing real is opened or sent):
+```python
+def test_asks_once_for_all_arms():            # soak._read_answer patched to count: 1 call over 3+ arms
+def test_refusal_stops_before_any_soak():     # answer "n": exit 2, run_soak never called, window closed
+def test_no_picture_stops_before_the_question():  # wait_first_frame Failure: exit 3, _read_answer never called
+def test_search_order():                      # residuals scripted so N, 5 and 2 are later, 10 is not -> arms 20,0,20,5,10; result 10
+def test_no_search_when_n_is_on_time():       # result 0 after three arms
+def test_inconclusive_when_baselines_disagree():
+def test_inconclusive_when_the_capture_did_not_run_fast():
+def test_out_must_be_under_data():
+def test_load_picture_is_found_by_the_capture():   # load_picture(t) through the capture's corner match and follow lock
+                                                   # (as test_minimap_follow does): found, and still_there holds from t to t+1
+```
+`tests/input/test_soak_answered.py`: `_check_processes(writer, answered="answered y: MapleStory closed")` asks nothing and records the text; with no keyword it asks as before (existing soak tests stay green untouched).
+- [ ] **Step 2: Run to see them fail.**
+- [ ] **Step 3: Implement** as above.
+- [ ] **Step 4: Run** `.venv/Scripts/python.exe -m pytest tests/input tests/test_anti_cheat_names.py <the new test file> -q` -> pass.
+- [ ] **Step 5: Check, commit.**
+```bash
+git add tools/key_timing_check.py tools/capture_load_window.py src/input/harness/soak.py tests
+git commit -m "feat(tools): key-timing check: soaks with the capture running flat out on a test window, one MapleStory question (WALKFIX Task 10A, QB283 2b)"
+```
+Done: tests pass, `tools/check.py` green. Nothing was run against the board.
+
+### Part B: run the check (HONG-GATED)
+
+Before it: the orchestrator asks Hong (Q&A page or chat) to confirm that MapleStory is closed and that nobody will use the PC for about three hours, and that he is at the PC to answer the tool's question. No agent runs Part B before that answer, and no agent ever answers the tool's "Is MapleStory closed? y/n" (H66; the brief's binding rule): the agent starts the tool in a new console window on Hong's screen, and Hong types the answer there.
+
+- [ ] **Step 1:** Board connected and bonded (as for any soak, `src/input/CLAUDE.md`). From the worktree root, the agent opens a console window for Hong: `cmd //c start "Helix key-timing check" cmd /k ".venv\Scripts\python.exe tools/key_timing_check.py --out data/keytiming/walkfix-<date>"` (in Git Bash). The tool first shows the test window and waits for the capture to find it; if it exits 3, Hong moves the window (`--at X,Y`) and the agent starts it again.
+- [ ] **Step 2:** Hong answers the question in that window. The agent waits for the tool to end (it can read `result.json` and the `arm.json` files; it never opens `keys.jsonl`).
+- [ ] **Step 3:** Result:
+  - 0 ms: nothing to change; `THREAD_SLEEP_DURATION_S` stays 0.0.
+  - P ms (1, 2, 5, 10 or 20): set `THREAD_SLEEP_DURATION_S = P / 1000` with a comment citing the result folder, re-pin `test_loop_pause_is_the_setting`, `tools/check.py` green, commit `fix(vision): capture pause P ms, the smallest that keeps the keys on time (WALKFIX Task 10B, QB283 2b)`.
+  - inconclusive or an arm failed: change nothing; report to the orchestrator with the table.
+- [ ] **Step 4:** Report to the orchestrator the number and the per-arm table (Hong asked "tell me the number"), and append both to `notes/WALKFIX169-build.md`. If Task 11 is already done, update its item-2 decisions entry and the CLAUDE.md lines that name the pause (listed in Task 11) in the same commit.
+
+Done: the result is recorded; the setting is the number found (or 0); Hong is told through the orchestrator.
+
+---
+
+## Task 11: Docs: decisions entries and CLAUDE.md files (subtle: no; size: M)
+
+**Files:**
+- Modify: `docs/decisions.md` (new entries at the end; H101 is the next free number at 026d636: check `grep '^## H' docs/decisions.md` first, and use the next free numbers if another branch took some)
+- Modify: `CLAUDE.md` (root: Vision paragraph, Threads and shared state, Running's sim smoke lines, Safety rules' tool list), `src/vision/CLAUDE.md`, `src/route/CLAUDE.md`, `src/input/CLAUDE.md`, `tests/CLAUDE.md` if a test count or rule it states moved
+- Modify: `docs/superpowers/specs/2026-10-31-route-tab-design.md` (the lines that name the 20 ms floor: 5.9 table, 5.12-5, 6.3, 12.3, 12.5, as H80 "Affects" lists), `tools/route_tab_sim.py:78` (the `PUMP_PERIOD_S` comment only; its 20 ms value is the sim's display pump and stays)
+
+Entries, each in the file's format (heading, Question/Context, Ruling with Hong's words verbatim, In plain words, Affects, Cost if wrong, Undo, Pointer):
+- **"Speed and fluidity are both the goal"**: Hong, Q&A page q-20261113-134259-6e30, 2026-11-13, verbatim "SPeed + fluidity are both the goal. " (ledger-ROPE.md: about the overshoot fix; not itself an answer to fluid165-1).
+- **Item 1, walk to a node closer than 17 px** (QB266 verbatim; the keep rule: kept only if his next FF2 10-lap walk is no slower than 221 s, else move the limit or undo; no sliding allowance, with the 8db2 finding that the "slide" is picture delay, workspace `notes/q-20261113-140306-8db2-qa-answer.md` Q2). Affects: Task 1's files; `walk_under_px`.
+- **Item 4, sideways teleports stop at a platform's end** (QB282 verbatim, his word as the game confirmation; the game fact as he stated it, workspace `notes/q-20261113-155322-cd0c-qa-answer.md`; the 4 px setting; the measured teleport length 18-19 px, median 19.0 over 64 recorded jumps, and the real-ground sim's extra from 1.0 to 0.0, workspace `notes/q-20261113-153031-26c9-qa-answer.md` Q1; the GAP launch point: WALKFIX169-D1 / QB284 with Hong's answer if given by then, else "provisionally A, open"; if he picks B or C, this entry says so and points to the `gap_launch` change). Affects: Tasks 2-5's files.
+- **Item 2, fresher pictures; amends H80** (QB283 item 2 verbatim; H80's 20 ms floor lifted, with Hong's earlier page message that the floor was arbitrary and more processor time is fine, workspace `notes/q-20261113-154947-0927-qa-answer.md`; re-find every 22 s; stamps; the walker's wake and the settle spacing (WALKFIX170-D1 with the orchestrator's or Hong's ruling); the key-timing check's result, or "pending Task 10B" if it has not run). Add one line under H80: "Amended by H<n> (2026-11-13): the floor is lifted; see there." (the only edit to an old entry).
+- **Item 3, the stopped check after his walk** (QB283 item 3 verbatim; decided, not built; Task 13).
+- **The rope fix and the off-map fix are signed off** (QB267, page 2026-11-13 16:22, verbatim "Yes, sign off both the rope fix and the off-map fix"; option A; a sign-off merges nothing).
+- The order and the done rule (ledger-ROPE.md `Decision (Hong) (chat paste`): "1, 2 and 4 can be built now (2's no-pause part is final only after the key-timing check). Then my 10-lap walk ... Then 3." and "tested in the simulator, every check passing, reviewed by a second agent, and checked by my own walk": in the item 1 entry, pointed to from the others.
+
+CLAUDE.md updates (make each true; a fact lives in one file, the others point to it):
+- Root `CLAUDE.md`: Vision: the stamp, re-find every 22 s, "no fixed pause between pictures (H<n>, amends H80)" or the number Task 10B set; Threads: `minimap_frame_ns` and `minimap_frame_new` written with the frame under the lock, the walker waking on it; Running: both sim smoke lines with the figures from `notes/WALKFIX169-build.md` (the last recorded run of each command), and the marked-map run if Task 5 made it a documented command; Safety rules: `tools/key_timing_check.py` sends keys through the soak, asks the MapleStory question once, HONG-GATED.
+- `src/vision/CLAUDE.md`: the pause bullet (value, its setting, `time.sleep(0)` yields on Windows), the re-find bullet, the stamp (`grab_new_frame_stamped`, `_grab_stamped`, the tests' patch of `vision._grab_stamped`), the closing bullet's "floor at vision.py:82".
+- `src/route/CLAUDE.md`: frozen-file exceptions (walker: the `wait_frame` keyword and the six waits, Task 7; planner/route_graph/terrain/params: Tasks 1-3); the position source's `frame_ns` and `wait_new`; the step log's `EXTRA_FIELDS`; the recorder's `frame_ns`; the new tests and fixtures; the real-ground preset's 0.0 extra.
+- `src/input/CLAUDE.md`: `run_soak`'s and `_check_processes`'s `answered` keyword and that `tools/key_timing_check.py` uses soak's private names (`_new_link`, `_start_sink`), in the "soak.py is a library in practice" bullet.
+
+- [ ] **Step 1:** Write the entries and the CLAUDE.md edits. Re-read each changed `file:line` reference against the code at this commit.
+- [ ] **Step 2:** `tools/check.py` green (docs only, but `tests/test_anti_cheat_names.py` reads `tools/` and the docstring test reads `vision.py`).
+- [ ] **Step 3:** Commit `docs: decisions for Hong's 2026-11-13 walking fixes (H<a>-H<b>), H80 amended, rope and off-map fixes signed off; CLAUDE.md files (WALKFIX Task 11)`.
+
+Done: every entry above exists with Hong's words verbatim; every CLAUDE.md fact touched by Tasks 1-10 is true at this commit.
+
+---
+
+## Task 12: The full check (subtle: no; size: S)
+
+- [ ] **Step 1:** `HELIX_NO_ELEVATE=1 .venv/Scripts/python.exe tools/check.py --full` -> ALL PASS (10 skips in `tests/input/test_protocol.py`). Record the total time and the pytest line in the build notes.
+- [ ] **Step 2:** The four sim runs once more; figures equal the last recorded ones and root CLAUDE.md's.
+- [ ] **Step 3:** `git status` clean apart from the `.venv` junction, which is gitignored; remove it with `cmd //c rmdir "C:\Users\Qing_programming\Desktop\helix-fluid\.venv"` only (Task 0: a recursive delete would follow it into the main clone's venv).
+
+Done: `--full` green on the branch head; nothing to commit. Merging and Hong's 10-lap walk are the orchestrator's (the walk is Hong's).
+
+---
+
+## Task 13: Item 3, the stopped check (AFTER-WALK; outline only, planned in full after Hong's walk)
+
+Hong (QB283): "3. Knowing when the character has stopped, after my next walk. From the stamps in my next walk, measure the exact delay from a key to the picture that shows it (teleport jumps and the ends of walks). Then replace "two pictures in a row the same" with: after each move, wait for a picture taken at least that delay after the key was let go, plus a small margin for a slow Bluetooth key, and plan from that picture. Not the "dot sits still for 0.1 to 0.15 s" version."
+
+Starts only after Hong's 10-lap walk with Tasks 1-12 built (Hong's order: "Then my 10-lap walk ... Then 3.").
+
+Outline:
+1. Measure (an agent, from his run folder, no key): key-down and key-up times from `steps.jsonl` (`planned` t_ns + `sent` waited_ms, then the `keys` deltas in 100 µs units); picture times from `frames/index.jsonl` `frame_ns` (Task 6) with the character found in each PNG by `CharacterLocator`, and the walker's own reads' `frame_ns` on `planned`/`settled` lines. Delays: key-down of a sideways teleport to the first picture showing the jump (|dx| >= 8); key-up of a walk to the first picture after which the position no longer changes. The recorder saves 10 pictures a second (`RECORD_FPS`, session.py:87), so each move's delay is known to within 0.1 s; over the walk's ~200 moves the median is good to about 0.01 s (see WALKFIX170-D2). Report median, p90, p99 per kind.
+2. Decide with Hong (raised by the orchestrator): D = which percentile, the margin ("a small margin for a slow Bluetooth key": the V3 soak's residual p99 − p50 is about 46 ms, spec :141).
+3. Build (frozen `walker.py` and `params.py`, Hong's QB283 item 3 opens them): new settings `picture_delay_s`, `key_margin_s`; the walker learns each move's key-up time from the `ActionRecord` `execute` returns and the picture's stamp from the position source (a protocol extension: `frame_ns` from Task 6, decided then); `_settle` waits (Task 7's waiter) for a picture with `frame_ns >= key_up_ns + D + margin` and plans from it, replacing the two-equal-reads rule and `min_settle_s`'s role (WALKFIX170-D1 ends here). The simulator gets a picture delay (`SimPositionSource` reads `position_at(now − D)`) so the new rule has a simulator test; sim figures will move and are re-pinned there.
+4. Done rule as for every item: simulator test, every check, a second agent's review, Hong's walk.
