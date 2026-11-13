@@ -507,13 +507,15 @@ def test_landing_a_teleport_may_pass_its_aim_onto_a_slope(built):
 
 
 def test_landing_a_teleport_past_a_platform_end_takes_the_end_nodes_y(built):
-    # V4, left/right bullet: no platform in the order has a surface at x 6, so the y is that of the end of the aim
-    # node's platform nearest x 6, the end node (10,10)
+    # V4, left/right bullet. Since QB266 (walk-fluid Task 1) T11's 15 px gap is walked, not teleported past: hop 0 is a
+    # walk that lands on the end node (10,10) itself, and no table case teleports past a platform end. The rule (a
+    # teleport past the end lands at the end node's y) is pinned by a synthetic graph in test_walk_limit_preview.py.
     case = built["T11"]
     hop = _preview(case).hops[0]
     assert 6 == 25 - case.rg.reach_h
     assert planner._surface_ys(case.rg.terrain.platforms[case.rg.terrain.platform_index(case.node(0))], 6) == []
-    assert hop.landing == (6, case.node(0).minimap_position[1]) == (6, 10)
+    assert hop.options == (walk(L, 1200),)
+    assert hop.landing == case.node(0).minimap_position == (10, 10)
 
 
 def test_landing_a_capped_walk_stops_short_of_its_aim(built):

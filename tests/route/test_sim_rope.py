@@ -533,7 +533,7 @@ def ff2():
 
 def test_a_walk_planned_from_a_placed_rope_read_does_nothing_and_the_rope_rule_gets_off(ff2):
     """Hong's game fact: on a rope, Left or Right alone does nothing. A character that hangs at (106, 44), a row the map
-    places (the platform line at 43 is within 3 px), is planned a `walk LEFT` toward (58, 46); the sim's walk does nothing
+    places (the platform line at 43 is within 3 px), is planned a `walk LEFT` toward (101, 24); the sim's walk does nothing
     on the rope, the read stays, and the walker takes the rope rule: after `rope_still_s` it blinks up onto the mid-right
     platform (1 px away), and the leg goes on and reaches. (The known limit this closes, `src/route/CLAUDE.md`: the walk was
     repeated until the leg timed out.)"""
@@ -550,7 +550,7 @@ def test_a_walk_planned_from_a_placed_rope_read_does_nothing_and_the_rope_rule_g
                          WalkerConfig(use_stimulus=False, leg_timeout_s=60.0), observer=rec,
                          ropes=RopeZones.build(ROPES, ff2.rg.params))
     began_ns = clock.now_ns()
-    leg = walker.walk_leg(1, 0, None, ff2.nodes[(58, 46)])
+    leg = walker.walk_leg(1, 0, None, ff2.nodes[(101, 24)])
     assert leg.outcome == LegOutcome.REACHED
     assert (clock.now_ns() - began_ns) / 1e9 < 30
     planned = [(e[2], e[3], e[4], e[7]) for e in rec.of("planned")]
