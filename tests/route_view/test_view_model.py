@@ -705,7 +705,7 @@ def test_a_jump_off_step_replays_as_jump_off_with_alt(tmp_path):
     assert view.aim is None and view.route == ()
     lines = render_text(model, view).splitlines()
     assert "  1 jump off left   Left+Alt   SENT" in lines
-    assert "why: 00:00.100 plan: jump off left" in lines
+    assert "why: 00:00.100 plan: jump off left to leave the rope" in lines  # FLUID176-ROPELABEL
     assert [line for line in model.why if "route changed" in line] == []
     assert all(render_text(model, model.step(k)) for k in range(len(model.events)))
     (tmp_path / "r").mkdir()
@@ -714,9 +714,10 @@ def test_a_jump_off_step_replays_as_jump_off_with_alt(tmp_path):
 
 
 def test_a_rope_move_after_an_on_graph_plan_replays_as_a_changed_route(tmp_path):
-    """ROPE155-R7 m2, pinned as it is (no code change): a plan from the graph has a preview; the teleport lands on the
-    rope, off the graph, and the rope move planned from that read is not the preview's next move, so its why line is
-    `route changed: ... now teleport up`, then the off-graph lines. The lines never say "on a rope"."""
+    """ROPE155-R7 m2: a plan from the graph has a preview; the teleport lands on the rope, off the graph, and the rope
+    move planned from that read is not the preview's next move, so its why line is `route changed: ... now teleport up
+    to leave the rope`, then the off-graph lines. Since FLUID176-ROPELABEL (as-Hong ruling, option B) the plan and the
+    route-changed lines end " to leave the rope" where the target words would go."""
     events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)),
               ("planned", 1.1, (49, 28), "teleport", "RIGHT", None, 5.175, (66, 28)),
               ("settled", 1.6, (106, 49), False),
@@ -728,11 +729,93 @@ def test_a_rope_move_after_an_on_graph_plan_replays_as_a_changed_route(tmp_path)
     assert list(model.why[2:8]) == [
         "00:00.100 plan: teleport right toward o7 (aim x 68)",
         "00:00.600 settled (106, 49): 38 px past the aim; plan again from there",
-        "00:01.000 route changed: expected next walk right 1.4 s toward o8, now teleport up (landed 38 px past)",
+        ("00:01.000 route changed: expected next walk right 1.4 s toward o8, now teleport up to leave the rope "
+         "(landed 38 px past)"),
         "00:01.000 at (106, 49) off the graph; off-graph: (106, 49)",
-        "00:01.000 plan: teleport up",
+        "00:01.000 plan: teleport up to leave the rope",
         "00:01.500 settled (106, 49); plan again from there"]
     assert all(render_text(model, model.step(k)) for k in range(len(model.events)))
+
+
+# FLUID176-ROPELABEL: a `planned` event with `toward` None in a steps run is the walker's rope move (a planner move
+# always has a target node). The view shows it with no borrowed target, aim or route ---------------------------------
+
+
+def _rope_run(tmp_path, kind, direction, pos=(49, 28), settle=(50, 28)):
+    """Leg to #6; a walk that does nothing at `pos`; the rope move from the same placed read; a planner move after it."""
+    events = [("leg", 1.0, 0, 5, (49, 28), (101, 24)),
+              ("planned", 1.1, pos, "walk", "RIGHT", 500.0, 5.175, (66, 28)),
+              ("settled", 2.0, pos, False),
+              ("planned", 2.1, pos, kind, direction, None, 0.0, None),
+              ("settled", 3.0, settle, False),
+              ("planned", 3.1, settle, "walk", "RIGHT", 500.0, 5.0, (66, 28))]
+    return _load(make_folder(tmp_path, events))
+
+
+_ROPE_MOVES = [("teleport", "DOWN", "teleport down", "Down+E"), ("teleport", "UP", "teleport up", "Up+E"),
+               ("jump_off", "LEFT", "jump off left", "Left+Alt"), ("jump_off", "RIGHT", "jump off right", "Right+Alt")]
+
+
+@pytest.mark.parametrize(("kind", "direction", "words", "keys"), _ROPE_MOVES)
+def test_a_rope_move_from_a_placed_read_borrows_no_target_aim_or_route(tmp_path, kind, direction, words, keys):
+    model = _rope_run(tmp_path, kind, direction)
+    why = list(model.why)
+
+    assert f"00:01.100 plan: {words} to leave the rope" in why  # no " toward #4", no "(aim x ...)"
+    changed = [line for line in why if "route changed" in line]
+    assert len(changed) == 1 and changed[0].startswith("00:01.100 route changed: expected next ")
+    assert changed[0].split(", now ")[1].startswith(f"{words} to leave the rope")
+    assert " toward " not in changed[0].split(", now ")[1]
+    assert "00:02.000 settled (50, 28); plan again from there" in why  # no "px past the aim"
+    plan_at = why.index(f"00:01.100 plan: {words} to leave the rope")
+    settled_at = why.index("00:02.000 settled (50, 28); plan again from there")
+    assert not any("aim x" in line for line in why[plan_at:settled_at + 1])
+    assert any(line.startswith("00:01.100 at (49, 28) on #5; start") for line in why)  # the "at" line stays
+    assert not any("route changed" in line for line in why[settled_at:])  # the rope move predicted nothing
+    assert why[-1] == "00:02.100 plan: walk right 0.5 s toward o7 (aim x 66)"  # the planner move after it keeps both
+
+    view = model.step(3)  # the rope move's own `planned`
+    assert view.aim is None and view.route == ()
+    assert [(h.n, h.from_pos, h.landing, h.text, h.keys, h.sent) for h in view.hops] == [
+        (1, (49, 28), (49, 28), words, keys, True)]
+    assert not any(line.startswith("Route") for line in view.panel)
+    assert view.panel[-2:] == ("Hops", f"  1 {words}   {keys}   SENT")
+    after = model.step(4)  # the settled line after it: no aim either
+    assert after.aim is None and after.route == ()
+    assert all(render_text(model, model.step(k)) for k in range(len(model.events)))
+
+
+def test_a_planner_move_keeps_its_target_and_aim(tmp_path):
+    model = _rope_run(tmp_path, "teleport", "DOWN")
+    for k, aim_x in ((1, 68), (5, 66)):  # the planner moves before and after the rope move
+        assert model.why[model.step(k).why_line].endswith(f"plan: walk right 0.5 s toward o7 (aim x {aim_x})")
+        view = model.step(k)
+        assert view.aim is not None and view.aim[0] == aim_x and view.route
+        assert "Route   you -> o7 -> o8 -> #6   5.2 s" in view.panel or "Route   you -> o7 -> o8 -> #6   5.0 s" in view.panel
+
+
+def test_live_extend_and_replay_agree_on_a_rope_move(tmp_path):
+    folder = make_folder(tmp_path, [
+        ("leg", 1.0, 0, 5, (49, 28), (101, 24)), ("planned", 1.1, (49, 28), "walk", "RIGHT", 500.0, 5.175, (66, 28)),
+        ("settled", 2.0, (49, 28), False), ("planned", 2.1, (49, 28), "teleport", "DOWN", None, 0.0, None),
+        ("settled", 3.0, (49, 40), False)])
+    replay = _load(folder)
+    run = read_run(folder).unwrap()
+    live = RunModel.open(folder, run.header, "steps", repo_root=REPO_ROOT, current_git_head=GIT_HEAD)
+    for event in run.events:  # as `follow.py` feeds it: one event at a time
+        live.extend([event])
+    assert list(live.why) == list(replay.why)
+    assert [render_text(live, live.step(k)) for k in range(len(live.events))] == [
+        render_text(replay, replay.step(k)) for k in range(len(replay.events))]
+    assert "00:01.100 plan: teleport down to leave the rope" in live.why
+
+
+def test_a_legs_only_folder_keeps_the_borrowed_target_for_every_move(tmp_path):
+    """The fallback is load-bearing there (every move has `toward` None); `test_6_a_folder_of_legs_only` pins the
+    whole folder, this pins that no line says "to leave the rope"."""
+    model = _load(make_legs_folder(tmp_path))
+    assert model.origin == "legs"
+    assert not any("to leave the rope" in line for line in model.why)
 
 
 def test_a_header_without_the_rope_params_still_opens(tmp_path):

@@ -403,6 +403,12 @@ file order (root `CLAUDE.md`, "Map CSVs"; `controller.py:94`). Orange nodes are 
 | `leg_end` | "leg ended: <outcome> (<misses> misses, <off_graph> off-graph, <stalls> stalls)" |
 | any re-plan whose route differs from the last prediction | "route changed: expected next <node>, now <node> (landed <d> px short/past)" |
 
+Note (2026-11-14, as-Hong ruling, option B; FLUID176-ROPELABEL): a `planned` event with `toward` null in a run with a
+step log is the walker's rope move (a planner move always has a target node), so it has no node and no aim. Its lines
+are "plan: <move> to leave the rope" and "route changed: expected next <...>, now <move> to leave the rope (landed <d> px
+short/past)"; the panel and picture show only the sent move (no aim, no route), and the next plan has no
+"route changed" line (the rope move predicted nothing). A legs-only run keeps the preview's target and aim.
+
 "Why it re-planned" has one structural answer: the walker always plans again after every settle and after every
 failed read or failed plan (`walker.py:1-7`, `:129-190`). The log says which of those it was and whether the new
 plan differs from what the previous one predicted.

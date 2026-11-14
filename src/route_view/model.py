@@ -15,6 +15,10 @@ Where the plan is silent (each decided here, local and reversible):
   hops leave `path` (RV3-D5 A2's 9 FF2 pairs; none in the sim runs) the two differ, by design (RV4 m7/q14).
 - When the logged hop 1 differs from the preview's (an old folder, or code that changed), aim and route are the
   preview's (PF81 m14).
+- A `planned` event with `toward` None in a run with a step log is the walker's rope move (a planner move always has a
+  target node). It is shown with no target, aim, route or preview of its own: "plan: teleport down to leave the rope",
+  and `route changed: ..., now teleport down to leave the rope (landed N px short)`; the next plan has no
+  route-changed line. A legs-only run keeps the preview's target and aim (FLUID176-ROPELABEL, as-Hong ruling, option B).
 - `recent` is kept across legs (the faint trail of the last 5 finished moves of the run); only the plan in force is left
   out. A move needs a `settled` with a position to count.
 - "on <...>" (Position line, planned why line): a node `on #5`, a segment `on o7-o8`; past a platform end the phrase is
@@ -80,6 +84,7 @@ STATE_WORDS = {
 Pos = tuple[int, int]
 _CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}  # the model's own copy: it may not import session.py (5.8)
 _NO_GRAPH = ": route not shown"
+_LEAVE_ROPE = " to leave the rope"  # where a plan or route-changed line names the target of a planner move
 _PLAY_DEFAULT_MS = 100
 _RECENT = 5
 _COIN_TEXT = "drop or teleport down, 50/50"
@@ -493,6 +498,14 @@ class RunModel:
         self._leg_idx.append(i)
         return [f"{stamp} lap {d['lap']} leg {d['leg']}: target {name if name == where else f'{name} {where}'}"]
 
+    def _is_rope_move(self, data: Any) -> bool:
+        """True for a `planned` event the walker's rope rule logged: in a run with a step log, a planner move always has
+        a target node, so `toward` None means a rope move (FLUID176-ROPELABEL). A legs-only folder has `toward` None on
+        every move and keeps the preview's target and aim. The rope rule sends only a teleport or a jump off, so a walk
+        or a drop with no target (a log nothing writes) is left as it was."""
+        return (self.origin != "legs" and data["toward"] is None
+                and data["kind"] in (MoveKind.TELEPORT.value, MoveKind.JUMP_OFF.value))
+
     def _on_planned(self, i: int, event: StepEvent, stamp: str) -> list[str]:
         d = event.data
         cost = f"{d['cost_to_go_s']:.1f}"  # formatted at read time, before any state change: a bad value fails the load
@@ -517,12 +530,16 @@ class RunModel:
             lines.append(f"{stamp} at {_xy(pos)} {self._where(pos)}; start {self.label(chosen.minimap_position)} "
                          f"({costs[id(chosen)]:.2f} s{vias}); route {route}")
         text, _ = _logged_words(d)
-        toward = d["toward"] or (pv.hops[0].toward.minimap_position if pv is not None and pv.hops else None)
         plan = f"{stamp} plan: {text}"
-        if toward is not None:
-            plan += f" toward {self.label(toward)}"
-        if pv is not None and pv.hops:
-            plan += f" (aim x {pv.hops[0].landing[0]})"
+        if self._is_rope_move(d):  # the walker's move, not the planner's: no target, no aim, no preview to borrow
+            pv = None
+            plan += _LEAVE_ROPE
+        else:
+            toward = d["toward"] or (pv.hops[0].toward.minimap_position if pv is not None and pv.hops else None)
+            if toward is not None:
+                plan += f" toward {self.label(toward)}"
+            if pv is not None and pv.hops:
+                plan += f" (aim x {pv.hops[0].landing[0]})"
         lines.append(plan)
         self._plan_preview[i] = pv
         self._plan_cost[i] = cost
@@ -533,7 +550,8 @@ class RunModel:
     def _route_changed_line(self, stamp: str, p_idx: int, q: Any, q_preview: Preview | None) -> str | None:
         p_preview = self._plan_preview.get(p_idx)
         move = _logged_move(q)
-        if p_preview is None or move is None or not route_changed(p_preview, move, q["toward"], q_preview):
+        rope = self._is_rope_move(q)  # a rope move is never the move the earlier preview expected next
+        if p_preview is None or move is None or not (rope or route_changed(p_preview, move, q["toward"], q_preview)):
             return None
         if len(p_preview.hops) < 2:
             expected = "arrival"
@@ -541,9 +559,12 @@ class RunModel:
             hop = p_preview.hops[1]
             expected = f"{_options_words(hop.options)[0]} toward {self.label(hop.toward.minimap_position)}"
         now = _move_text(move)
-        toward = q["toward"] or (q_preview.hops[0].toward.minimap_position if q_preview and q_preview.hops else None)
-        if toward is not None:
-            now += f" toward {self.label(toward)}"
+        if rope:
+            now += _LEAVE_ROPE
+        else:
+            toward = q["toward"] or (q_preview.hops[0].toward.minimap_position if q_preview and q_preview.hops else None)
+            if toward is not None:
+                now += f" toward {self.label(toward)}"
         landed = [pos for pos in self._since if pos is not None]
         bracket = ""
         if landed and p_preview.hops:
