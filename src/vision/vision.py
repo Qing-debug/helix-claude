@@ -10,7 +10,7 @@ from collections import namedtuple
 # Constants
 MINIMAP_POSITION_RECALC_S = 22.0  # the minimap is searched for again after this many seconds (WALKFIX Task 8, QB283 2c)
 _monotonic = time.monotonic  # the clock of that re-find; a seam, so the tests fake it and not the global time.monotonic
-THREAD_SLEEP_DURATION_S = 0.02
+THREAD_SLEEP_DURATION_S = 0.0  # pause between pictures: none (Hong QB283 2b, lifts H80's 20 ms); Task 10B's key-timing check sets the smallest pause that keeps the keys on time, if one is needed
 FOREGROUND_CHECK_SLEEP_S = 5
 MINIMAP_DETECTION_RETRY_DELAY_S = 1
 WINDOW_HANDLE_RETRY_DELAY_S = 3
@@ -95,4 +95,4 @@ def capture_and_process_minimap(sharedInfo):
                 break
 
             tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB), frame_ns)  # the one writer of minimap_frame and minimap_lost, under the lock
-            time.sleep(THREAD_SLEEP_DURATION_S)  # floor between frames: time for other threads; cameraGrab itself waits in Windows for a new image (H77)
+            time.sleep(THREAD_SLEEP_DURATION_S)  # pause between pictures: none (QB283 2b, the setting); cameraGrab itself waits in Windows for a new image (H77)

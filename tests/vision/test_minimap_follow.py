@@ -419,3 +419,23 @@ def test_fast_pictures_do_not_re_find_early(run_loop):
     screen = FakeScreen(a, max_grabs=2001)
     run_loop(screen, shared, seconds_per_grab=0.0)
     assert screen.whole_screen_grabs == [1]
+
+
+def test_loop_pause_is_the_setting(run_loop, monkeypatch):
+    """WALKFIX Task 9 (QB283 2b): no fixed pause between pictures. The loop's one sleep is THREAD_SLEEP_DURATION_S, 0.0,
+    and it follows every publish and nothing else in this run."""
+    vision_mod = pytest.importorskip("src.vision.vision")
+    publishes = []
+    original_publish = follow.LostTracker.publish
+
+    def counting_publish(self, frame_rgb, frame_ns):
+        publishes.append(frame_ns)
+        return original_publish(self, frame_rgb, frame_ns)
+
+    monkeypatch.setattr(follow.LostTracker, "publish", counting_publish)
+    a, _ = build_screen()
+    shared = new_shared()
+    sleeps, _ = run_loop(FakeScreen(a, max_grabs=40), shared)
+    assert vision_mod.THREAD_SLEEP_DURATION_S == 0.0
+    assert len(publishes) > 30
+    assert sleeps == [0.0] * len(publishes)
