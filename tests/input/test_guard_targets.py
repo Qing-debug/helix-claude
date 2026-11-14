@@ -84,6 +84,10 @@ def test_the_other_tools_call_the_guard_through_soak(modules):
     probe_names = set(modules[PROBE]._check_processes.__code__.co_names)
     assert "maple_check" not in probe_names and "_read_answer" not in probe_names
     assert "maple_check" in modules[SOAK]._check_processes.__code__.co_names
+    # the key-timing check (tools/, WALKFIX Task 10A) asks once in `run_check`, through soak, before any arm; `tools/`
+    # has no __init__.py, so it imports as a namespace package from the repo root (pytest.ini `pythonpath = .`)
+    key_timing_check = importlib.import_module("tools.key_timing_check")
+    assert {"soak", "maple_check"} <= set(key_timing_check.run_check.__code__.co_names)
 
 
 def test_every_key_sending_entry_point_calls_its_check_processes(modules):
