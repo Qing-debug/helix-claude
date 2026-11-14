@@ -74,6 +74,7 @@ from src.route import runtime
 from src.route.harness.record_minimap import INDEX_NAME, record, shared_frames
 from src.route.leg_log import LAPS_FILE, LEGS_FILE, JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink
 from src.route.params import MovementParams
+from src.route.position import MinimapPositionSource
 from src.route.ropes import RopeZones
 from src.route.route_graph import RouteGraph
 from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, RunHeader, StepLog
@@ -499,7 +500,10 @@ class RunSession:
             sink = _LostLegSink(log, self._log)
             config = WalkerConfig(use_stimulus=True, leg_timeout_s=LEG_TIMEOUT_S, max_laps=s.laps)
             clock = self._make_clock()
-            step_log = StepLog(log=self._error_line)  # no I/O; every walk passes it (V7 step 3)
+            # no I/O; every walk passes it (V7 step 3). A minimap position source has the stamp of its last good read
+            # (QB283 2d): the log asks it live, on the walker's thread. Another source (the simulator's) has none.
+            stamp = (lambda: positions.frame_ns) if isinstance(positions, MinimapPositionSource) else None
+            step_log = StepLog(log=self._error_line, frame_ns=stamp)
             walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log,
                                  log=self._error_line, ropes=ropes)
             stop = self._make_stop(self._on_stop, log=self._error_line)
