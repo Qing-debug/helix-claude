@@ -284,6 +284,14 @@ def why_unusable(arm: Arm) -> str | None:
     return None
 
 
+def _residual(arm: Arm) -> tuple[float, float]:
+    """The p50 and p99 of an arm that `why_unusable` passed (it checks that both are there)."""
+    p50, p99 = arm.figures.p50_ms, arm.figures.p99_ms
+    if p50 is None or p99 is None:
+        raise ValueError(f"arm {arm.k} has no residual: check why_unusable first")
+    return p50, p99
+
+
 def invalid_reason(b1: Arm, n: Arm, b2: Arm) -> str | None:
     """Why the three first arms cannot be compared (the result is then "inconclusive"), or None."""
     for arm in (b1, n, b2):
@@ -294,7 +302,8 @@ def invalid_reason(b1: Arm, n: Arm, b2: Arm) -> str | None:
         return (f"with no pause the capture made {n.pictures_per_s:.1f} pictures a second, under {FAST_FACTOR:g} times "
                 f"the {b1.pictures_per_s:.1f} of the first {BASELINE_PAUSE_MS} ms arm: the test window did not change "
                 "every frame (is it covered, or off the captured screen?)")
-    p50s, p99s = (b1.figures.p50_ms, b2.figures.p50_ms), (b1.figures.p99_ms, b2.figures.p99_ms)
+    (p50_1, p99_1), (p50_2, p99_2) = _residual(b1), _residual(b2)
+    p50s, p99s = (p50_1, p50_2), (p99_1, p99_2)
     if abs(p50s[0] - p50s[1]) > BASELINE_P50_TOLERANCE_MS:
         return (f"the two {BASELINE_PAUSE_MS} ms baselines disagree: p50 {p50s[0]:.3f} and {p50s[1]:.3f} ms, more than "
                 f"{BASELINE_P50_TOLERANCE_MS:g} ms apart")
@@ -314,11 +323,11 @@ def judge(play) -> tuple[int | str, str]:
     why = invalid_reason(b1, n, b2)
     if why is not None:
         return INCONCLUSIVE, why
-    base_p50 = max(b1.figures.p50_ms, b2.figures.p50_ms)
-    base_p99 = max(b1.figures.p99_ms, b2.figures.p99_ms)
+    (p50_1, p99_1), (p50_2, p99_2) = _residual(b1), _residual(b2)
+    base_p50, base_p99 = max(p50_1, p50_2), max(p99_1, p99_2)
 
     def is_later(arm: Arm) -> bool:
-        arm.later = keys_later(arm.figures.p50_ms, arm.figures.p99_ms, base_p50, base_p99)
+        arm.later = keys_later(*_residual(arm), base_p50, base_p99)
         return arm.later
 
     def search_later(pause_ms: int) -> bool:
