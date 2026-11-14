@@ -88,20 +88,44 @@ def test_position_source_reads_the_stamp_under_the_lock_with_the_frame():
     assert source.frame_ns == 77
 
 
+class _SlowStamp(runtime.SharedFrame):
+    """A `SharedFrame` whose stamp read announces itself (`reading`) and then takes 0.2 ms. A reader that reads the stamp
+    inside the lock holds the capture thread out for that time; one that reads it after letting go (T6R m2) lets the
+    capture thread publish the next picture in between, which is the mix `test_frame_and_stamp_never_mix` looks for.
+    Without the announcement and the delay that window is a few bytecodes wide and the test passes by luck."""
+
+    _ns: int | None = None
+    reading = threading.Event()
+
+    @property
+    def minimap_frame_ns(self) -> int | None:
+        self.reading.set()
+        time.sleep(0.0002)
+        return self._ns
+
+    @minimap_frame_ns.setter
+    def minimap_frame_ns(self, value: int | None) -> None:
+        self._ns = value
+
+
 def test_frame_and_stamp_never_mix():
-    publications = 10_000
-    shared = runtime.SharedFrame()
+    publications = 1_000
+    shared = _SlowStamp()
     done = threading.Event()
 
     def capture() -> None:
         # the stamp k goes with a picture whose first byte is k % 256; the `sleep(0)` between the two writes hands the
-        # reader the GIL at the worst moment, so a reader that did not hold the lock would see a half-written pair
+        # reader the GIL at the worst moment, so a reader that did not hold the lock would see a half-written pair.
+        # After each publication it waits for the reader to start reading a stamp and publishes the next one then: a
+        # reader that has let go of the lock by then reads that next picture's stamp with this one's picture.
         for k in range(1, publications + 1):
             frame = np.full((2, 2, 3), k % 256, dtype=np.uint8)
+            shared.reading.clear()
             with shared.minimap_frame_lock:
                 shared.minimap_frame = frame
                 time.sleep(0)
                 shared.minimap_frame_ns = k
+            shared.reading.wait(timeout=1.0)
         done.set()
 
     read = shared_frames(shared)
@@ -113,9 +137,10 @@ def test_frame_and_stamp_never_mix():
         if pair is None:
             continue
         frame, stamp = pair
-        # a mixed pair is a picture from one publication with the stamp of the one before it
+        # a mixed pair is a picture from one publication with the stamp of the one after it
         assert frame[0, 0, 0] == stamp % 256, f"picture of {frame[0, 0, 0]} came with stamp {stamp}"
         seen.add(stamp)
+        time.sleep(0)  # let the capture thread take the lock: a loop that re-takes it at once could starve it
     thread.join(timeout=10)
     assert len(seen) > 1  # the reader did see the publications go by, not only the last one
     last = read()
