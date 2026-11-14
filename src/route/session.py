@@ -504,8 +504,11 @@ class RunSession:
             # (QB283 2d): the log asks it live, on the walker's thread. Another source (the simulator's) has none.
             stamp = (lambda: positions.frame_ns) if isinstance(positions, MinimapPositionSource) else None
             step_log = StepLog(log=self._error_line, frame_ns=stamp)
+            # the walker wakes on a new picture when its source can wait for one (QB283 2a); another source (the
+            # simulator's) has no pictures to wait for, so its walker sleeps `poll_s` as before
+            wait_frame = positions.wait_new if isinstance(positions, MinimapPositionSource) else None
             walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log,
-                                 log=self._error_line, ropes=ropes)
+                                 log=self._error_line, ropes=ropes, wait_frame=wait_frame)
             stop = self._make_stop(self._on_stop, log=self._error_line)
             sink.arm(stop.trigger, walker.stop_now)
             if self._flagged():

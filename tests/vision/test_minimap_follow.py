@@ -144,7 +144,9 @@ def test_a_reject_prints_only_when_verbose(capsys):
 # ---- the lost flag and its lines ------------------------------------------------------------------------------------
 
 def new_shared():
-    return SimpleNamespace(minimap_frame_lock=threading.Lock(), minimap_frame=None, minimap_lost=False)
+    lock = threading.Lock()  # `publish` notifies the condition, which has to be on the same lock (QB283 2a)
+    return SimpleNamespace(minimap_frame_lock=lock, minimap_frame_new=threading.Condition(lock), minimap_frame=None,
+                           minimap_lost=False)
 
 
 def test_tracker_says_lost_once_and_found_once():
@@ -177,13 +179,30 @@ def test_tracker_writes_the_frame_and_the_flag_under_the_lock():
     seen = []
 
     class Spy:
+        """A real lock that notes each `with`; `acquire` and `release`, which the condition uses itself, are not noted."""
+
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def acquire(self, *args):
+            return self.lock.acquire(*args)
+
+        def release(self):
+            self.lock.release()
+
+        def locked(self):
+            return self.lock.locked()
+
         def __enter__(self):
             seen.append("in")
+            self.lock.acquire()
 
         def __exit__(self, *exc):
+            self.lock.release()
             seen.append("out")
 
     shared.minimap_frame_lock = Spy()
+    shared.minimap_frame_new = threading.Condition(shared.minimap_frame_lock)
     tracker = follow.LostTracker(shared, lambda _line: None)
     tracker.publish(np.zeros((2, 2, 3), np.uint8), 3)
     tracker.search_failed()

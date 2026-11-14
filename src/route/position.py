@@ -7,6 +7,10 @@ lock, `read` takes the frame: None is `Failure("no frame")`; the same object as 
 so the capture thread never waits on template matching. The point it reports is the locator's, moved `DOT_TO_FOOT_PX`
 down (`foot_from_dot`); a failure is returned unchanged.
 
+`wait_new` is the walker's idle wait (QB283 2a): it returns when a frame newer than the last one `read` copied is there,
+or after `timeout_s`. The capture thread's `LostTracker.publish` notifies `minimap_frame_new`, a condition on the same
+lock, after every new frame.
+
 Under the same lock `read` also takes `minimap_frame_ns`, the stamp the capture thread published with that frame, and
 after the locator succeeds it keeps it in `frame_ns` (QB283 2d; see the attribute's comment).
 
@@ -38,7 +42,8 @@ def foot_from_dot(dot: tuple[int, int]) -> tuple[int, int]:
 class MinimapPositionSource:  # implements walker.PositionSource
     def __init__(self, shared, locator: CharacterLocator) -> None:
         """`shared` has `minimap_frame_lock` (a lock), `minimap_frame` (an RGB uint8 H x W x 3 array, or None) and
-        `minimap_frame_ns` (the stamp of that frame, an int, or None before the first)."""
+        `minimap_frame_ns` (the stamp of that frame, an int, or None before the first); `wait_new` also needs
+        `minimap_frame_new`, a `threading.Condition` on `minimap_frame_lock`."""
         self._shared = shared
         self._locator = locator
         # A reference, not an id(): once a frame is freed, a new frame can be given its id.
@@ -63,3 +68,11 @@ class MinimapPositionSource:  # implements walker.PositionSource
         if is_successful(located):
             self.frame_ns = stamp
         return located
+
+    def wait_new(self, timeout_s: float) -> None:
+        """Return when `minimap_frame` is not the frame the last `read` copied, or after `timeout_s`; at once when a
+        newer frame is already there. Called on the walker's thread, the one that calls `read`. It takes no copy and
+        runs no locator: the next `read` does. The timeout is not reported: the next `read` says STALE if none came."""
+        cond = self._shared.minimap_frame_new
+        with cond:
+            cond.wait_for(lambda: self._shared.minimap_frame is not self._last_frame, timeout_s)

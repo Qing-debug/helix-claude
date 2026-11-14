@@ -155,6 +155,7 @@ class _Shared:
         self.minimap_frame_lock = threading.Lock()
         self.minimap_frame = None
         self.minimap_frame_ns = None  # stamp of minimap_frame: time.perf_counter_ns() when Windows handed the picture over (QB283 2d)
+        self.minimap_frame_new = threading.Condition(self.minimap_frame_lock)  # notified by LostTracker.publish (QB283 2a)
 
 
 def main(argv: list[str] | None = None) -> int:

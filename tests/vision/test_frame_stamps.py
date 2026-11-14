@@ -4,6 +4,7 @@ with the picture (`LostTracker.publish`). The fake camera and the loop's synthet
 `test_frame_wait.py` and `test_minimap_follow.py`. Windows only, as `frame_wait` loads bettercam at module level."""
 import itertools
 import sys
+import threading
 
 import numpy as np
 import pytest
@@ -84,15 +85,31 @@ def test_publish_writes_frame_and_stamp_together():
     seen = []
 
     class Snapshot:
-        """The lock: what `shared` holds when the writer takes it and when it lets go."""
+        """The lock: what `shared` holds when the writer takes it and when it lets go. A real lock underneath, because
+        `publish` notifies a condition on it (QB283 2a); `acquire` and `release`, the condition's own use, are not noted."""
+
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def acquire(self, *args):
+            return self.lock.acquire(*args)
+
+        def release(self):
+            self.lock.release()
+
+        def locked(self):
+            return self.lock.locked()
 
         def __enter__(self):
+            self.lock.acquire()
             seen.append((shared.minimap_frame, shared.minimap_frame_ns))
 
         def __exit__(self, *exc):
             seen.append((shared.minimap_frame, shared.minimap_frame_ns))
+            self.lock.release()
 
     shared.minimap_frame_lock = Snapshot()
+    shared.minimap_frame_new = threading.Condition(shared.minimap_frame_lock)
     frame = np.zeros((2, 2, 3), np.uint8)
     follow.LostTracker(shared, lambda _line: None).publish(frame, 123)
     assert (shared.minimap_frame, shared.minimap_frame_ns) == (frame, 123)

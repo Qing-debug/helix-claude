@@ -66,7 +66,7 @@ def still_there(lock: MinimapLock, box_gray) -> bool:
 
 class LostTracker:
     """The capture thread's one writer of the lost flag and of the search lines. `shared` is the `SharedInfo` (anything
-    with `minimap_frame_lock`, `minimap_frame`, `minimap_frame_ns` and `minimap_lost`). A failed search says so once per stretch, not once
+    with `minimap_frame_lock`, `minimap_frame`, `minimap_frame_ns`, `minimap_frame_new` and `minimap_lost`). A failed search says so once per stretch, not once
     per failed search; the first picture published after it says the minimap is back."""
 
     def __init__(self, shared, say=print):
@@ -91,11 +91,14 @@ class LostTracker:
 
     def publish(self, frame_rgb, frame_ns: int) -> None:
         """Store the new picture with its stamp (`frame_ns`, `time.perf_counter_ns()` when Windows handed the picture
-        over, QB283 2d) and clear the lost flag, together under the lock (the window and the walker read them)."""
+        over, QB283 2d) and clear the lost flag, together under the lock (the window and the walker read them), then wake
+        whoever waits for a new picture (`minimap_frame_new`, a condition on that lock, QB283 2a; `notify_all` needs the
+        lock held, so it is inside the `with`)."""
         with self._shared.minimap_frame_lock:
             self._shared.minimap_frame = frame_rgb
             self._shared.minimap_frame_ns = frame_ns
             self._shared.minimap_lost = False
+            self._shared.minimap_frame_new.notify_all()
         if self._searching:
             self._searching = False
             self._say(FOUND_AGAIN_LINE if self._published_before else FOUND_LINE)
