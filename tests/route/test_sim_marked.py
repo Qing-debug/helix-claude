@@ -141,7 +141,12 @@ def test_marked_map_crosses_the_gap_by_teleport(tmp_path):
     assert (report.off_map, report.stalls, report.timeouts, report.link_down) == (0, 0, 0, 0)
     by_name = {check.name: check for check in judge(report, 0)}
     assert by_name["laps"].ok and by_name["stalls"].ok and by_name["known_cases"].ok, by_name
-    mid = [p for p in _planned(rec) if MID_ROWS[0] <= p[0][1] <= MID_ROWS[1]]
+    # "reached" alone would pass a world that drops every crossing into the gap (the walker recovers from the floor, y 61).
+    # On seed 2 exactly two crossings end there, both from a mob knockback of -6 px that pushes the character off the far
+    # platform's left end into the gap (a teleport from (69.25, 46) landed (88.25, 43) correctly); with `knockback_p=0.0`
+    # there are none.
+    assert [e[2] for e in rec.of("settled") if e[2][1] >= 55] == [(82, 61), (101, 61)]
+    mid =[p for p in _planned(rec) if MID_ROWS[0] <= p[0][1] <= MID_ROWS[1]]
     walks = [p for p in mid if p[1] == MoveKind.WALK.value]
     assert walks, "the control: the walker does walk on the middle platforms"
     for (x, _), _, direction, walk_ms, _ in walks:
@@ -179,7 +184,7 @@ def test_short_teleport_stops_at_the_end_and_replans(marked, terrain):
     """Review I3: the live teleport is 18-19 px (64 recorded jumps), so one of 18 px from the launch (69) falls short of
     (88, 43): 69 + 18 = 87, and Hong's rule stops it at the end of mid-left, (80, 46), not in the gap and not on the floor.
     The read there is placed by `locate` (2 px past the marked end node (78, 45)), and the planner plans from it: back
-    to the launch, a walk left. Exact A never carries a 18 px teleport over (it would walk back and retry until the 10 s
+    to the launch, a walk left. Exact A never carries an 18 px teleport over (it would walk back and retry until the 10 s
     `stall_s` trips), so this pins that the failure is safe and leaves the margin to option A2.
     A2: from x 70 (2 short of 72, the worst P4 accepts) the 18 px teleport lands at (88, 43) on the mid-right platform, and
     from 74 with 19 px at (93, 43) (both confirmed in this simulator, noise off)."""
