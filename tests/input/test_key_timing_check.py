@@ -22,8 +22,10 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="soak imports wi
 from src.input.harness import analyze, listener, realism, soak  # noqa: E402
 from src.input.protocol import Key  # noqa: E402
 from src.route import runtime  # noqa: E402
+from src.route.position import MinimapPositionSource  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
+REAL_MAKE_POSITIONS = runtime.make_positions  # taken at import, before any test patches it
 ANSWERED_Y = "answered y: MapleStory closed"
 
 
@@ -113,7 +115,7 @@ class Rig:
         monkeypatch.setattr(ktc, "_clock", lambda: self.clock)
         monkeypatch.setattr(ktc, "measure_arm", lambda run_dir: self.figures[Path(run_dir)])
         monkeypatch.setattr(runtime, "start_capture", self._start_capture)
-        monkeypatch.setattr(runtime, "make_positions", lambda holder: Success(FakePositions()))
+        monkeypatch.setattr(runtime, "make_positions", lambda holder: FakePositions())  # as the real one: a bare source
         if not first_picture:
             monkeypatch.setattr(runtime, "wait_first_frame", lambda shared, timeout_s: Failure("no picture"))
         monkeypatch.setattr(soak, "_read_answer", self._read_answer)
@@ -200,6 +202,37 @@ def test_no_picture_stops_before_the_question(make_rig, capsys):
     err = capsys.readouterr().err
     assert "the capture did not find the test window's minimap: put the window on the second screen " in err
     assert "(python tools/capture_load_window.py --at X,Y) and start again" in err
+
+
+def test_the_real_make_positions_reaches_the_stand_in(make_rig, ktc, monkeypatch):
+    """C1: `runtime.make_positions` gives a bare source (or a `Failure`), not a `Success`. The real one loads only the
+    icon files; the stand-in is a recorder that starts no thread, and no first picture stops main right after it."""
+    rig = make_rig(first_picture=False)
+    monkeypatch.setattr(runtime, "make_positions", REAL_MAKE_POSITIONS)  # the rig's fake replaced by the real one
+    given = []
+
+    class Recorder:
+        def __init__(self, positions):
+            given.append(positions)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(ktc, "WalkerStandIn", Recorder)
+    assert rig.run() == 3
+    assert [type(p) for p in given] == [MinimapPositionSource]
+    assert rig.window.terminated and rig.answers == 0
+
+
+def test_a_character_icon_failure_stops_before_the_window(make_rig, monkeypatch, capsys):
+    rig = make_rig()
+    monkeypatch.setattr(runtime, "make_positions", lambda holder: Failure("character icon: missing"))
+    assert rig.run() == soak.EXIT_ABORT
+    assert rig.windows_started == [] and rig.answers == 0 and rig.calls == []
+    assert "error: character icon: missing" in capsys.readouterr().err
 
 
 def test_out_must_be_under_data(make_rig, tmp_path):

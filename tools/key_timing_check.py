@@ -438,13 +438,13 @@ def main(argv: list[str] | None = None) -> int:
         print(refusal, file=sys.stderr, flush=True)
         return soak.EXIT_REFUSED
     holder = CountingFrame()
-    positions = runtime.make_positions(holder)
-    if not is_successful(positions):
+    positions = runtime.make_positions(holder)  # a bare source, or a Failure (as src/route/session.py checks it)
+    if isinstance(positions, Failure):
         print(f"error: {positions.failure()}", file=sys.stderr, flush=True)
         return soak.EXIT_ABORT
     print(f"key-timing check: {args.commands} commands per arm, seed {args.seed}, up to {MAX_ARMS} arms -> {out}\n"
           "starting the test window; it must be on the second screen, uncovered", flush=True)
-    stand_in = WalkerStandIn(positions.unwrap())
+    stand_in = WalkerStandIn(positions)
     window = _start_window(args.at)
     try:
         runtime.start_capture(holder)
