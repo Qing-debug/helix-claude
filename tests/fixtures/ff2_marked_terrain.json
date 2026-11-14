@@ -1,0 +1,6 @@
+{"_source": "made by hand from ff2_real_ground.json (same keys, same change points) for tests/fixtures/ff2_marked.csv, Hong's 12 November walk map (data/route/2026-11-12T152109Z/map.csv, byte copy): each polyline is extended at an end to the x of that map's end-mark node there, flat at the polyline's end y, where the node lies beyond it: mid-left from x 44 to 32 (left mark (32, 46)), mid-right from x 94 to 88 (left mark (88, 43)) and from 122 to 129 (right mark (129, 43)), top from x 113 to 124 (right mark (124, 23); the top's end y is 24); the floor is unchanged (30-135). The recorded mid-left ends at x 80, so the world's gap is 80 -> 88 at heights 46 and 43 (3 px apart), the 10 px gap between the map's nodes (78, 45) and (88, 43)", "minimap_size": [162, 82],
+ "platforms": [
+  {"name": "floor", "droppable": false, "points": [[30, 61], [135, 61]]},
+  {"name": "mid-left", "droppable": true, "points": [[32, 46], [80, 46]]},
+  {"name": "top", "droppable": true, "points": [[38, 28], [67, 28], [68, 27], [69, 26], [70, 26], [71, 25], [72, 24], [124, 24]]},
+  {"name": "mid-right", "droppable": true, "points": [[88, 43], [129, 43]]}]}
