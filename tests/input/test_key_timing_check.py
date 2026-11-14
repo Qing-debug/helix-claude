@@ -50,6 +50,8 @@ class Entry:
     delivery: str = "PASS"
     exit_code: int = 0
     alive: bool = True
+    window_dies: bool = False  # the test window's process ends during the arm
+    lost: bool = False         # the capture loses the minimap during the arm, and finds it again before the end
 
 
 LATE = dict(p50=40.0, p99=75.0, rate=120.0)  # p50 more than 2 ms above the baselines' 30; fast enough to be N
@@ -68,6 +70,10 @@ class FakeWindow:
     def __init__(self):
         self.terminated = False
         self.killed = False
+        self.dead = False
+
+    def poll(self):
+        return 0 if self.dead else None
 
     def terminate(self):
         self.terminated = True
@@ -150,8 +156,14 @@ class Rig:
         entry = self.script[pause].pop(0)
         cfg.out.mkdir(parents=True, exist_ok=True)
         self.clock += 10.0
+        if entry.lost:
+            self.holder.minimap_lost = True  # as minimap_follow's search_failed, under the lock in the real capture
         for _ in range(int(entry.rate * 10)):
             self.holder.minimap_frame = self.frame
+        if entry.lost:
+            self.holder.minimap_lost = False  # found again (publish), so only "at any point during the arm" sees it
+        if entry.window_dies:
+            self.window.dead = True
         self.figures[cfg.out] = self.ktc.ArmFigures(entry.delivery, entry.alive, entry.p50, entry.p99, 100)
         return entry.exit_code
 
@@ -406,8 +418,58 @@ def test_arm_json_has_the_figures(make_rig):
     first = json.loads((rig.out / "1-pause20ms" / "arm.json").read_text(encoding="utf-8"))
     assert first["pause_ms"] == 20 and first["pictures_per_s"] == 45.0
     assert first["delivery"] == "PASS" and first["residual_p50_ms"] == 30.0 and first["residual_p99_ms"] == 75.0
+    assert first["window_alive"] is True and first["minimap_lost"] is False
     second = json.loads((rig.out / "2-pause0ms" / "arm.json").read_text(encoding="utf-8"))
     assert second["pause_ms"] == 0 and second["pictures_per_s"] == 120.0
+
+
+# ---- the load must be there all through every arm (review I1) ----------------------------------------------------------
+
+def test_inconclusive_when_the_window_dies_in_a_search_arm(make_rig):
+    rig = make_rig(scripted(n=Entry(**LATE), five=Entry(window_dies=True)))  # 5 on time, but without its load
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20, 5]  # not on to 2: the search stops
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 4" in result["reason"] and "window" in result["reason"]
+    assert result["arms"][3]["window_alive"] is False and result["arms"][2]["window_alive"] is True
+
+
+def test_inconclusive_when_the_minimap_is_lost_for_a_while_in_a_search_arm(make_rig):
+    rig = make_rig(scripted(n=Entry(**LATE), five=Entry(lost=True)))  # lost and found again inside the arm
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20, 5]
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 4" in result["reason"] and "minimap" in result["reason"]
+    arm4 = json.loads((rig.out / "4-pause5ms" / "arm.json").read_text(encoding="utf-8"))
+    assert arm4["minimap_lost"] is True
+
+
+def test_inconclusive_with_no_search_when_n_loses_the_minimap(make_rig):
+    rig = make_rig(scripted(n=Entry(rate=120.0, lost=True)))  # fast enough, on time, but not all of it under load
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20]
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 2" in result["reason"] and "minimap" in result["reason"]
+
+
+def test_inconclusive_when_the_window_dies_in_b2(make_rig):
+    rig = make_rig(scripted(b2=Entry(window_dies=True)))
+    assert rig.run() == 0
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 3" in result["reason"] and "window" in result["reason"]
+
+
+def test_the_frame_notes_a_lost_minimap_until_the_next_reset(ktc):
+    holder = ktc.CountingFrame()
+    assert holder.minimap_lost is False and holder.was_lost is False
+    holder.minimap_lost = True
+    holder.minimap_lost = False
+    assert holder.was_lost  # lost at any point since the reset, though found again
+    holder.reset()
+    assert not holder.was_lost
+    holder.minimap_lost = True
+    holder.reset()
+    assert holder.was_lost  # still lost when the arm starts: the arm has no load from its start
 
 
 def test_the_picture_counter_counts_pictures_and_resets(ktc):

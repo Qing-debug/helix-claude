@@ -24,11 +24,15 @@ p50 is above max(p50 of B1, B2) + LATER_P50_MS or its p99 is above max(p99 of B1
 result is 0 ms. N later: run 5 ms; if 5 is not later run 2, and if 2 is not later run 1; if 5 is later run 10; the
 smallest arm that was not later is the result, and if 10 is later too the result is 20 ms. At most MAX_ARMS arms. A search
 arm that fails Delivery, loses the listener or has no residual makes the result "inconclusive" (its figures cannot say
-"later" or "not later"); the search arms' capture rates are written but not judged.
+"later" or "not later"); the search arms' capture rates are written but not judged. Every arm, the first three and the
+search arms, must also have had its load all through: an arm at whose end the test window's process had ended, or during
+which the capture lost the test window's minimap at any point (`minimap_lost` raised, `minimap_follow.py`), measured some
+other load, and makes the result "inconclusive" too (review I1).
 
 Files, under `--out` (a new or empty folder inside the repo's `data/`, never a file of a run before): one soak run folder
-per arm, `<k>-pause<P>ms/`, with `arm.json` (the pause, pictures per second, walker reads, the Delivery verdict, the
-listener's state, and the residual's n, p50 and p99), and `result.json` (the rules, every finished arm with `later`
+per arm, `<k>-pause<P>ms/`, with `arm.json` (the pause, pictures per second, walker reads, whether the test window was
+still running at the arm's end and whether the minimap was lost during it, the Delivery verdict, the listener's state, and
+the residual's n, p50 and p99), and `result.json` (the rules, every finished arm with `later`
 (null for a baseline), and `result`: the pause in ms or "inconclusive", with `reason`). A soak that does not end normally
 (a missed click is `EXIT_ABORT`) stops the check cleanly: exit 1, the finished arms kept, and `result.json` has
 `"stopped": "arm <k>: <the soak's exit code>"` and no `result`. Exit 0 means a result was reached, "inconclusive"
@@ -92,12 +96,26 @@ _clock = time.monotonic  # a seam: the tests give each arm a fake length
 # ---- the capture and the walker stand-in ---------------------------------------------------------------------------
 
 class CountingFrame(runtime.SharedFrame):
-    """The shared frame the capture writes into, counting the pictures published (each one is a new array)."""
+    """The shared frame the capture writes into, counting the pictures published (each one is a new array) and noting
+    whether the capture lost the minimap since the last `reset` (`was_lost`). The capture raises `minimap_lost` once per
+    failed stretch (`minimap_follow.LostTracker.search_failed`) and clears it with the next picture, both under the lock."""
 
     def __init__(self) -> None:
         self.pictures = 0
         self._frame = None
+        self._lost = False
+        self.was_lost = False
         super().__init__()  # sets minimap_frame = None, through the property below
+
+    @property
+    def minimap_lost(self) -> bool:
+        return self._lost
+
+    @minimap_lost.setter
+    def minimap_lost(self, value: bool) -> None:
+        self._lost = value
+        if value:
+            self.was_lost = True
 
     @property
     def minimap_frame(self):
@@ -110,8 +128,11 @@ class CountingFrame(runtime.SharedFrame):
             self.pictures += 1
 
     def reset(self) -> None:
-        """Restart the count; the last picture stays."""
-        self.pictures = 0
+        """Restart the count and the lost note; the last picture stays. A minimap still lost now counts as lost: the arm
+        that starts has no load from its start."""
+        with self.minimap_frame_lock:
+            self.pictures = 0
+            self.was_lost = self._lost
 
 
 class WalkerStandIn:
@@ -211,7 +232,9 @@ class Arm:
     pictures: int
     walker_reads: int
     figures: ArmFigures
-    later: bool | None = None  # judged against the baselines; None for a baseline
+    window_alive: bool = True   # the test window's process was still running when the arm's soak ended
+    minimap_lost: bool = False  # the capture lost the test window's minimap at some point during the arm
+    later: bool | None = None   # judged against the baselines; None for a baseline
 
     @property
     def pictures_per_s(self) -> float:
@@ -221,7 +244,8 @@ class Arm:
 def arm_record(arm: Arm) -> dict:
     f = arm.figures
     return {"k": arm.k, "pause_ms": arm.pause_ms, "seconds": round(arm.seconds, 3), "pictures": arm.pictures,
-            "pictures_per_s": round(arm.pictures_per_s, 3), "walker_reads": arm.walker_reads, "delivery": f.delivery,
+            "pictures_per_s": round(arm.pictures_per_s, 3), "walker_reads": arm.walker_reads,
+            "window_alive": arm.window_alive, "minimap_lost": arm.minimap_lost, "delivery": f.delivery,
             "listener_alive": f.listener_alive, "residual_n": f.n, "residual_p50_ms": f.p50_ms,
             "residual_p99_ms": f.p99_ms}
 
@@ -242,11 +266,24 @@ def _unusable_text(arm: Arm) -> str:
     return "has no reaction residual to measure"
 
 
+def why_unusable(arm: Arm) -> str | None:
+    """Why the arm's residual may not be compared, or None: its figures are not usable, or its load was not there all
+    through the arm (review I1)."""
+    if not arm.figures.usable:
+        return _unusable_text(arm)
+    if not arm.window_alive:
+        return "lost its load: the test window's process had ended by the arm's end"
+    if arm.minimap_lost:
+        return "lost its load: the capture lost the test window's minimap during the arm"
+    return None
+
+
 def invalid_reason(b1: Arm, n: Arm, b2: Arm) -> str | None:
     """Why the three first arms cannot be compared (the result is then "inconclusive"), or None."""
     for arm in (b1, n, b2):
-        if not arm.figures.usable:
-            return f"arm {arm.k} (pause {arm.pause_ms} ms) {_unusable_text(arm)}"
+        why = why_unusable(arm)
+        if why is not None:
+            return f"arm {arm.k} (pause {arm.pause_ms} ms) {why}"
     if n.pictures_per_s < FAST_FACTOR * b1.pictures_per_s:
         return (f"with no pause the capture made {n.pictures_per_s:.1f} pictures a second, under {FAST_FACTOR:g} times "
                 f"the {b1.pictures_per_s:.1f} of the first {BASELINE_PAUSE_MS} ms arm: the test window did not change "
@@ -280,8 +317,9 @@ def judge(play) -> tuple[int | str, str]:
 
     def search_later(pause_ms: int) -> bool:
         arm = play(pause_ms)
-        if not arm.figures.usable:
-            raise _Inconclusive(f"search arm {arm.k} (pause {pause_ms} ms) {_unusable_text(arm)}")
+        why = why_unusable(arm)
+        if why is not None:
+            raise _Inconclusive(f"search arm {arm.k} (pause {pause_ms} ms) {why}")
         return is_later(arm)
 
     if not is_later(n):
@@ -324,7 +362,8 @@ def _arm_line(arm: Arm) -> str:
     p99 = "n/a" if f.p99_ms is None else f"{f.p99_ms:.3f}"
     later = "baseline" if arm.later is None else ("yes" if arm.later else "no")
     listener_note = "" if f.listener_alive else ", listener lost"
-    return (f"arm {arm.k}: pause {arm.pause_ms} ms, {arm.pictures_per_s:.1f} pictures/s, residual p50 {p50} ms "
+    load_note = ("" if arm.window_alive else ", test window ended") + (", minimap lost" if arm.minimap_lost else "")
+    return (f"arm {arm.k}: pause {arm.pause_ms} ms, {arm.pictures_per_s:.1f} pictures/s{load_note}, residual p50 {p50} ms "
             f"p99 {p99} ms (n {f.n}), Delivery {f.delivery}{listener_note}, later {later}")
 
 
@@ -333,9 +372,11 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_in: WalkerStandIn) -> int:
+def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_in: WalkerStandIn,
+              window: subprocess.Popen) -> int:
     """Steps 3 to 6: the one MapleStory question, then the arms and the decision, then `result.json` and the lines.
-    The capture is running and has a picture; no listener, link or key has been touched yet."""
+    The capture is running and has a picture; no listener, link or key has been touched yet. `window` is the test
+    window's process, which this tool started: only its own state is read (`poll`), no other process is looked at."""
     ok, text = soak.maple_check()  # through the module, so a patch of soak._read_answer reaches it; asked once, here
     if not ok:
         print(text, file=sys.stderr, flush=True)
@@ -357,10 +398,11 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
         started = _clock()
         code = soak.run_soak(cfg, soak._new_link(), soak._start_sink, answered=text)
         seconds = _clock() - started
-        pictures = holder.pictures
+        pictures, lost = holder.pictures, holder.was_lost
+        window_alive = window.poll() is None  # None: still running; it cannot come back, so dead now is dead at the end
         if code != soak.EXIT_OK:
             raise _Stopped(k, code)
-        arm = Arm(k, pause_ms, seconds, pictures, stand_in.reads - reads, measure_arm(cfg.out))
+        arm = Arm(k, pause_ms, seconds, pictures, stand_in.reads - reads, measure_arm(cfg.out), window_alive, lost)
         _write_json(cfg.out / ARM_FILE, arm_record(arm))
         arms.append(arm)
         return arm
@@ -452,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         if not is_successful(runtime.wait_first_frame(holder, FIRST_PICTURE_WAIT_S)):
             print(NO_PICTURE_TEXT, file=sys.stderr, flush=True)
             return EXIT_NO_PICTURE
-        return run_check(args, out, holder, stand_in)
+        return run_check(args, out, holder, stand_in, window)
     finally:
         stand_in.stop()
         _close_window(window)
