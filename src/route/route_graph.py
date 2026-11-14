@@ -54,7 +54,8 @@ def horizontal_cost_s(dx_px: float, reach_h: int, p: MovementParams, *, to_end: 
     The price is of one edge, so it cannot see the run the planner decides over (`planner._walk_run_end`, T1R m2):
     two 15 px WALK edges in a row cost 2 x 1.20 s here, while the planner teleports once and walks the rest of the 30 px
     (0.55 s + 0.88 s, 1.43 s). The same edge would have to cost 1.20 s as a run of one and about 0.72 s in a run of two,
-    so no price of the edge matches both; the cost of a run of short walk edges stays above what the planner plays."""
+    so no price of the edge matches both; the cost of a run of walk edges can be above or below what the planner plays
+    (above for edges under `walk_under_px`; below for e.g. two 17 px edges: 1.42 s here, 1.75 s played)."""
     d, total = abs(dx_px), 0.0
     v, t = p.walk_px_per_s, p.teleport_s
     while d > 0:
