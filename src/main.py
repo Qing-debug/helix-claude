@@ -10,6 +10,7 @@ class SharedInfo:
     def __init__(self):
         self.minimap_frame_lock = threading.Lock()
         self.minimap_frame = None #note: numpy array storing data in RGB format (vision converts BGR to RGB before storing it, `LostTracker.publish`, src/vision/minimap_follow.py).
+        self.minimap_frame_ns = None #note: stamp of minimap_frame, time.perf_counter_ns() when Windows handed the picture over (QB283 2d). Written with minimap_frame under minimap_frame_lock, by LostTracker.publish only; None until the first picture.
         self.minimap_lost = False #note: True while the capture has lost a minimap it had found (VIS162-FIX). Written with minimap_frame under minimap_frame_lock, by the vision thread only; minimap_frame keeps its last picture meanwhile, so the walker reads "no new frame".
 
 def main():

@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 import src.vision.vision_helper_lib as vision
 import src.vision.minimap_follow as follow
+import src.vision.frame_wait as frame_wait
 import time
 from collections import namedtuple
 # Constants
@@ -15,6 +16,14 @@ WINDOW_HANDLE_RETRY_DELAY_S = 3
 MINIMAP_TEMPLATE_MATCH_CONFIDENCE_THRESHOLD = 0.95
 
 MatchedTemplateInfo = namedtuple("MatchedTemplateInfo", ["x", "y", "conf_score"])
+
+def _grab_stamped(camera, region):
+    """`cameraGrab`'s retry loop over `frame_wait.grab_new_frame_stamped`: the next picture of `region` and the time
+    Windows handed it over (QB283 2d). The whole-screen search keeps `vision.cameraGrab`, which publishes nothing."""
+    while True:
+        got = frame_wait.grab_new_frame_stamped(camera, region)
+        if got is not None:
+            return got
 
 #could convert to a class if it makes more sense later on.
 def capture_and_process_minimap(sharedInfo):
@@ -72,7 +81,7 @@ def capture_and_process_minimap(sharedInfo):
         while minimap_valid and minimap_frame_counter < MINIMAP_POSITION_RECALC_INTERVAL:
             if not vision.isProposedMinimapRegionValid(lock.box, screen_width, screen_height):
                 break
-            box_frame = vision.cameraGrab(camera, lock.box)  # the minimap and its four corner templates (VIS162-FIX)
+            box_frame, frame_ns = _grab_stamped(camera, lock.box)  # the minimap and its four corner templates (VIS162-FIX), with the time Windows handed it over
             if not follow.still_there(lock, cv2.cvtColor(box_frame, cv2.COLOR_BGR2GRAY)):
                 break  # moved, covered or gone: publish nothing from this grab and search the whole screen at once
             crop_x1, crop_y1, crop_x2, crop_y2 = lock.crop
@@ -84,6 +93,6 @@ def capture_and_process_minimap(sharedInfo):
                 time.sleep(MINIMAP_DETECTION_RETRY_DELAY_S)
                 break
 
-            tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB))  # the one writer of minimap_frame and minimap_lost, under the lock
+            tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB), frame_ns)  # the one writer of minimap_frame and minimap_lost, under the lock
             minimap_frame_counter += 1
             time.sleep(THREAD_SLEEP_DURATION_S)  # floor between frames: time for other threads; cameraGrab itself waits in Windows for a new image (H77)

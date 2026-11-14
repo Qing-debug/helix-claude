@@ -116,6 +116,9 @@ class FrameHolder(Protocol):
     @property
     def minimap_frame(self) -> object: ...
 
+    @property
+    def minimap_frame_ns(self) -> int | None: ...
+
 
 class MakeStop(Protocol):
     """How `run()` builds its stop control: `runtime.StopControl` matches; `log` is the session's error line."""

@@ -2,6 +2,7 @@
 when it is lost. Synthetic screens built from the real corner templates (assets/brds): a random dark background with the
 four templates pasted where a minimap's border corners would be. No camera, no window; the loop tests patch the grab."""
 
+import itertools
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -150,12 +151,12 @@ def test_tracker_says_lost_once_and_found_once():
     shared, said = new_shared(), []
     tracker = follow.LostTracker(shared, said.append)
     first = np.zeros((2, 2, 3), np.uint8)
-    tracker.publish(first)
+    tracker.publish(first, 1)
     for _ in range(50):  # fifty failed searches
         tracker.search_failed()
     assert said == [follow.LOST_LINE] and shared.minimap_lost and shared.minimap_frame is first
-    tracker.publish(np.ones((2, 2, 3), np.uint8))
-    tracker.publish(np.ones((2, 2, 3), np.uint8))
+    tracker.publish(np.ones((2, 2, 3), np.uint8), 2)
+    tracker.publish(np.ones((2, 2, 3), np.uint8), 2)
     assert said == [follow.LOST_LINE, follow.FOUND_AGAIN_LINE] and not shared.minimap_lost
     tracker.search_failed()
     assert said[-1] == follow.LOST_LINE and said.count(follow.LOST_LINE) == 2
@@ -167,7 +168,7 @@ def test_tracker_before_the_first_picture_leaves_the_flag_alone():
     for _ in range(5):
         tracker.search_failed()
     assert said == [follow.NOT_FOUND_LINE] and not shared.minimap_lost
-    tracker.publish(np.zeros((2, 2, 3), np.uint8))
+    tracker.publish(np.zeros((2, 2, 3), np.uint8), 3)
     assert said == [follow.NOT_FOUND_LINE, follow.FOUND_LINE]
 
 
@@ -184,7 +185,7 @@ def test_tracker_writes_the_frame_and_the_flag_under_the_lock():
 
     shared.minimap_frame_lock = Spy()
     tracker = follow.LostTracker(shared, lambda _line: None)
-    tracker.publish(np.zeros((2, 2, 3), np.uint8))
+    tracker.publish(np.zeros((2, 2, 3), np.uint8), 3)
     tracker.search_failed()
     assert seen == ["in", "out", "in", "out"]
 
@@ -223,8 +224,10 @@ def run_loop(monkeypatch, capsys):
 
     def run(screen, shared):
         sleeps = []
+        stamps = itertools.count(1)
         monkeypatch.setattr(vision_mod.bettercam, "create", lambda **_kw: object())
-        monkeypatch.setattr(vision_mod.vision, "cameraGrab", screen.grab)
+        monkeypatch.setattr(vision_mod.vision, "cameraGrab", screen.grab)  # the whole-screen search
+        monkeypatch.setattr(vision_mod, "_grab_stamped", lambda camera, region: (screen.grab(camera, region), next(stamps)))
         monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
         with pytest.raises(Stop):
             vision_mod.capture_and_process_minimap(shared)
