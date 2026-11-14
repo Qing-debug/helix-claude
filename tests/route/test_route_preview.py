@@ -198,7 +198,9 @@ CASES = [
     ])),
     # T25 and T26: P5's GAP branch. T25 from the launch x: the sideways teleport onto (50, 52), then the 16 px walk (the cost
     # is the approach 0.72 + the GAP edge 1.27 + the walk 1.28); T26 from 2 px short of it, where the teleport would stop at the
-    # end (B starts 21 px away), so the I2 guard walks to the launch first (cost 0.55 + 1.27 + 1.28)
+    # end (B starts 21 px away), so the I2 guard walks to the launch first (cost 0.55 + 1.27 + 1.28). A2 (WALKFIX172-D1 = B,
+    # launch 34): the costs stay; T25's first hop is walk R 240 to (34, 50), then TP_R landing (53, 52) and walk R 1040; T26's
+    # first hop is walk R 400 to (34, 50), then the same two; no row then reaches line 311 (the guard never fires on M)
     ("T25", GAP_MAP, (31, 50), 3, (3.27, [
         (TP_R, 2, (50, 52)),
         (walk(R, 1280), 3, (66, 52)),
