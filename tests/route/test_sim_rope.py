@@ -381,7 +381,9 @@ SMOKE = (351, 18, 0, 54, 256.6304)       # moves, no-ops, drops, teleports down,
 #                                       # is walked to, not teleported past)
 PRE_C10_SMOKE = (335, 22, 0, 42, 252.4155)   # the same run with no rope file beside the map: the walker has no zones; was
 #                                       # (366, 25, 0, 44, 237.9668) before QB266
-REAL = (339, 22, 0, 46, 250.6769)        # the same on the real ground; (358, 22, 0, 46, 235.2635) before QB266, (352, 22, 0, 42,
+REAL = (348, 17, 0, 46, 256.9908)        # the same on the real ground; (339, 22, 0, 46, 250.6769) before walk-fluid Task 5 (the
+#                                       # preset's teleport extra went 1.0 -> 0.0, checked: the same run with the extra at 1.0
+#                                       # still gives those), (358, 22, 0, 46, 235.2635) before QB266, (352, 22, 0, 42,
 #                                       # 237.7692) before C10 option B moved it
 
 

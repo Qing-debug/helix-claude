@@ -104,9 +104,12 @@ _CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}
 # The `--real-ground` preset (off-graph fix plan, Task 3, OFFP141): Fossil Foundry 2 as the live runs showed it.
 REAL_GROUND_TERRAIN = _REPO / "tests" / "fixtures" / "ff2_real_ground.json"
 # The dot's centre is 6 px above the ground and the map's nodes sit 3 px above it (Hong's QB213), so the dot reads 3 px
-# above the node line. Live sideways teleports went a median of 20 px (`ff2_live_reads.json`), 1 px beyond the
-# character's reach: `test_preset_teleport_matches_the_recordings` pins the 1.0 against the recordings.
-REAL_GROUND_SIM = SimParams(dot_above_foot_px=3, side_teleport_extra_px=1.0)
+# above the node line. Live sideways teleports went exactly the character's reach, so no extra: the recorded frames show
+# 64 flat sideways jumps, median 19.0 (workspace `notes/q-20261113-153031-26c9-qa-answer.md`, Q1). The median of
+# `ff2_live_reads.json` is higher only because those are the walker's planned-to-planned reads, which the picture delay
+# inflates. `test_preset_teleport_matches_the_recordings` pins the 0.0. (No bare reach number here:
+# `test_run_module_writes_no_teleport_reach_and_no_map_position`.)
+REAL_GROUND_SIM = SimParams(dot_above_foot_px=3, side_teleport_extra_px=0.0)
 # Mob knockback and rope grabs are on: a teleport down over a rope's column grabs it 1 time in 5 (the marks of the map's
 # rope file, H88; the walker gets off it, H93). The other noise stays at its defaults.
 REAL_GROUND_NOISE = NoiseConfig(knockback_p=0.02, rope_grab_p=0.2)
