@@ -468,3 +468,24 @@ def test_loop_pause_is_the_setting(run_loop, monkeypatch):
     assert vision_mod.THREAD_SLEEP_DURATION_S == 0.0
     assert len(publishes) > 30
     assert sleeps == [0.0] * len(publishes)
+
+
+def test_grab_stamped_retries_without_sleeping(monkeypatch):
+    """WALKFIX Task 9 (T89R-m1): `run_loop` replaces `_grab_stamped`, so `test_loop_pause_is_the_setting` cannot see a
+    `time.sleep` inside it. This runs the real one over a `frame_wait` that returns no picture once: it asks again at once,
+    with no sleep. (A wait made some other way than `time.sleep` is not seen; the measured arms of the key-timing check
+    are the real check of the timing.)"""
+    vision_mod = pytest.importorskip("src.vision.vision")
+    answers = iter([None, ("picture", 123)])
+    asked = []
+    sleeps = []
+
+    def grab_new_frame_stamped(camera, region):
+        asked.append((camera, region))
+        return next(answers)
+
+    monkeypatch.setattr(vision_mod.frame_wait, "grab_new_frame_stamped", grab_new_frame_stamped)
+    monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
+    assert vision_mod._grab_stamped("camera", "region") == ("picture", 123)
+    assert asked == [("camera", "region")] * 2
+    assert sleeps == []
