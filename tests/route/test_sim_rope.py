@@ -567,7 +567,8 @@ def test_a_run_that_reaches_a_placed_rope_read_recovers_through_the_rope_rule():
     rope rule (a `planned` event with `toward` None at a placed row), then the leg reaches. Since QB266 (walk-fluid Task 1)
     the four rope-rule moves are a blink down at the foot of rope 46, two blinks down at the foot of rope 107 and the jump
     off right that ends that order; before it there was one blink up from (106, 47). The seed is pinned like the other sim
-    figures; it is not a property of the noise."""
+    figures; it is not a property of the noise. It no longer holds a rope-rule move at a grab read near the rope's top (seeds
+    0-41 have none after QB266): that recovery is scripted in `test_sim_rope_top_grab.py` (walk-fluid Task 4)."""
     rec = Rec()
     noise = NoiseConfig(rope_grab_p=1.0, rope_grab_depth_px=(1, 2))
     result = run_sim(CSV, DEFAULT_TERRAIN, 6, 4, noise=noise, observer=rec)
