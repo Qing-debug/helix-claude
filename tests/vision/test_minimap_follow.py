@@ -241,12 +241,19 @@ class FakeScreen:
 def run_loop(monkeypatch, capsys):
     vision_mod = pytest.importorskip("src.vision.vision")  # needs Windows and bettercam
 
-    def run(screen, shared):
+    def run(screen, shared, seconds_per_grab=0.0):
         sleeps = []
         stamps = itertools.count(1)
+        clock = {"now": 0.0}  # the fake monotonic clock behind the 22 s re-find (WALKFIX Task 8): each grab moves it on
+
+        def ticking_grab(camera, region=None):
+            clock["now"] += seconds_per_grab
+            return screen.grab(camera, region)
+
         monkeypatch.setattr(vision_mod.bettercam, "create", lambda **_kw: object())
-        monkeypatch.setattr(vision_mod.vision, "cameraGrab", screen.grab)  # the whole-screen search
-        monkeypatch.setattr(vision_mod, "_grab_stamped", lambda camera, region: (screen.grab(camera, region), next(stamps)))
+        monkeypatch.setattr(vision_mod.vision, "cameraGrab", ticking_grab)  # the whole-screen search
+        monkeypatch.setattr(vision_mod, "_grab_stamped", lambda camera, region: (ticking_grab(camera, region), next(stamps)))
+        monkeypatch.setattr(vision_mod, "_monotonic", lambda: clock["now"], raising=False)
         monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
         with pytest.raises(Stop):
             vision_mod.capture_and_process_minimap(shared)
@@ -390,3 +397,25 @@ def test_loop_keeps_the_black_frame_early_exit(run_loop):
     sleeps, _ = run_loop(screen, shared)
     assert shared.minimap_frame is None
     assert vision_mod.MINIMAP_DETECTION_RETRY_DELAY_S in sleeps
+
+
+def test_minimap_is_re_found_after_22_seconds(run_loop):
+    """WALKFIX Task 8 (QB283 2c): the minimap is searched for again about every 22 s, not every 1000 pictures. The clock
+    moves 1 s per grab: the search at the start is grab 1, the loop publishes 22 pictures (grabs 2 to 23), and grab 24
+    is the whole-screen search again."""
+    a, _ = build_screen()
+    shared = new_shared()
+    watch = Watch(shared)
+    screen = FakeScreen(a, watch, max_grabs=24)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert screen.whole_screen_grabs == [1, 24]
+    assert len(watch.distinct_frames()) == 22
+
+
+def test_fast_pictures_do_not_re_find_early(run_loop):
+    """WALKFIX Task 8: the clock is frozen, so 2000 pictures (more than the old count of 1000) publish with one search."""
+    a, _ = build_screen()
+    shared = new_shared()
+    screen = FakeScreen(a, max_grabs=2001)
+    run_loop(screen, shared, seconds_per_grab=0.0)
+    assert screen.whole_screen_grabs == [1]

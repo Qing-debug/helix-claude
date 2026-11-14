@@ -8,7 +8,8 @@ import src.vision.frame_wait as frame_wait
 import time
 from collections import namedtuple
 # Constants
-MINIMAP_POSITION_RECALC_INTERVAL = 1000
+MINIMAP_POSITION_RECALC_S = 22.0  # the minimap is searched for again after this many seconds (WALKFIX Task 8, QB283 2c)
+_monotonic = time.monotonic  # the clock of that re-find; a seam, so the tests fake it and not the global time.monotonic
 THREAD_SLEEP_DURATION_S = 0.02
 FOREGROUND_CHECK_SLEEP_S = 5
 MINIMAP_DETECTION_RETRY_DELAY_S = 1
@@ -76,9 +77,9 @@ def capture_and_process_minimap(sharedInfo):
         top_left, bottom_right = minimap_border_locations["left_top"], minimap_border_locations["right_bot"]
         lock = follow.make_lock(minimap_gray, matched_template_loc_and_conf_score, minimap_border_templates,
                                 minimap_border_masks, corners, (*top_left, *bottom_right))
-        minimap_valid, minimap_frame_counter = True, 0
+        minimap_valid, locked_at = True, _monotonic()
 
-        while minimap_valid and minimap_frame_counter < MINIMAP_POSITION_RECALC_INTERVAL:
+        while minimap_valid and _monotonic() - locked_at < MINIMAP_POSITION_RECALC_S:
             if not vision.isProposedMinimapRegionValid(lock.box, screen_width, screen_height):
                 break
             box_frame, frame_ns = _grab_stamped(camera, lock.box)  # the minimap and its four corner templates (VIS162-FIX), with the time Windows handed it over
@@ -94,5 +95,4 @@ def capture_and_process_minimap(sharedInfo):
                 break
 
             tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB), frame_ns)  # the one writer of minimap_frame and minimap_lost, under the lock
-            minimap_frame_counter += 1
             time.sleep(THREAD_SLEEP_DURATION_S)  # floor between frames: time for other threads; cameraGrab itself waits in Windows for a new image (H77)
