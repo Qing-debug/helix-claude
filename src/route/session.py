@@ -281,13 +281,15 @@ def _record_guarded(shared: FrameHolder, out_dir: Path, stop: threading.Event,
     """The recorder thread's target (spec 5.6, H62): `record` the shared frames into `out_dir` until `stop` is set.
     An exception or a `Failure` from `record` ends the recording with one `warning` event, and so does free space
     below `RECORD_FLOOR_BYTES` on the run folder's drive, checked every `DISK_CHECK_FRAMES` polls: that check sets
-    `stop`, so `record` saves that poll's frame and returns. The walk goes on. `record` is not edited; the constants
-    and `free_bytes` are read from this module when called (the tests patch them). Its one line goes to `log`."""
+    `stop`, so `record` saves that poll's frame and returns. The walk goes on. `frames()` passes the `(frame, stamp)`
+    pair of `shared_frames` through to `record`, which writes the stamp as `frame_ns` in each index line (QB283 2d); the
+    constants and `free_bytes` are read from this module when called (the tests patch them). Its one line goes to
+    `log`."""
     read = shared_frames(shared)
     polls = 0
     low_on: str | None = None  # the drive, once its free space fell below the floor
 
-    def frames() -> np.ndarray | None:
+    def frames() -> tuple[np.ndarray, int | None] | None:
         nonlocal polls, low_on
         polls += 1
         if polls % DISK_CHECK_FRAMES == 0 and free_bytes(out_dir) < RECORD_FLOOR_BYTES:
@@ -465,7 +467,8 @@ class RunSession:
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
                 return 0
-            first_frame = shared_frames(shared)()  # the frame just waited for, held for minimap.png (spec 5.2)
+            got_frame = shared_frames(shared)()  # (frame, stamp) or None
+            first_frame = None if got_frame is None else got_frame[0]  # the frame just waited for, held for minimap.png (spec 5.2)
             found = positions.read()
             if not is_successful(found):
                 self._log(f"error: character not found on the minimap: {found.failure()}", True)

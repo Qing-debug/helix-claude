@@ -28,7 +28,7 @@ class _Locator:
 
 
 def _shared(frame=None):
-    return SimpleNamespace(minimap_frame_lock=threading.Lock(), minimap_frame=frame)
+    return SimpleNamespace(minimap_frame_lock=threading.Lock(), minimap_frame=frame, minimap_frame_ns=None)
 
 
 def _frame():

@@ -66,11 +66,11 @@ def _write_recording(folder: Path, frames: list[np.ndarray]) -> Path:
     stop = threading.Event()
     calls = []
 
-    def feed() -> np.ndarray:
+    def feed() -> tuple[np.ndarray, int | None]:
         calls.append(1)
         if len(calls) == len(frames):
             stop.set()
-        return frames[len(calls) - 1]
+        return frames[len(calls) - 1], None  # (frame, stamp): `record` takes the pair (QB283 2d)
 
     result = record(feed, folder, seconds=None, fps=10, clock=lambda: 0, sleep=lambda seconds: None, stop=stop)
     assert result == Success(len(frames))

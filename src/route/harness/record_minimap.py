@@ -7,15 +7,20 @@ frame that thread shares and saves each new one. It sends no keys.
 
 `record` polls `frames()` every 1/fps s and saves each new frame object (not `is` the last one saved) as
 `frame_%06d.png` in `out_dir`, converted RGB to BGR for `cv2.imwrite`, plus one line in `index.jsonl`, flushed per line:
-`{"i", "t_ns", "file", "w", "h"}`. It stops when `seconds` have passed or `stop` is set, whichever comes first; the end
+`{"i", "t_ns", "frame_ns", "file", "w", "h"}`. `frames()` returns the pair `(frame, frame_ns)`, or None for no frame yet
+(QB283 2d). It stops when `seconds` have passed or `stop` is set, whichever comes first; the end
 test runs after each poll, so a `stop` that is already set still saves the first frame. `shared_frames` is this tool's
-reader of the shared frame under its lock, for `main` and for B19 (the GUI, the map editor, the controller and
-`src/route/position.py` read it under the same lock).
+reader of the shared frame and its stamp under their lock, for `main` and for B19 (the GUI, the map editor, the
+controller and `src/route/position.py` read it under the same lock).
 
 Where the plan is silent:
 - `i` counts saved frames from 0 and is the number in the file name. `t_ns` is `clock()` read just after `frames()`
-  returned, so with the default clock it is `time.perf_counter_ns`, the stimulus clock of Feature A (`input_layer.py`).
-  `file` is a name relative to `out_dir`, so a recording folder can be moved.
+  returned, so with the default clock it is `time.perf_counter_ns`, the stimulus clock of Feature A (`input_layer.py`):
+  it is when this poll saw the frame, not when the picture was made. `frame_ns` is the picture's own stamp, the
+  `time.perf_counter_ns()` the capture thread read when Windows handed it over (`shared.minimap_frame_ns`), so it is on
+  the same clock as `t_ns` and as every key time in `steps.jsonl`; it is null when the holder had no stamp. A poll that
+  sees a new frame late has `t_ns` after `frame_ns`. `file` is a name relative to `out_dir`, so a recording folder can
+  be moved.
 - Polls are scheduled from the start (poll k is due at start + k/fps), so the time a poll takes is not added to the
   interval. A poll that runs late is not caught up: the next one is due one interval after it, not several at once.
 - `None` from `frames()` (no frame yet) is not a frame and is not counted.
@@ -60,12 +65,14 @@ def _check_arguments(seconds: float | None, fps: float, stop: threading.Event | 
     return Success(None)
 
 
-def record(frames: Callable[[], np.ndarray | None], out_dir: Path, seconds: float | None, fps: float,
-           clock: Callable[[], int] = time.perf_counter_ns, sleep: Callable[[float], None] = time.sleep,
+def record(frames: Callable[[], tuple[np.ndarray, int | None] | None], out_dir: Path, seconds: float | None,
+           fps: float, clock: Callable[[], int] = time.perf_counter_ns, sleep: Callable[[float], None] = time.sleep,
            stop: threading.Event | None = None) -> Result[int, str]:
     """Save the new frames `frames()` returns, `fps` polls a second, until `seconds` pass or `stop` is set.
 
-    `frames` returns an RGB uint8 H x W x 3 array or None. Returns `Success(number of frames saved)`.
+    `frames` returns a pair `(frame, frame_ns)` or None (no frame yet): `frame` is an RGB uint8 H x W x 3 array and
+    `frame_ns` the stamp it was published with (an int, or None when the holder had none). Returns
+    `Success(number of frames saved)`.
     """
     checked = _check_arguments(seconds, fps, stop)
     if not is_successful(checked):
@@ -89,14 +96,16 @@ def record(frames: Callable[[], np.ndarray | None], out_dir: Path, seconds: floa
         start = clock()
         due = start
         while True:
-            frame = frames()
+            got = frames()
             t_ns = clock()
+            frame, frame_ns = (None, None) if got is None else got
             if frame is not None and frame is not last:
                 name = f"frame_{saved:06d}.png"
                 if not cv2.imwrite(str(out_dir / name), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)):
                     return Failure(f"cannot write {out_dir / name} ({saved} frames saved before it)")
                 height, width = frame.shape[:2]
-                index.write(json.dumps({"i": saved, "t_ns": t_ns, "file": name, "w": width, "h": height}) + "\n")
+                index.write(json.dumps({"i": saved, "t_ns": t_ns, "frame_ns": frame_ns, "file": name, "w": width,
+                                        "h": height}) + "\n")
                 index.flush()
                 last = frame
                 saved += 1
@@ -113,15 +122,20 @@ def record(frames: Callable[[], np.ndarray | None], out_dir: Path, seconds: floa
     return Success(saved)
 
 
-def shared_frames(shared) -> Callable[[], np.ndarray | None]:
-    """A `frames` callable over `shared.minimap_frame`, read under `shared.minimap_frame_lock`.
+def shared_frames(shared) -> Callable[[], tuple[np.ndarray, int | None] | None]:
+    """A `frames` callable over `shared.minimap_frame` and its stamp `shared.minimap_frame_ns`, read together under
+    `shared.minimap_frame_lock`: the pair `(frame, frame_ns)`, or None when the frame is None.
 
-    It returns the shared reference itself, never a copy. The capture thread (src/vision/vision.py) assigns a new array
-    to `minimap_frame` for every frame, so `record`'s `is` test sees a frame once; a copy would make every poll new.
+    The frame is the shared reference itself, never a copy. The capture thread (src/vision/vision.py) assigns a new array
+    to `minimap_frame` for every frame, so `record`'s `is` test sees a frame once; a copy would make every poll new. The
+    pair is built fresh on every call, so only the array's identity matters to that test.
     """
-    def read() -> np.ndarray | None:
+    def read() -> tuple[np.ndarray, int | None] | None:
         with shared.minimap_frame_lock:
-            return shared.minimap_frame
+            frame = shared.minimap_frame
+            if frame is None:
+                return None
+            return frame, shared.minimap_frame_ns
     return read
 
 
