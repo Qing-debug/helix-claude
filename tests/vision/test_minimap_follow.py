@@ -253,7 +253,7 @@ def run_loop(monkeypatch, capsys):
         monkeypatch.setattr(vision_mod.bettercam, "create", lambda **_kw: object())
         monkeypatch.setattr(vision_mod.vision, "cameraGrab", ticking_grab)  # the whole-screen search
         monkeypatch.setattr(vision_mod, "_grab_stamped", lambda camera, region: (ticking_grab(camera, region), next(stamps)))
-        monkeypatch.setattr(vision_mod, "_monotonic", lambda: clock["now"], raising=False)
+        monkeypatch.setattr(vision_mod, "_monotonic", lambda: clock["now"])
         monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
         with pytest.raises(Stop):
             vision_mod.capture_and_process_minimap(shared)
@@ -410,6 +410,35 @@ def test_minimap_is_re_found_after_22_seconds(run_loop):
     run_loop(screen, shared, seconds_per_grab=1.0)
     assert screen.whole_screen_grabs == [1, 24]
     assert len(watch.distinct_frames()) == 22
+
+
+def test_the_period_restarts_after_every_re_find(run_loop):
+    """WALKFIX Task 8 review (I1): three periods. Grab 47 is the third search, 22 pictures after the second (grab 24).
+    A timer that is set once and never reset searches again at grab 25 instead."""
+    a, _ = build_screen()
+    shared = new_shared()
+    screen = FakeScreen(a, Watch(shared), max_grabs=48)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert screen.whole_screen_grabs == [1, 24, 47]
+
+
+def test_the_period_restarts_when_the_minimap_comes_back_after_a_loss(run_loop):
+    """WALKFIX Task 8 review (I1): the minimap is lost at grab 10 and found again at grab 30; the next search is 22 s
+    after the find, at grab 53. A timer that counts from the first lock, or that keeps the loss's time, searches early."""
+    a, _ = build_screen()
+    shared = new_shared()
+    watch = Watch(shared)
+
+    def script(screen):
+        if screen.n == 10:
+            screen.gray = build_screen(minimap=False)[0]
+        if screen.n == 30:
+            screen.gray = a
+        watch(screen)
+
+    screen = FakeScreen(a, script, max_grabs=56)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert [n for n in screen.whole_screen_grabs if n >= 30] == [30, 53]  # found at 30, 22 pictures, timed search at 53
 
 
 def test_fast_pictures_do_not_re_find_early(run_loop):
