@@ -395,7 +395,7 @@ _BRANCH_LINES = {
 }
 
 
-def test_s3_the_table_takes_the_six_planner_branches(built):
+def test_s3_the_table_takes_the_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
