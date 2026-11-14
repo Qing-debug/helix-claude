@@ -15,7 +15,7 @@ import dataclasses
 
 import numpy as np
 import pytest
-from test_platform_ends import M, Built
+from test_platform_ends import Built, M_b_at
 
 from src.classes.classes import Kanna
 from src.controller.rope_file import ON_ROPE_DX, RopeMark
@@ -134,13 +134,30 @@ def test_off_platform_teleport_keeps_the_old_rule():
     x + reach, here C (y 70), where a character standing on A would be stopped at (40, 50)."""
     world = _world((A, C), (30, 50))
     world.pos = (30.0, 45.0)
-    assert _lands(world) == (49.0, 70.0)
+    effect = world.teleport(Key.RIGHT, T_NS)
+    assert effect.end == (49.0, 70.0)
+    assert effect.settle_s == pytest.approx(0.35 + 25 / 60)   # the 25 px fall from y 45 to 70 (Task 4 review m3)
 
     rope = RopeMark(30 - ON_ROPE_DX, 50, 70)
     roped = _world((A, C), (30, 50), ropes=(rope,), noise=dataclasses.replace(NoiseConfig.off(), rope_grab_depth_px=(3, 3)))
     roped.drop(T_NS)
     assert roped.on_rope == 0 and roped.pos == (30.0, 53.0)
     assert _lands(roped) == (49.0, 70.0)
+    assert roped.on_rope is None
+
+
+def test_a_rope_keeps_the_old_rule_even_where_its_hang_point_is_on_a_platform_surface():
+    """Task 4 review m2: the rope's top is 1 px above A's surface and the character grabs it 1 px below the top, so it
+    hangs at (30, 50), on A's line. It is on the rope, not on A: no end of A stops the teleport, it lands on C (y 70) as
+    before. Judged by the position alone it would be stopped at (40, 50)."""
+    rope = RopeMark(30 - ON_ROPE_DX, 49, 70)
+    roped = _world((A, C), (30, 50), ropes=(rope,), noise=dataclasses.replace(NoiseConfig.off(), rope_grab_depth_px=(1, 1)))
+    roped.drop(T_NS)
+    assert roped.on_rope == 0 and roped.pos == (30.0, 50.0)
+    assert roped._platform_at(roped.pos) == 0     # the position alone says "on A"
+    effect = roped.teleport(Key.RIGHT, T_NS)
+    assert effect.end == (49.0, 70.0)
+    assert effect.settle_s == pytest.approx(0.35 + 20 / 60)
     assert roped.on_rope is None
 
 
@@ -170,22 +187,29 @@ def test_a_platform_behind_the_character_is_not_a_target():
 # --- the planner's rule, on the same cases ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name, px, sign", [
-    ("A", 33, +1),   # B starts 17 px away, 2 px lower: carries onto B (52)
-    ("A", 30, +1),   # B starts 20 px away: stops at A's end (40)
-    ("A", 28, +1),   # 22 px away: stops at A's end
-    ("B", 55, -1),   # A's end 15 px away, 2 px higher: carries onto A (36)
-    ("B", 60, -1),   # A's end 20 px away: stops at B's left end (50)
-    ("B", 66, -1),   # 26 px away: stops at B's left end
+@pytest.mark.parametrize("name, px, sign, b_y", [
+    ("A", 33, +1, 52),   # B starts 17 px away, 2 px lower: carries onto B (52)
+    ("A", 31, +1, 52),   # B starts exactly the reach (19 px) away: carries onto B, at x 50 (T4R m1: the exact-A launch)
+    ("A", 30, +1, 52),   # B starts 20 px away: stops at A's end (40)
+    ("A", 29, +1, 52),   # B 21 px away: stops at A's end
+    ("A", 28, +1, 52),   # 22 px away: stops at A's end
+    ("A", 33, +1, 54),   # B 4 px lower, the setting's edge: carries onto B (54)
+    ("A", 33, +1, 56),   # B 6 px lower, out of range: stops at A's end, never falls to it (T4R m1)
+    ("B", 55, -1, 52),   # A's end 15 px away, 2 px higher: carries onto A (36)
+    ("B", 60, -1, 52),   # A's end 20 px away: stops at B's left end (50)
+    ("B", 66, -1, 52),   # 26 px away: stops at B's left end
 ])
-def test_the_sim_and_the_planner_land_the_same_cases(name, px, sign):
-    """Map M of `test_platform_ends` (A (24, 50)-(40, 50) marked at its right end, B (50, 52)-(66, 52) marked at its left
-    end) and the same two platforms as a sim terrain: `RouteGraph.side_landing` and `SimWorld._side_target` give the same
-    x and the same platform, on the marked ends (the sim stops at an unmarked end too, the planner does not)."""
-    built = Built(M)
+def test_the_sim_and_the_planner_land_the_same_cases(name, px, sign, b_y):
+    """Map M of `test_platform_ends` (A (24, 50)-(40, 50) marked at its right end, B (50, `b_y`)-(66, `b_y`) marked at its
+    left end, `b_y` 52 in M) and the same two platforms as a sim terrain: `RouteGraph.side_landing` and
+    `SimWorld._side_target` give the same x and the same platform, on the marked ends (the sim stops at an unmarked end too,
+    the planner does not). Distance equal to the reach and a height difference at and past the setting are cases here, so
+    a `<` for `<=` or a missing height test in either rule fails this test (Task 4 review m1)."""
+    built = Built(M_b_at(b_y))
     planner_index = {"A": built.p(24), "B": built.p(50)}
-    sim_platforms = (SimPlatform("A", True, ((24.0, 50.0), (40.0, 50.0))), SimPlatform("B", True, ((50.0, 52.0), (66.0, 52.0))))
-    y = 50.0 if name == "A" else 52.0
+    sim_platforms = (SimPlatform("A", True, ((24.0, 50.0), (40.0, 50.0))),
+                     SimPlatform("B", True, ((50.0, float(b_y)), (66.0, float(b_y)))))
+    y = 50.0 if name == "A" else float(b_y)
     world = _world(sim_platforms, (px, y))
     target = world._side_target(float(px), y, sign, REACH_H)
     assert target is not None

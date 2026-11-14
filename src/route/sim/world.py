@@ -326,7 +326,7 @@ class SimWorld:
         platform (clamped into its span); with several the nearest wins, a tie goes to the first. The world has no marks, so
         every platform end stops it. Off every platform (in the air, on a rope) it is today's landing: the first surface
         at or below y minus the side teleport's rise at x + length, None with no surface."""
-        current = self._platform_at((x, y))
+        current = None if self.on_rope is not None else self._platform_at((x, y))   # a rope is not a platform
         x_new = x + sign * length
         if current is None:
             landing = self.terrain.surface_below(x_new, y - _SIDE_TELEPORT_RISE_PX)
@@ -380,7 +380,7 @@ class SimWorld:
         if sideways:
             sign = 1 if direction == Key.RIGHT else -1
             length = self.reach_h + self.params.side_teleport_extra_px + draw.overshoot_px
-            if self._platform_at(self.pos) is None:
+            if self.on_rope is not None or self._platform_at(self.pos) is None:
                 # In the air or on a rope: no platform end stops it. Today's landing, the offset moves it first.
                 end = self._side_target(x, y, sign, length + sign * draw.landing_px)
             else:
