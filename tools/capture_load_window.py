@@ -160,8 +160,10 @@ def run_window(at: tuple[int, int] | None) -> None:
 
     def tick() -> None:
         redraw["t"] += 1
-        photo.paste(Image.fromarray(load_picture(redraw["t"])))
-        root.after(REDRAW_MS, tick)
+        try:
+            photo.paste(Image.fromarray(load_picture(redraw["t"])))
+        finally:  # a failed picture is still reported by Tk, but it does not end the redraws
+            root.after(REDRAW_MS, tick)
 
     root.deiconify()
     root.after(REDRAW_MS, tick)
