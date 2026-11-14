@@ -4,11 +4,14 @@ fakes, `soak._read_answer` is patched (and counted), and no board, link, listene
 
 Windows only, as the soak tests: `soak` imports winrt at module level.
 """
+import ast
 import importlib
+import inspect
 import itertools
 import json
 import subprocess
 import sys
+import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +55,7 @@ class Entry:
     alive: bool = True
     window_dies: bool = False  # the test window's process ends during the arm
     lost: bool = False         # the capture loses the minimap during the arm, and finds it again before the end
+    interrupt: bool = False    # Ctrl+C lands in the arm's analysis, after its soak ended
 
 
 LATE = dict(p50=40.0, p99=75.0, rate=120.0)  # p50 more than 2 ms above the baselines' 30; fast enough to be N
@@ -111,6 +115,7 @@ class Rig:
         self.windows_started = []
         self.pauses, self.calls, self.figures = [], [], {}
         self.printed = ""
+        self.at_question = None  # what was printed when the answer was read
         self.clock = 1000.0
         self.holder = None
         self.frame = np.zeros((4, 4, 3), np.uint8)
@@ -119,7 +124,7 @@ class Rig:
         monkeypatch.setattr(ktc, "_start_window", self._start_window)
         monkeypatch.setattr(ktc, "_set_capture_pause", self._set_pause)
         monkeypatch.setattr(ktc, "_clock", lambda: self.clock)
-        monkeypatch.setattr(ktc, "measure_arm", lambda run_dir: self.figures[Path(run_dir)])
+        monkeypatch.setattr(ktc, "measure_arm", self._measure)
         monkeypatch.setattr(runtime, "start_capture", self._start_capture)
         monkeypatch.setattr(runtime, "make_positions", lambda holder: FakePositions())  # as the real one: a bare source
         if not first_picture:
@@ -147,7 +152,17 @@ class Rig:
 
     def _read_answer(self):
         self.answers += 1
+        self.printed += self.capsys.readouterr().out
+        self.at_question = self.printed
+        if self.answer is KeyboardInterrupt:
+            raise KeyboardInterrupt
         return Success(self.answer)
+
+    def _measure(self, run_dir):
+        figures = self.figures[Path(run_dir)]
+        if figures is None:
+            raise KeyboardInterrupt
+        return figures
 
     def _run_soak(self, cfg, link, start_sink, *, answered=None):
         pause = self.pauses[-1]
@@ -164,7 +179,8 @@ class Rig:
             self.holder.minimap_lost = False  # found again (publish), so only "at any point during the arm" sees it
         if entry.window_dies:
             self.window.dead = True
-        self.figures[cfg.out] = self.ktc.ArmFigures(entry.delivery, entry.alive, entry.p50, entry.p99, 100)
+        self.figures[cfg.out] = (None if entry.interrupt
+                                 else self.ktc.ArmFigures(entry.delivery, entry.alive, entry.p50, entry.p99, 100))
         return entry.exit_code
 
     def result(self):
@@ -385,6 +401,34 @@ def test_a_missed_click_stops_with_the_arms_so_far_kept(make_rig, capsys):
     assert "arm 2" in last and "kept" in last
 
 
+def test_ctrl_c_outside_a_soak_stops_with_the_arms_so_far_kept(make_rig, capsys):
+    """m5: a Ctrl+C in arm 2's analysis (after its soak ended) stops the check as a soak's own Ctrl+C would."""
+    rig = make_rig(scripted(n=Entry(interrupt=True)))
+    assert rig.run() == soak.EXIT_ABORT
+    assert rig.pauses_run() == [20, 0]
+    result = rig.result()
+    assert result["stopped"] == f"arm 2: {soak.EXIT_INTERRUPTED}"
+    assert "result" not in result and len(result["arms"]) == 1
+    assert rig.pauses[-1] == 0.0 and rig.window.terminated  # the pause put back, the window closed
+    last = [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    assert last.startswith("arm 2 stopped: Ctrl+C;") and "kept" in last
+
+
+def test_ctrl_c_at_the_question_writes_nothing(make_rig):
+    """The question is before any arm: nothing is written, so the same --out can be used again (review adjudication C)."""
+    rig = make_rig(answer=KeyboardInterrupt)
+    with pytest.raises(KeyboardInterrupt):
+        rig.run()
+    assert not rig.out.exists() and rig.calls == [] and rig.window.terminated
+
+
+def test_the_console_click_line_comes_before_the_question(make_rig, ktc):
+    """m1: Tk can give the hidden test window the keyboard as it starts, so the console asks for a click first."""
+    rig = make_rig()
+    assert rig.run() == 0
+    assert rig.answers == 1 and ktc.CLICK_CONSOLE_TEXT + "\n" in rig.at_question
+
+
 def test_each_arm_announces_itself(make_rig):
     rig = make_rig(scripted(n=Entry(**LATE), five=Entry(**LATE), ten=Entry()))
     assert rig.run() == 0
@@ -481,6 +525,39 @@ def test_the_picture_counter_counts_pictures_and_resets(ktc):
     assert holder.pictures == 2 and holder.minimap_frame is not None
     holder.reset()
     assert holder.pictures == 0 and holder.minimap_frame is not None  # the last picture stays, only the count restarts
+
+
+# ---- rule details the review's mutants found unpinned (m2) ----------------------------------------------------------
+
+@pytest.mark.parametrize("b1, b2", [(Entry(p50=32.0), Entry(p50=30.0)), (Entry(p50=30.0), Entry(p50=32.0))])
+def test_the_p50_bar_is_the_larger_baseline(make_rig, b1, b2):
+    """N at 33.5 is within 2 ms of the larger baseline (32) and more than 2 above the smaller (30)."""
+    rig = make_rig(scripted(b1=b1, b2=b2, n=Entry(p50=33.5, rate=120.0)))
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20] and rig.result()["result"] == 0
+
+
+@pytest.mark.parametrize("b1, b2", [(Entry(p99=85.0), Entry(p99=75.0)), (Entry(p99=75.0), Entry(p99=85.0))])
+def test_the_p99_bar_is_the_larger_baseline(make_rig, b1, b2):
+    """N at 94 is within 10 ms of the larger baseline (85) and more than 10 above the smaller (75)."""
+    rig = make_rig(scripted(b1=b1, b2=b2, n=Entry(p99=94.0, rate=120.0)))
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20] and rig.result()["result"] == 0
+
+
+@pytest.mark.parametrize("n", [Entry(**LATE, delivery="FAIL"), Entry(**LATE, alive=False)])
+def test_inconclusive_with_no_search_when_n_is_not_usable(make_rig, n):
+    rig = make_rig(scripted(n=n))  # late, so a check that skipped N would search
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20]
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 2" in result["reason"]
+
+
+def test_a_capture_exactly_twice_as_fast_is_fast_enough(make_rig):
+    rig = make_rig(scripted(n=Entry(rate=90.0)))  # B1 is 45 a second; twice that is the edge, inside
+    assert rig.run() == 0
+    assert rig.result()["result"] == 0
 
 
 # ---- the rule for "later" ------------------------------------------------------------------------------------------------
@@ -646,6 +723,48 @@ def test_no_activate_is_added_to_the_wrapper_window(clw):
     clw.apply_no_activate(User32(), 5)
     assert ("set", 77, -20, 0x88 | 0x08000000) in calls  # GWL_EXSTYLE of the parent, with WS_EX_NOACTIVATE added
     assert not [c for c in calls if c[0] == "set" and c[1] == 5]
+
+
+def test_nothing_rebuilds_the_wrapper_after_the_style_is_added(clw):
+    """m3: Tk keeps its own copy of the wrapper's ex-style; a wrapper rebuild (a later -toolwindow, -fullscreen or
+    overrideredirect change) drops WS_EX_NOACTIVATE silently (tkWinWm.c:3245). So no wm attribute, overrideredirect or
+    raw `wm` call comes after `apply_no_activate` in `run_window`."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(clw.run_window)))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    applied = [c.lineno for c in calls if isinstance(c.func, ast.Name) and c.func.id == "apply_no_activate"]
+    assert len(applied) == 1
+
+    def wrapper_call(c):
+        if isinstance(c.func, ast.Attribute) and c.func.attr in {"attributes", "wm_attributes", "overrideredirect",
+                                                                 "wm_overrideredirect"}:
+            return True
+        return bool(c.args) and isinstance(c.args[0], ast.Constant) and c.args[0].value == "wm"
+
+    before = [c.lineno for c in calls if wrapper_call(c) and c.lineno < applied[0]]
+    after = [c.lineno for c in calls if wrapper_call(c) and c.lineno > applied[0]]
+    assert before and after == []  # the scan sees the calls that set the window up, and none after the style
+
+
+def test_only_the_key_timing_check_hands_soak_an_answer():
+    """m4: `answered=` skips soak's question. Only `tools/key_timing_check.py` may pass it (the text `maple_check` gave
+    it in the same function, pinned by test_asks_once_for_all_arms), and only soak.py names the accepted text. Every .py
+    under src/ and tools/ is scanned for a call with an `answered` keyword, the name `ANSWERED_Y`, or that text."""
+    problems = []
+    for path in sorted([*(REPO / "src").rglob("*.py"), *(REPO / "tools").rglob("*.py")]):
+        rel = path.relative_to(REPO).as_posix()
+        if rel == "src/input/harness/soak.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Call) and any(kw.arg == "answered" for kw in node.keywords)
+                    and rel != "tools/key_timing_check.py"):
+                problems.append(f"{rel}:{node.lineno}: answered=")
+            if ((isinstance(node, ast.Name) and node.id == "ANSWERED_Y")
+                    or (isinstance(node, ast.Attribute) and node.attr == "ANSWERED_Y")
+                    or (isinstance(node, ast.alias) and node.name == "ANSWERED_Y")):
+                problems.append(f"{rel}: ANSWERED_Y")
+            if isinstance(node, ast.Constant) and node.value == soak.ANSWERED_Y:
+                problems.append(f"{rel}:{node.lineno}: the accepted text")
+    assert problems == []
 
 
 def test_the_window_file_and_the_check_name_no_banned_call():

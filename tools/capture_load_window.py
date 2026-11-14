@@ -12,10 +12,12 @@ around an inside of INSIDE_W x INSIDE_H px, which is a fixed textured background
 1 px per redraw. The border is the same on every redraw, so the capture's follow check (`src/vision/minimap_follow.py`)
 holds and every picture is published. `load_picture(t)` builds the picture for redraw number t.
 
-The window is borderless, always on top and never takes focus: no focus call, and the window style `WS_EX_NOACTIVATE`
-on Tk's wrapper window (`apply_no_activate`), which Windows documents as "does not become the foreground window when the
-user clicks it" and not activated through programmatic access. Not proved on a live screen (no window was opened when it
-was written). DPI-aware before Tk starts, so the corners are drawn 1:1 on screen. Redrawn with `after(1)`; Tk ticks that
+The window is borderless and always on top, and is not activated when it is shown or clicked: no focus call, and the
+window style `WS_EX_NOACTIVATE` on Tk's wrapper window (`apply_no_activate`), which Windows documents as "does not become
+the foreground window when the user clicks it". One path is left (review m1): Tk activates a process's first window when it
+makes that window's wrapper (Tk 8.6.15 win/tkWinWm.c:2317-2319), during `update_idletasks` in `run_window`, while the
+window is still hidden and before the style is added, so the console can lose the keyboard at start-up; the check asks for
+a click on the console before its question. Not proved on a live screen (no window was opened when it was written). DPI-aware before Tk starts, so the corners are drawn 1:1 on screen. Redrawn with `after(1)`; Tk ticks that
 at about 1 kHz on the dev PC (measured), above any display's frame rate.
 
 `--at X,Y` places the window's top-left corner on the virtual screen; the default is the right edge of the primary screen
@@ -149,7 +151,10 @@ def run_window(at: tuple[int, int] | None) -> None:
     label = tk.Label(root, image=photo, borderwidth=0, highlightthickness=0, padx=0, pady=0)
     label.pack()
     root.update_idletasks()
-    apply_no_activate(user32, root.winfo_id())  # before the window is shown, so showing it does not take focus
+    apply_no_activate(user32, root.winfo_id())  # before the window is shown, so showing or clicking it does not activate it
+    # No wm attribute or overrideredirect call after this line: Tk keeps its own copy of the wrapper's ex-style, and a
+    # wrapper rebuild (a later -toolwindow, -fullscreen or overrideredirect change) drops WS_EX_NOACTIVATE silently
+    # (tkWinWm.c:3245; review m3). test_nothing_rebuilds_the_wrapper_after_the_style_is_added pins it.
     label.bind("<Double-Button-1>", lambda _event: root.destroy())  # the way out by hand: a mouse click, no key
     redraw = {"t": 0}
 

@@ -11,7 +11,9 @@ for the walker reading every picture as the walker does, and compares that figur
 
 It needs the board, a real Bluetooth link and the "Helix input test sink" window, as the soak does, and MapleStory must
 be closed and stay closed until it ends (root CLAUDE.md, Safety rules). It asks "Is MapleStory closed? y/n" once, in
-`run_check`, before any listener, link or key, and no arm asks again: each soak gets the text of that one answer
+`run_check`, before any listener, link or key, and no arm asks again (just before it, it asks for one click on the console,
+since the test window can take the keyboard as it starts: Tk activates a process's first window when it makes its wrapper,
+review m1): each soak gets the text of that one answer
 (`soak.run_soak(answered=...)`). Each arm starts a new sink, which must be in front before the soak connects: the console
 beeps and prints `>>> Arm k of up to 6 ...`; click the sink if it is not in front by itself (mouse only, no keys).
 
@@ -35,7 +37,9 @@ still running at the arm's end and whether the minimap was lost during it, the D
 the residual's n, p50 and p99), and `result.json` (the rules, every finished arm with `later`
 (null for a baseline), and `result`: the pause in ms or "inconclusive", with `reason`). A soak that does not end normally
 (a missed click is `EXIT_ABORT`) stops the check cleanly: exit 1, the finished arms kept, and `result.json` has
-`"stopped": "arm <k>: <the soak's exit code>"` and no `result`. Exit 0 means a result was reached, "inconclusive"
+`"stopped": "arm <k>: <the soak's exit code>"` and no `result`; a Ctrl+C between arms or in an arm's analysis does the
+same, as `"arm <k>: 130"` (the soak's own Ctrl+C code). A Ctrl+C at the question writes nothing, so the same `--out` can
+be used again. Exit 0 means a result was reached, "inconclusive"
 included; 2 a refusal (usage, `--out`, the MapleStory answer); 3 the capture did not find the test window.
 
 `keys.jsonl` of each arm is a keylog and stays under `data/` (gitignored); this tool never opens it, the analysis code
@@ -87,6 +91,8 @@ RULES = {"BASELINE_PAUSE_MS": BASELINE_PAUSE_MS, "NO_PAUSE_MS": NO_PAUSE_MS, "SE
          "BASELINE_P99_TOLERANCE_MS": BASELINE_P99_TOLERANCE_MS, "LATER_P50_MS": LATER_P50_MS,
          "LATER_P99_MS": LATER_P99_MS}
 
+CLICK_CONSOLE_TEXT = ("Before you answer: click this console window once with the mouse (the test window may have taken "
+                      "the keyboard when it started), then type the answer here.")
 NO_PICTURE_TEXT = ("the capture did not find the test window's minimap: put the window on the second screen "
                    "(python tools/capture_load_window.py --at X,Y) and start again")
 
@@ -341,11 +347,12 @@ def judge(play) -> tuple[int | str, str]:
 # ---- the run -------------------------------------------------------------------------------------------------------
 
 class _Stopped(Exception):
-    """An arm's soak did not end normally; the check stops with the arms so far kept."""
+    """An arm's soak did not end normally, or Ctrl+C came outside a soak; the check stops with the arms so far kept."""
 
-    def __init__(self, k: int, code: int) -> None:
+    def __init__(self, k: int, code: int, what: str | None = None) -> None:
         super().__init__(f"arm {k}: {code}")
         self.k, self.code = k, code
+        self.what = what if what is not None else f"the soak ended with exit code {code}"
 
 
 def _arm_config(args: argparse.Namespace, k: int, pause_ms: int, out: Path) -> soak.SoakConfig:
@@ -377,6 +384,7 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
     """Steps 3 to 6: the one MapleStory question, then the arms and the decision, then `result.json` and the lines.
     The capture is running and has a picture; no listener, link or key has been touched yet. `window` is the test
     window's process, which this tool started: only its own state is read (`poll`), no other process is looked at."""
+    print(CLICK_CONSOLE_TEXT, flush=True)
     ok, text = soak.maple_check()  # through the module, so a patch of soak._read_answer reaches it; asked once, here
     if not ok:
         print(text, file=sys.stderr, flush=True)
@@ -414,6 +422,8 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
         result, reason = judge(play)
     except _Stopped as error:
         stopped = error
+    except KeyboardInterrupt:  # outside a soak, which catches its own: between arms or in an arm's analysis (review m5)
+        stopped = _Stopped(len(arms) + 1, soak.EXIT_INTERRUPTED, "Ctrl+C")
     finally:
         if pause_before:
             _set_capture_pause(pause_before[0])
@@ -427,8 +437,7 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
     for arm in arms:
         print(_arm_line(arm), flush=True)
     if stopped is not None:
-        print(f"arm {stopped.k} stopped: the soak ended with exit code {stopped.code}; the arms so far are kept in {out}",
-              flush=True)
+        print(f"arm {stopped.k} stopped: {stopped.what}; the arms so far are kept in {out}", flush=True)
         return soak.EXIT_ABORT
     if result == INCONCLUSIVE:
         print(f"result: {INCONCLUSIVE}: {reason}", flush=True)
