@@ -333,6 +333,9 @@ def judge(play) -> tuple[int | str, str]:
     def search_later(pause_ms: int) -> bool:
         arm = play(pause_ms)
         why = why_unusable(arm)
+        if why is None and arm.pictures_per_s < b1.pictures_per_s:  # every search pause is shorter than B1's: a live load is at least as fast
+            why = (f"lost its load: the capture made {arm.pictures_per_s:.1f} pictures a second, under the "
+                   f"{b1.pictures_per_s:.1f} of the first {BASELINE_PAUSE_MS} ms arm: the test window stopped redrawing")
         if why is not None:
             raise _Inconclusive(f"search arm {arm.k} (pause {pause_ms} ms) {why}")
         return is_later(arm)
@@ -356,12 +359,16 @@ def judge(play) -> tuple[int | str, str]:
 # ---- the run -------------------------------------------------------------------------------------------------------
 
 class _Stopped(Exception):
-    """An arm's soak did not end normally, or Ctrl+C came outside a soak; the check stops with the arms so far kept."""
+    """The check stops with the arms so far kept. `where` is "arm k" (its soak ended abnormally, or Ctrl+C came in its
+    analysis) or "between arms, after arm n" / "before arm 1" (Ctrl+C outside any soak)."""
 
-    def __init__(self, k: int, code: int, what: str | None = None) -> None:
-        super().__init__(f"arm {k}: {code}")
-        self.k, self.code = k, code
+    def __init__(self, where: str, code: int, what: str | None = None) -> None:
+        super().__init__(f"{where}: {code}")
+        self.where, self.code = where, code
         self.what = what if what is not None else f"the soak ended with exit code {code}"
+
+    def report(self) -> str:
+        return f"{self.where} stopped" if self.where.startswith("arm ") else f"stopped {self.where}"
 
 
 def _arm_config(args: argparse.Namespace, k: int, pause_ms: int, out: Path) -> soak.SoakConfig:
@@ -400,6 +407,7 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
         return soak.EXIT_REFUSED
     arms: list[Arm] = []
     pause_before: list[float] = []
+    soak_running: list[int] = []  # [k] from the arm's soak start until its analysis is kept: a Ctrl+C there is "arm k"
 
     def play(pause_ms: int) -> Arm:
         k = len(arms) + 1
@@ -413,15 +421,17 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
         holder.reset()
         reads = stand_in.reads
         started = _clock()
+        soak_running[:] = [k]
         code = soak.run_soak(cfg, soak._new_link(), soak._start_sink, answered=text)
         seconds = _clock() - started
         pictures, lost = holder.pictures, holder.was_lost
         window_alive = window.poll() is None  # None: still running; it cannot come back, so dead now is dead at the end
         if code != soak.EXIT_OK:
-            raise _Stopped(k, code)
+            raise _Stopped(f"arm {k}", code)
         arm = Arm(k, pause_ms, seconds, pictures, stand_in.reads - reads, measure_arm(cfg.out), window_alive, lost)
         _write_json(cfg.out / ARM_FILE, arm_record(arm))
         arms.append(arm)
+        soak_running.clear()
         return arm
 
     result: int | str | None = None
@@ -431,8 +441,12 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
         result, reason = judge(play)
     except _Stopped as error:
         stopped = error
-    except KeyboardInterrupt:  # outside a soak, which catches its own: between arms or in an arm's analysis (review m5)
-        stopped = _Stopped(len(arms) + 1, soak.EXIT_INTERRUPTED, "Ctrl+C")
+    except KeyboardInterrupt:  # outside a soak, which catches its own: in an arm's analysis, or between arms (review m5)
+        if soak_running:
+            stopped = _Stopped(f"arm {soak_running[0]}", soak.EXIT_INTERRUPTED, "Ctrl+C")
+        else:
+            stopped = _Stopped(f"between arms, after arm {len(arms)}" if arms else "before arm 1",
+                               soak.EXIT_INTERRUPTED, "Ctrl+C")
     finally:
         if pause_before:
             _set_capture_pause(pause_before[0])
@@ -446,7 +460,7 @@ def run_check(args: argparse.Namespace, out: Path, holder: CountingFrame, stand_
     for arm in arms:
         print(_arm_line(arm), flush=True)
     if stopped is not None:
-        print(f"arm {stopped.k} stopped: {stopped.what}; the arms so far are kept in {out}", flush=True)
+        print(f"{stopped.report()}: {stopped.what}; the arms so far are kept in {out}", flush=True)
         return soak.EXIT_ABORT
     if result == INCONCLUSIVE:
         print(f"result: {INCONCLUSIVE}: {reason}", flush=True)

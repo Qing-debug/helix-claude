@@ -414,6 +414,30 @@ def test_ctrl_c_outside_a_soak_stops_with_the_arms_so_far_kept(make_rig, capsys)
     assert last.startswith("arm 2 stopped: Ctrl+C;") and "kept" in last
 
 
+@pytest.mark.parametrize("pause_to_interrupt, where, kept", [
+    (5, "between arms, after arm 3", 3),  # the search's first arm is not yet started: arm 4 did not stop
+    (20, "before arm 1", 0),
+])
+def test_ctrl_c_between_arms_names_where_it_stopped(make_rig, monkeypatch, capsys, ktc, pause_to_interrupt, where, kept):
+    """Wording (review): a Ctrl+C outside any arm's soak or analysis is not "arm k+1 stopped"; it stopped between arms."""
+    rig = make_rig(scripted(n=Entry(**LATE), five=Entry()))
+    set_pause = ktc._set_capture_pause
+
+    def set_pause_then_ctrl_c(pause_ms):
+        if pause_ms == pause_to_interrupt:
+            raise KeyboardInterrupt
+        return set_pause(pause_ms)
+
+    monkeypatch.setattr(ktc, "_set_capture_pause", set_pause_then_ctrl_c)
+    assert rig.run() == soak.EXIT_ABORT
+    assert rig.pauses_run() == [20, 0, 20][:kept]  # no soak after the Ctrl+C
+    result = rig.result()
+    assert result["stopped"] == f"{where}: {soak.EXIT_INTERRUPTED}" and len(result["arms"]) == kept
+    assert rig.window.terminated
+    last = [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    assert last.startswith(f"stopped {where}: Ctrl+C;") and "kept" in last
+
+
 def test_ctrl_c_at_the_question_writes_nothing(make_rig):
     """The question is before any arm: nothing is written, so the same --out can be used again (review adjudication C)."""
     rig = make_rig(answer=KeyboardInterrupt)
@@ -501,6 +525,16 @@ def test_inconclusive_when_the_window_dies_in_b2(make_rig):
     assert rig.run() == 0
     result = rig.result()
     assert result["result"] == "inconclusive" and "arm 3" in result["reason"] and "window" in result["reason"]
+
+
+def test_a_search_arm_slower_than_b1_lost_its_load(make_rig):
+    """Review m-new-1 (ruling A): a window that stopped redrawing gives a search arm on time and a rate near 0; that
+    must read "lost its load", not a too-small pause. 5 ms is on time here but at 30 a second, under B1's 45."""
+    rig = make_rig(scripted(n=Entry(**LATE), five=Entry(rate=30.0)))
+    assert rig.run() == 0
+    assert rig.pauses_run() == [20, 0, 20, 5]  # not on to 2: the search stops
+    result = rig.result()
+    assert result["result"] == "inconclusive" and "arm 4" in result["reason"] and "lost its load" in result["reason"]
 
 
 def test_the_frame_notes_a_lost_minimap_until_the_next_reset(ktc):
@@ -743,6 +777,20 @@ def test_nothing_rebuilds_the_wrapper_after_the_style_is_added(clw):
     before = [c.lineno for c in calls if wrapper_call(c) and c.lineno < applied[0]]
     after = [c.lineno for c in calls if wrapper_call(c) and c.lineno > applied[0]]
     assert before and after == []  # the scan sees the calls that set the window up, and none after the style
+
+
+def test_a_failed_picture_does_not_end_the_redraws(clw):
+    """Optional hardening (review m-new-1): `tick` reschedules itself in a `finally`, so an exception in the picture
+    (raised out of tkinter's callback) leaves the redraws going. Tk is not run here: this pins the structure."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(clw.run_window)))
+    tick = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "tick")
+
+    def reschedules(stmt):
+        call = stmt.value if isinstance(stmt, ast.Expr) else None
+        return (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "after"
+                and any(isinstance(a, ast.Name) and a.id == "tick" for a in call.args))
+
+    assert any(any(reschedules(s) for s in t.finalbody) for t in ast.walk(tick) if isinstance(t, ast.Try))
 
 
 def test_only_the_key_timing_check_hands_soak_an_answer():
