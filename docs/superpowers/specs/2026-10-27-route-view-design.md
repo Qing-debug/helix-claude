@@ -442,7 +442,7 @@ checked against `map_sha256`; a mismatch gives the warning of section 5.3.
 The design (separate process, decision RV1-D1 A, Hong's):
 
 - **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). While the
-  character is lost, a simulated walk sleeps the 50 ms poll interval (`params.py:26`) between reads, so its events
+  character is lost, a simulated walk sleeps the 50 ms poll interval (`params.py:30`) between reads, so its events
   come at most about every 50 ms; a live walk waits for the next picture instead (`wait_frame`, `walker.py:460`), so it
   logs one `read_failed` or `no_plan` per picture, at the capture's rate (H104), and a handful per move otherwise. It takes
   no lock that the vision thread takes.
