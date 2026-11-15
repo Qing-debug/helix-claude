@@ -157,11 +157,32 @@ def test_a_tie_takes_the_lower_platform_index():
     assert d < c and built.rg.side_landing(built.p(24), 33, +1) == (46, d)
 
 
-def test_gap_launch():  # asked only for existing GAP edges; exact A (WALKFIX169-D1): the launch is `v.x - sign * 19`
+def test_gap_launch():  # asked only for existing GAP edges; option A2, Hong's pick (walkfix170-1): `v.x - sign * (19 - 3)`
     built = Built(M)
     n = built.n
-    # A2 (3 px margin, WALKFIX172-D1 = B): 34 and 56 (walk 6, teleport, walk back 3); the GAP cost stays 9 / 12.5 + 0.55
-    assert built.rg.gap_launch(n[40], n[50]) == 31 and built.rg.gap_launch(n[50], n[40]) == 59
+    # 3 px nearer the gap than exact A's 31 and 59; walk 6, teleport to x 53, walk back 3: the GAP cost is 9 / 12.5 + 0.55
+    assert built.rg.gap_launch(n[40], n[50]) == 34 and built.rg.gap_launch(n[50], n[40]) == 56
+    assert built.cost(40, 50) == pytest.approx(9 / 12.5 + 0.55) and built.cost(50, 40) == pytest.approx(9 / 12.5 + 0.55)
+
+
+@pytest.mark.parametrize("arrive_px, shortest, launch", [(2, 18, 34), (2, 19, 33), (1, 18, 33), (2, 17, 35)])
+def test_gap_launch_margin_is_computed(arrive_px, shortest, launch):
+    """The margin is `arrive_px` + (the reach 19 - `shortest_side_teleport_px`) (WALKFIX172-D1), not a literal: 3 px with
+    the defaults, so the launch toward B is 50 - 16 and toward A its mirror, 40 + 16 (the two always add up to 90 on M)."""
+    built = Built(M, MovementParams(arrive_px=arrive_px, shortest_side_teleport_px=shortest))
+    assert built.rg.gap_launch(built.n[40], built.n[50]) == launch
+    assert built.rg.gap_launch(built.n[50], built.n[40]) == 90 - launch
+
+
+# M18: A (24, 50), (40, 50) marked right; B (58, 50) marked left, (74, 50). B's near node is 18 px past A's end, more than
+# the 16 px (reach - margin) A2 needs inside A, so the launch stays exact A's (ANYMAP181-D2, gaps over 16 px, waits on Hong)
+M18 = [(24, 50, False, False), (40, 50, False, True), (58, 50, True, False), (74, 50, False, False)]
+
+
+def test_gap_launch_past_the_platform_end_keeps_exact_a():
+    built = Built(M18)
+    assert built.kind(40, 58) == EdgeKind.GAP and built.kind(58, 40) == EdgeKind.GAP
+    assert built.rg.gap_launch(built.n[40], built.n[58]) == 39 and built.rg.gap_launch(built.n[58], built.n[40]) == 59
 
 
 @pytest.mark.parametrize("one_sided", [M_right_mark_only, M_left_mark_only])  # re-review N1: only (40,50) marked /
@@ -172,7 +193,7 @@ def test_one_mark_is_enough_for_a_gap_edge(one_sided):                        # 
     assert rg.split_ends == {(a, +1), (b, -1)}
     assert rg.is_stop_end(n[40], +1) and rg.is_stop_end(n[50], -1) and not rg.is_stop_end(n[24], -1)
     assert rg.side_landing(a, 28, +1) == (40, a) and rg.side_landing(b, 60, -1) == (50, b)  # the unmarked end stops too
-    assert rg.gap_launch(n[40], n[50]) == 31 and rg.gap_launch(n[50], n[40]) == 59  # A2 (WALKFIX172-D1 = B): 34 and 56
+    assert rg.gap_launch(n[40], n[50]) == 34 and rg.gap_launch(n[50], n[40]) == 56  # A2, as on M
     assert is_successful(rg.cost_to(n[24], n[66])) and is_successful(rg.cost_to(n[66], n[24]))  # both ways still reachable
 
 
@@ -279,17 +300,19 @@ def test_lower_platform_does_not_count():  # B at y 56: from 33 the teleport sto
 def test_crossing_the_gap_lines_up_then_teleports():
     built = Built(M)
     d1 = decide(built, (25, 50), 66)
-    assert d1.move == walk(Key.RIGHT, 480.0) and d1.toward is built.n[50]  # to the launch x 31 (A2: 720.0 to x 34)
-    d2 = decide(built, (31, 50), 66)  # A2: from (34, 50)
+    assert d1.move == walk(Key.RIGHT, 720.0) and d1.toward is built.n[50]  # to the launch x 34
+    d2 = decide(built, (34, 50), 66)
     assert d2.move == TP_R and d2.toward is built.n[50]  # a GAP edge plays as a sideways teleport, not a down move
-    assert d2.cost_to_go_s == pytest.approx(0.72 + (0.72 + 0.55) + 1.28)  # approach to (40, 50) + GAP edge + 16 px walked
+    # approach to (40, 50), 6 px walked (from 34 the teleport carries onto B, so it is no stop on the end) + GAP edge
+    # + 16 px walked
+    assert d2.cost_to_go_s == pytest.approx(0.48 + (0.72 + 0.55) + 1.28)
 
 
-def test_crossing_the_gap_leftwards():  # B's launch toward A is 40 + 19 = 59 (A2: 56)
+def test_crossing_the_gap_leftwards():  # B's launch toward A is 40 + 16 = 56
     built = Built(M)
-    assert decide(built, (59, 52), 24).move == TP_L  # P5 with sign -1
+    assert decide(built, (56, 52), 24).move == TP_L  # P5 with sign -1
     d1 = decide(built, (63, 52), 24)
-    assert d1.move == walk(Key.LEFT, 320.0) and d1.toward is built.n[40]  # 4 px to the launch (A2: 7 px, 560.0)
+    assert d1.move == walk(Key.LEFT, 560.0) and d1.toward is built.n[40]  # 7 px to the launch
 
 
 def test_no_walk_crosses_the_gap():  # every x on A toward every B node, and from B toward A
@@ -336,11 +359,19 @@ def test_raised_limit_keeps_the_end_node_teleport():  # Hong (QB282): "even unde
     assert decide(raised, (28, 50), 40).move == TP_R
 
 
-@pytest.mark.parametrize("x, walk_ms", [(29, 160.0), (30, 80.0)])  # review I2: inside arrive_px of launch 31, but the
-def test_short_of_the_launch_walks_to_it(x, walk_ms):               # teleport would stop at 40 (A2: x 29 / 30 walk 400.0 / 320.0)
+@pytest.mark.parametrize("x, walk_ms", [(37, 160.0), (38, 80.0)])  # review I2, on M18: inside arrive_px of the exact-A
+def test_short_of_the_launch_walks_to_it(x, walk_ms):               # launch 39, but B starts 21 / 20 px away: the teleport would stop at 40
+    built = Built(M18)
+    d = decide(built, (x, 50), 74)
+    assert d.move == walk(Key.RIGHT, walk_ms) and d.toward is built.n[58]  # the I2 guard's walk (P5), toward the GAP edge's far node
+
+
+@pytest.mark.parametrize("x", [32, 33, 34])  # A2 on M: anywhere P4 counts as lined up on launch 34, even an 18 px
+def test_lined_up_on_the_a2_launch_teleports(x):  # teleport reaches B (x + 18 >= 50), so the I2 guard never walks
     built = Built(M)
+    assert x + MovementParams().shortest_side_teleport_px >= 50
     d = decide(built, (x, 50), 66)
-    assert d.move == walk(Key.RIGHT, walk_ms) and d.toward is built.n[50]  # the I2 guard's walk (P5), toward the GAP edge's far node
+    assert d.move == TP_R and d.toward is built.n[50]
 
 
 @pytest.mark.parametrize("walk_under_px", [17, 20])  # re-review m-a: the full reach lands exactly on the marked end
@@ -358,14 +389,14 @@ def test_run_without_a_platform_uses_the_full_reach():  # m-f: rule (1) needs `p
 @pytest.mark.parametrize("one_sided", [M_right_mark_only, M_left_mark_only])  # re-review N1
 def test_one_sided_mark_crosses_the_gap(one_sided):
     built = Built(one_sided)
-    assert decide(built, (25, 50), 66).move == walk(Key.RIGHT, 480.0)  # A2: 720.0 to x 34
-    d = decide(built, (31, 50), 66)  # A2: from (34, 50)
+    assert decide(built, (25, 50), 66).move == walk(Key.RIGHT, 720.0)  # to the launch x 34
+    d = decide(built, (34, 50), 66)
     assert d.move == TP_R and d.toward is built.n[50]
 
 
 def test_preview_lands_sideways_teleports_by_side_landing():  # re-review m-b
     built = Built(M)
-    assert preview(built.rg, (31, 50), built.n[66]).unwrap().hops[0].landing == (50, 52)  # A2: from (34, 50), (53, 52)
+    assert preview(built.rg, (34, 50), built.n[66]).unwrap().hops[0].landing == (53, 52)  # 3 px past (50, 52)
     assert preview(built.rg, (28, 50), built.n[40]).unwrap().hops[0].landing == (40, 50)  # stops at the end node
 
 

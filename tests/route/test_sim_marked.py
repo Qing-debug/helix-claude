@@ -6,9 +6,9 @@ the real-ground FF2 with its six platform-end marks and the 10 px gap between it
 world's gap is x 80 -> 88 at heights 46 and 43 (3 px apart, within `side_teleport_land_dy_px`). The rope file is the FF2
 fixture's (`ff2_marked.ropes.json`, the same two ropes).
 
-Launch point across the gap: these tests hold WALKFIX169-D1's provisional option A (`RouteGraph.gap_launch` = the far node's x
-minus the reach: 69 going right). If Hong picks A2 (a 3 px margin: launch 72 going right, 94 going left), the values next
-to the two one-leg scenarios below change with it.
+Launch point across the gap: Hong's option A2 (walkfix170-1, "A with a margin: line up 3 px nearer the gap, so the teleport
+lands on the node or up to 5 px past it"; `RouteGraph.gap_launch` = the far node's x minus (the reach - the 3 px margin):
+72 going right, 94 going left, where exact A gave 69 and 97).
 """
 
 import dataclasses
@@ -25,9 +25,8 @@ from src.input.input_layer import InputLayer
 from src.input.protocol import Key
 from src.input.timing import TimingModel
 from src.route.leg_log import LegOutcome, MemorySink
-from src.route.locate import attach
 from src.route.params import MovementParams
-from src.route.planner import MoveKind, next_move
+from src.route.planner import MoveKind
 from src.route.ropes import RopeZones
 from src.route.route_graph import EdgeKind
 from src.route.sim.link import SimClock, SimLink, SimPositionSource
@@ -142,10 +141,11 @@ def test_marked_map_crosses_the_gap_by_teleport(tmp_path):
     by_name = {check.name: check for check in judge(report, 0)}
     assert by_name["laps"].ok and by_name["stalls"].ok and by_name["known_cases"].ok, by_name
     # "reached" alone would pass a world that drops every crossing into the gap (the walker recovers from the floor, y 61).
-    # On seed 2 exactly two crossings end there, both from a mob knockback of -6 px that pushes the character off the far
-    # platform's left end into the gap (a teleport from (69.25, 46) landed (88.25, 43) correctly); with `knockback_p=0.0`
-    # there are none.
-    assert [e[2] for e in rec.of("settled") if e[2][1] >= 55] == [(82, 61), (101, 61)]
+    # On seed 2 (A2's launch) exactly one crossing ends there: the read after a teleport from (71, 46) is (84, 61), a mob
+    # knockback of -6 px that pushes the character off the far platform's left end into the gap (19 px from 71 lands at 90,
+    # 6 px back is 84); the walker then walks on along the floor, (99, 61), and still reaches (100, 42). With
+    # `knockback_p=0.0` there are none.
+    assert [e[2] for e in rec.of("settled") if e[2][1] >= 55] == [(84, 61), (99, 61)]
     mid = [p for p in _planned(rec) if MID_ROWS[0] <= p[0][1] <= MID_ROWS[1]]
     walks = [p for p in mid if p[1] == MoveKind.WALK.value]
     assert walks, "the control: the walker does walk on the middle platforms"
@@ -159,9 +159,9 @@ def test_marked_map_crosses_the_gap_by_teleport(tmp_path):
 
 
 def test_short_line_up_still_crosses(marked, terrain):
-    """Review I3 + I2: from x 67, 2 px short of the launch (69 = 88 - the reach 19), the walker walks to the launch first
-    and then teleports onto the node (88, 43): reached, nothing off the map, no fall to the floor, no stall.
-    A2 (WALKFIX169-D1; the margin 3 px): P4 lines 67 up to 72 (5 px, more than `arrive_px`), so the teleport starts at 72."""
+    """Review I3 + I2: from x 67, 5 px short of the A2 launch (72 = 88 - (the reach 19 - the margin 3)), the walker walks
+    to the launch first (P4: 5 px is more than `arrive_px`) and then teleports onto the mid-right platform, on the node
+    (88, 43) or up to 5 px past it: reached, nothing off the map, no fall to the floor, no stall."""
     surface = terrain.surface_below(67, 43)    # the way run_sim starts a world: the surface at or below the node's y - 3
     assert surface is not None
     start = (67.0, surface[1])
@@ -171,34 +171,51 @@ def test_short_line_up_still_crosses(marked, terrain):
     planned = _planned(rec)
     assert planned[0][:3] == ((67, 46), MoveKind.WALK.value, Key.RIGHT.name) and planned[0][4] == (88, 43)
     teleports = [p for p in planned if p[1] == MoveKind.TELEPORT.value]
-    assert [(p[0], p[2], p[4]) for p in teleports] == [((69, 46), Key.RIGHT.name, (88, 43))]   # starts at x 69
+    assert [(p[0], p[2], p[4]) for p in teleports] == [((72, 46), Key.RIGHT.name, (88, 43))]   # starts at x 72
     assert [e.kind for e in world.effects] == ["walk", "teleport", "walk"]
     landing = world.effects[1]
-    assert round(landing.start[0]) == 69 and landing.start[1] == 46.0
+    assert round(landing.start[0]) == 72 and landing.start[1] == 46.0
     assert landing.end[1] == 43.0 and landing.end[0] == pytest.approx(landing.start[0] + marked.rg.reach_h)
-    assert RIGHT_START_X <= landing.end[0] < RIGHT_START_X + 1                      # on the node (88, 43), not 2 px past it
+    assert RIGHT_START_X <= landing.end[0] <= RIGHT_START_X + 5                     # on the node (88, 43) or up to 5 px past
     assert all(e.end[1] in (46.0, 43.0) for e in world.effects) and world.pos[1] == 43.0   # never the floor (61)
 
 
-def test_short_teleport_stops_at_the_end_and_replans(marked, terrain):
-    """Review I3: the live teleport is 18-19 px (64 recorded jumps), so one of 18 px from the launch (69) falls short of
-    (88, 43): 69 + 18 = 87, and Hong's rule stops it at the end of mid-left, (80, 46), not in the gap and not on the floor.
-    The read there is placed by `locate` (2 px past the marked end node (78, 45)), and the planner plans from it: back
-    to the launch, a walk left. Exact A never carries an 18 px teleport over (it would walk back and retry until the 10 s
-    `stall_s` trips), so this pins that the failure is safe and leaves the margin to option A2.
-    A2: from x 70 (2 short of 72, the worst P4 accepts) the 18 px teleport lands at (88, 43) on the mid-right platform, and
-    from 74 with 19 px at (93, 43) (both confirmed in this simulator, noise off)."""
-    params = dataclasses.replace(REAL_GROUND_SIM, side_teleport_extra_px=-1.0)   # a plain frozen dataclass: no sign check
+def test_gap_launch_on_the_marked_map(marked):
+    """A2 on Hong's map: the launch toward (88, 43) is x 72 and toward (78, 45) is x 94, 3 px nearer the gap than exact A's
+    69 and 97. From anywhere P4 counts as lined up (70-74, 92-96) the planner's rule lands a full-reach teleport on the far
+    platform, 1-5 px past the node (the 18 px teleport, on the node or up to 4 px past, is the world's, below)."""
+    left, right = marked.nodes[(78, 45)], marked.nodes[(88, 43)]
+    p_left, p_right = marked.rg.terrain.platform_index(left), marked.rg.terrain.platform_index(right)
+    assert marked.rg.gap_launch(left, right) == 72 and marked.rg.gap_launch(right, left) == 94
+    assert [marked.rg.side_landing(p_left, x, +1) for x in range(70, 75)] == [(x + 19, p_right) for x in range(70, 75)]
+    assert [marked.rg.side_landing(p_right, x, -1) for x in range(92, 97)] == [(x - 19, p_left) for x in range(92, 97)]
+
+
+@pytest.mark.parametrize("x", [70, 74])           # A2: P4 counts 70-74 as lined up on the launch 72
+@pytest.mark.parametrize("extra", [-1.0, 0.0])    # the recorded teleports: 18 and 19 px (64 jumps, H103)
+def test_teleport_from_the_lined_up_range_lands_on_the_far_platform(marked, terrain, x, extra):
+    """Review I3 under A2: the live teleport is 18-19 px, and from either end of the lined-up range both lengths land on
+    the mid-right platform at 88-93, on the node (88, 43) or up to 5 px past it: never stopped at the end of mid-left
+    (80, 46), never in the 80 -> 88 gap, never on the floor (no fall). Under exact A an 18 px teleport from the launch 69
+    stopped at (80, 46)."""
+    params = dataclasses.replace(REAL_GROUND_SIM, side_teleport_extra_px=extra)   # a plain frozen dataclass: no sign check
     world = SimWorld(terrain, marked.rg.reach_h, marked.rg.reach_v, params, NoiseConfig.off(), np.random.default_rng(0),
-                     (69.0, 46.0))
+                     (float(x), 46.0))
     effect = world.teleport(Key.RIGHT, 0)
-    assert effect.end == (float(LEFT_END_X), 46.0) and world.pos == effect.end
+    assert effect.end == (x + marked.rg.reach_h + extra, 43.0) and world.pos == effect.end
+    assert RIGHT_START_X <= effect.end[0] <= RIGHT_START_X + 5
     assert effect.settle_s == pytest.approx(params.teleport_settle_s)    # no fall
-    clock = SimClock(10_000_000_000)
-    read = SimPositionSource(world, clock, 0.0, np.random.default_rng(0)).read().unwrap()
-    assert read == (LEFT_END_X, 46)
-    assert attach(marked.rg, read).unwrap().node.minimap_position == (78, 45)      # placed, not off the map
-    decision = next_move(marked.rg, read, marked.nodes[(100, 42)], np.random.default_rng(0))
-    move = decision.unwrap().move
-    assert move.kind == MoveKind.WALK and move.direction == Key.LEFT
-    assert move.walk_ms == pytest.approx((LEFT_END_X - 69) / WALK_PX_PER_S * 1000)   # back to the launch, x 69
+
+
+def test_short_teleports_still_cross(marked, terrain):
+    """A2's margin in a whole leg: with every teleport 18 px (extra -1.0), from x 67 to (100, 42) the walker lines up on 72
+    and crosses at once: reached, nothing off the map, no fall to the floor, no stall, one teleport. Under exact A the
+    18 px teleport from 69 stopped at the end of mid-left and the walker walked back and retried until `stall_s`."""
+    params = dataclasses.replace(REAL_GROUND_SIM, side_teleport_extra_px=-1.0)
+    leg, world, rec = _leg(marked, terrain, (67.0, 46.0), (100, 42), params)
+    assert leg.outcome == LegOutcome.REACHED and leg.stalls == 0 and rec.of("stall") == []
+    assert [e.kind for e in world.effects] == ["walk", "teleport", "walk"]
+    landing = world.effects[1]
+    assert round(landing.start[0]) == 72 and landing.end[0] == pytest.approx(landing.start[0] + 18)
+    assert RIGHT_START_X <= landing.end[0] <= RIGHT_START_X + 5
+    assert all(e.end[1] in (46.0, 43.0) for e in world.effects) and world.pos[1] == 43.0   # never the floor (61)

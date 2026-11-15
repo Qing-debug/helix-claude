@@ -225,17 +225,23 @@ class RouteGraph:
     def gap_launch(self, u: Node, v: Node) -> int | None:
         """The x on `u`'s platform to teleport from so that the teleport lands on `v`'s platform, or None when none does.
 
-        This is the one place where the open launch-point question (WALKFIX169-D1, QB284) is answered. Exact A, the
-        provisional pick, launches from `v.x - sign * reach_h`, so a full-reach teleport lands exactly on `v`. The
-        alternatives change only the `target` line and its tests: A2 ("A with a margin", WALKFIX172-D1 = B) launches
-        from `v.x - sign * (reach_h - arrive_px - 1)`, a margin of 3 px (the planner counts the character lined up
-        within `arrive_px`, and the shortest recorded teleport is 1 px under the reach), and C launches from the x of
-        the platform end node toward `v`. The target is clamped into `u`'s platform and checked with `side_landing`."""
+        This is the one place where the launch-point question (WALKFIX169-D1, QB284) is answered: Hong's option A2
+        (walkfix170-1, "A with a margin: line up 3 px nearer the gap, so the teleport lands on the node or up to 5 px
+        past it"). The launch is `v.x - sign * (reach_h - margin)`, with margin = `arrive_px` (the planner counts the
+        character lined up within it) + `reach_h` - `shortest_side_teleport_px` (the shortest recorded teleport),
+        3 px for Kanna (WALKFIX172-D1). When that x lies past the end of `u`'s platform toward `v` (`v` more than
+        `reach_h - margin` px past that end), the margin cannot be had and the launch is exact A's, `v.x - sign *
+        reach_h`, as before A2 (gaps that wide wait on Hong, ANYMAP181-D2). The target is clamped into `u`'s platform
+        and checked with `side_landing`."""
         sign = _sign(v.minimap_position[0] - u.minimap_position[0])
         platform = self.terrain.platform_index(u)
         nodes = self.terrain.platforms[platform]
-        target = v.minimap_position[0] - sign * self.reach_h  # exact A
-        target = min(max(target, nodes[0].minimap_position[0]), nodes[-1].minimap_position[0])
+        first_x, last_x = nodes[0].minimap_position[0], nodes[-1].minimap_position[0]
+        margin = self.params.arrive_px + self.reach_h - self.params.shortest_side_teleport_px
+        target = v.minimap_position[0] - sign * (self.reach_h - margin)  # A2
+        if sign * (target - (last_x if sign > 0 else first_x)) > 0:
+            target = v.minimap_position[0] - sign * self.reach_h  # exact A, past the end
+        target = min(max(target, first_x), last_x)
         if self.side_landing(platform, target, sign)[1] == self.terrain.platform_index(v):
             return target
         return None

@@ -16,6 +16,7 @@ class MovementParams:
     walk_px_per_s: float = 12.5    # measured 2026-11-03: 12.6 px/s, 0.2 px coast, 25 live walks (H81; was an 8.0 estimate)
     walk_under_px: int = 17        # QB266 (2026-11-13): a node closer than this is walked to, not teleported past
     side_teleport_land_dy_px: int = 4  # QB282 (2026-11-13): a sideways teleport carries onto a platform this close in height
+    shortest_side_teleport_px: int = 18  # H103: the shortest of 64 recorded flat sideways teleports; A2's gap margin
     teleport_s: float = 0.55       # ESTIMATE: keys + animation of one teleport
     drop_base_s: float = 0.35      # ESTIMATE: keys + start of a drop
     fall_px_per_s: float = 60.0    # ESTIMATE
