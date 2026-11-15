@@ -284,6 +284,8 @@ needs no other file except the map:
 (The `planned` values above are the first move of `b21-test1`; the `toward`, `sent` and `settled` times are
 illustrative.) For the simulator, `source` is `"sim"` and `clock` is `"sim_ns"` (virtual time).
 
+Since WALKFIX Task 6 (QB283 2d, 2026-11-13) a `planned` and a `settled` line of a walk may end with one more key, `"frame_ns": <int>`: the stamp of the minimap picture the line's position was read from (`time.perf_counter_ns()` when Windows handed the picture over, the clock of `t_ns` and of the keys); on a `settled` with no position it is null. The version stays 1: a reader that does not know the key ignores it, and `step_log.py` reads an old line without it (the event's `data` then has no `frame_ns` key). A simulator run has none (its `StepLog` is given no stamp source). `EXTRA_FIELDS` in `step_log.py` lists them; `frames/index.jsonl` lines carry the same stamp as `frame_ns`.
+
 Writing (walk process):
 
 - The observer turns each event into a tuple of plain values and puts it on a `queue.SimpleQueue`; `put` "never
@@ -407,7 +409,7 @@ Note (2026-11-14, as-Hong ruling, option B; FLUID176-ROPELABEL): a `planned` eve
 step log is the walker's rope move (a planner move always has a target node), so it has no node and no aim. Its lines
 are "plan: <move> to leave the rope" and "route changed: expected next <...>, now <move> to leave the rope (landed <d> px
 short/past)"; the panel and picture show only the sent move (no aim, no route), and the next plan has no
-"route changed" line (the rope move predicted nothing). A legs-only run keeps the preview's target and aim.
+"route changed" line (the rope move predicted nothing). A rope move gets a "route changed" line only when a plan is still in force when it is planned: a read the map places (C10, no `no_plan` first) keeps the plan and gets one; a read the map cannot place is preceded by a `no_plan` (the walker logs one for every read of the 0.1 s hold), which clears the plan, so a real run shows `cannot plan from ...`, the "at ... off the graph" line and the plan line, with no "route changed" line (ROPELABEL-m1, FLUID177-T7R). A legs-only run keeps the preview's target and aim.
 
 "Why it re-planned" has one structural answer: the walker always plans again after every settle and after every
 failed read or failed plan (`walker.py:1-7`, `:129-190`). The log says which of those it was and whether the new
