@@ -6,7 +6,8 @@ section 9; H75).
 
 No board, no key, no game, no vision capture thread and no screen grab (H58): the link and the positions are the
 simulator's, and every part runs on real time, so the walker's waits, the link's plays and the world's settles take as
-long as in a board run. A frame pump stores a fixed minimap-sized picture every 20 ms, as the capture loop would, so the
+long as in a board run. A frame pump stores a fixed minimap-sized picture every 20 ms (the capture loop has no pause since H104, so it
+makes pictures faster; the pump is not meant to match it), so the
 run writes `minimap.png` and its step log, the recorder saves frames and the live view redraws.
 
 `measure` walks the same settings twice: "cli" (`RunSession.run()` on the main thread, no Tk), then "app" (a real

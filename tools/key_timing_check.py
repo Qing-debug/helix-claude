@@ -26,10 +26,12 @@ p50 is above max(p50 of B1, B2) + LATER_P50_MS or its p99 is above max(p99 of B1
 result is 0 ms. N later: run 5 ms; if 5 is not later run 2, and if 2 is not later run 1; if 5 is later run 10; the
 smallest arm that was not later is the result, and if 10 is later too the result is 20 ms. At most MAX_ARMS arms. A search
 arm that fails Delivery, loses the listener or has no residual makes the result "inconclusive" (its figures cannot say
-"later" or "not later"); the search arms' capture rates are written but not judged. Every arm, the first three and the
-search arms, must also have had its load all through: an arm at whose end the test window's process had ended, or during
-which the capture lost the test window's minimap at any point (`minimap_lost` raised, `minimap_follow.py`), measured some
-other load, and makes the result "inconclusive" too (review I1).
+"later" or "not later"). Every arm, the first three and the search arms, must also have had its load all through: an
+arm at whose end the test window's process had ended, or during which the capture lost the test window's minimap at any
+point (`minimap_lost` raised, `minimap_follow.py`), measured some other load, and makes the result "inconclusive" too
+(review I1). A search arm also lost its load if its capture rate fell under B1's (every search pause is shorter than B1's,
+so a live load is at least as fast; the test window stopped redrawing): "inconclusive" as well. The search arms' rates are
+written to `arm.json` too.
 
 Files, under `--out` (a new or empty folder inside the repo's `data/`, never a file of a run before): one soak run folder
 per arm, `<k>-pause<P>ms/`, with `arm.json` (the pause, pictures per second, walker reads, whether the test window was
@@ -37,8 +39,9 @@ still running at the arm's end and whether the minimap was lost during it, the D
 the residual's n, p50 and p99), and `result.json` (the rules, every finished arm with `later`
 (null for a baseline), and `result`: the pause in ms or "inconclusive", with `reason`). A soak that does not end normally
 (a missed click is `EXIT_ABORT`) stops the check cleanly: exit 1, the finished arms kept, and `result.json` has
-`"stopped": "arm <k>: <the soak's exit code>"` and no `result`; a Ctrl+C between arms or in an arm's analysis does the
-same, as `"arm <k>: 130"` (the soak's own Ctrl+C code). A Ctrl+C at the question writes nothing, so the same `--out` can
+`"stopped": "arm <k>: <the soak's exit code>"` and no `result`; a Ctrl+C in an arm's analysis does the same, as
+`"arm <k>: 130"` (the soak's own Ctrl+C code), and one between arms as `"between arms, after arm <k>: 130"` (`"before
+arm 1: 130"` before the first arm). A Ctrl+C at the question writes nothing, so the same `--out` can
 be used again. Exit 0 means a result was reached, "inconclusive"
 included; 2 a refusal (usage, `--out`, the MapleStory answer); 3 the capture did not find the test window.
 

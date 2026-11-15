@@ -146,7 +146,7 @@ def test_marked_map_crosses_the_gap_by_teleport(tmp_path):
     # platform's left end into the gap (a teleport from (69.25, 46) landed (88.25, 43) correctly); with `knockback_p=0.0`
     # there are none.
     assert [e[2] for e in rec.of("settled") if e[2][1] >= 55] == [(82, 61), (101, 61)]
-    mid =[p for p in _planned(rec) if MID_ROWS[0] <= p[0][1] <= MID_ROWS[1]]
+    mid = [p for p in _planned(rec) if MID_ROWS[0] <= p[0][1] <= MID_ROWS[1]]
     walks = [p for p in mid if p[1] == MoveKind.WALK.value]
     assert walks, "the control: the walker does walk on the middle platforms"
     for (x, _), _, direction, walk_ms, _ in walks:
