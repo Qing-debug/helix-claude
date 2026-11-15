@@ -2929,7 +2929,7 @@ Affects: `src/route/terrain.py`, `route_graph.py`, `planner.py`, `route_preview.
 
 Cost if wrong: if the game does not stop at the platform's end the character falls to the platform below (QB282's option B warning), which his word rules out; the 4 px is a setting; the launch point is one function.
 
-Undo: Hong says so; the changes are e9af43a, ad331e2, c17afec, 28d2a1a, 5aebbd2 and d0f61f8 on `p1-walk-fluid`; the launch point (A2, 2026-11-15) is the A2BUILD182 commit on `p1-walk-fluid`: `gap_launch`'s target, the `shortest_side_teleport_px` setting and their tests.
+Undo: Hong says so; the changes are e9af43a, ad331e2, c17afec, 28d2a1a, 5aebbd2 and d0f61f8 on `p1-walk-fluid`; the launch point (A2, 2026-11-15) is the A2BUILD182 commit (a6b79b7) on `p1-walk-fluid`: `gap_launch`'s target, the `shortest_side_teleport_px` setting and their tests.
 
 Pointer: question bank QB282 and QB284; H102; `ledger-ROPE.md` (the line `Decision (Hong) (page, q-20261113-155322-cd0c`); `.superpowers/orchestrator/2026-10-21-phase1/notes/q-20261113-153031-26c9-qa-answer.md`; `docs/superpowers/plans/2026-11-13-walk-fluid.md` (Tasks 2 to 5, WALKFIX169-D1 and WALKFIX172-D1).
 

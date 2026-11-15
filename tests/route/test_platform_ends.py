@@ -185,6 +185,20 @@ def test_gap_launch_past_the_platform_end_keeps_exact_a():
     assert built.rg.gap_launch(built.n[40], built.n[58]) == 39 and built.rg.gap_launch(built.n[58], built.n[40]) == 59
 
 
+@pytest.mark.parametrize(
+    "far_x, forward, backward",
+    [(56, 40, 56), (57, 38, 59)],  # A2REV183 m1: 16 px past A's end still takes A2 (the end node), 17 px takes exact A
+)
+def test_gap_launch_boundary_between_a2_and_exact_a(far_x, forward, backward):
+    """B's near node is `far_x - 40` px past A's end. At exactly 16 px (reach - margin) the A2 spot is the end node itself
+    and stays A2 (`> 0`, not `>= 0`: exact A would give 37 and 59); at 17 px the A2 spot is off the platform and the
+    launch is exact A's, `v.x - sign * 19`."""
+    built = Built([(24, 50, False, False), (40, 50, False, True), (far_x, 50, True, False), (far_x + 16, 50, False, False)])
+    assert built.kind(40, far_x) == EdgeKind.GAP and built.kind(far_x, 40) == EdgeKind.GAP
+    assert built.rg.gap_launch(built.n[40], built.n[far_x]) == forward
+    assert built.rg.gap_launch(built.n[far_x], built.n[40]) == backward
+
+
 @pytest.mark.parametrize("one_sided", [M_right_mark_only, M_left_mark_only])  # re-review N1: only (40,50) marked /
 def test_one_mark_is_enough_for_a_gap_edge(one_sided):                        # only (50,52) marked
     built = Built(one_sided)
