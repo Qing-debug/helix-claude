@@ -95,4 +95,4 @@ def capture_and_process_minimap(sharedInfo):
                 break
 
             tracker.publish(cv2.cvtColor(minimap_frame, cv2.COLOR_BGR2RGB), frame_ns)  # the one writer of minimap_frame and minimap_lost, under the lock
-            time.sleep(THREAD_SLEEP_DURATION_S)  # pause between pictures: none (QB283 2b, the setting); cameraGrab itself waits in Windows for a new image (H77)
+            time.sleep(THREAD_SLEEP_DURATION_S)  # pause between pictures: none (QB283 2b, the setting); _grab_stamped itself waits in Windows for a new image (H77)
