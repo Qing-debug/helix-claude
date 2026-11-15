@@ -75,9 +75,10 @@ NOT_COVERED = (
 MODES = ("cli", "app")
 
 FRAME_SHAPE = (82, 162, 3)   # FF2's minimap, `# minimap_size=162,82` (tests/fixtures/fossil_foundry_2.csv:1)
-PUMP_PERIOD_S = 0.020        # the capture loop's pace: a 10 ms key wait plus its 10 ms sleep before RT-11; since H77
-                             # the wait in Windows for the game's next frame plus a 20 ms floor (src/vision/vision.py);
-                             # 20 ms is about that pace (measured gap 21.7 ms, H80)
+PUMP_PERIOD_S = 0.020        # the sim's own display pump, 20 ms. The real capture loop's pace was a 10 ms key wait plus
+                             # its 10 ms sleep before RT-11, then the wait in Windows for the game's next frame plus a
+                             # 20 ms floor (H77, H80; measured gap 21.7 ms); H104 lifted the floor (no fixed pause,
+                             # THREAD_SLEEP_DURATION_S in src/vision/vision.py), and 20 ms stays as the sim's choice
 START_AFTER_MS = 500         # measure: Start is pressed this long after the window starts
 APP_COUNTDOWN_S = 1
 WATCH_MS = 200               # measure: how often the tool looks for the tab's end
