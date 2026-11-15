@@ -441,8 +441,10 @@ checked against `map_sha256`; a mismatch gives the warning of section 5.3.
 
 The design (separate process, decision RV1-D1 A, Hong's):
 
-- **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). Events come at most about every
-  50 ms (the poll interval, `params.py:24`) while the character is lost, and a handful per move otherwise. It takes
+- **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). While the
+  character is lost, a simulated walk sleeps the 50 ms poll interval (`params.py:26`) between reads, so its events
+  come at most about every 50 ms; a live walk waits for the next picture instead (`wait_frame`, `walker.py:460`), so it
+  logs one `read_failed` or `no_plan` per picture, at the capture's rate (H104), and a handful per move otherwise. It takes
   no lock that the vision thread takes.
 - **Vision thread**: unchanged. The walk adds no reader of `minimap_frame` except the one-off snapshot at the start,
   which takes the reference under `minimap_frame_lock`, releases the lock, then encodes the PNG (section 3.5).
@@ -1107,7 +1109,7 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
   reported on the simulator runs.
 - **The why line's time is the local time of day (RV3-D6, answered C: H55, tab spec 5.10).** The first build showed
   elapsed `mm:ss.mmm` (`h:mm:ss.mmm` from one hour), which is now the fallback for a header with no clock anchor
-  (`model.py:415-419`). The header's clock anchor (`wall_ns`, `perf_ns`) is recorded (item 8 above) and read for it.
+  (`model.py:425-429`). The header's clock anchor (`wall_ns`, `perf_ns`) is recorded (item 8 above) and read for it.
 - **The no-key check clicks what the live window has, plus the title bar (RV3-D7 A).** Item 4 above.
 - **"Route changed" compares kind and direction (RV3-D8 B).** Item 5 above.
 - **`--replay` is refused with `--ready`, and a silent live view names `--replay` (RV4-D1 A).** Item 7 above.

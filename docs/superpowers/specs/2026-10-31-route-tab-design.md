@@ -546,7 +546,7 @@ Contracts (`pyproject.toml`):
 
 Each why line starts with the local time of day, `HH:MM:SS.mmm`, computed as the header's `wall_ns` plus
 `t_ns - perf_ns` (`step_log.py:96-97`). Runs whose header has no `wall_ns` (simulator runs, legs-only folders) keep
-today's elapsed form (`_stamp`'s fallback, `model.py:415-419`). No format change to `steps.jsonl`.
+today's elapsed form (`_stamp`'s fallback, `model.py:425-429`). No format change to `steps.jsonl`.
 
 ### 5.11 Saved runs, recordings and replay
 
