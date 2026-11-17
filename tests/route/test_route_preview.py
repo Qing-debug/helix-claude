@@ -465,11 +465,11 @@ def test_s3_the_table_takes_the_planner_branches(built):
     )
 
 
-# p1-anymap Task 1 fix (ANYMAP197-R1 I1): the preview's mirror of the guard's walk (route_preview.py:209-211, straight
+# p1-anymap Task 1 fix (ANYMAP197-R1 I1): the preview's mirror of the guard's walk (route_preview.py:215-217, straight
 # code, so its last line stands for the three) runs for T27's first hop, traced as the planner's lines are above;
-# ANYMAP198-FIX moved it from 211 to 217 (the marked-end walk's mirror went in before it, and its last line, 206, has the
-# same text)
-_PREVIEW_GUARD_LINE = (217,"return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
+# ANYMAP198-FIX moved it from 209-211 to 215-217 (the marked-end walk's mirror went in before it, and its last line, 206,
+# has the same text)
+_PREVIEW_GUARD_LINE = (217, "return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
 
 
 def test_t27_takes_the_previews_mirror_of_the_guard_walk(built):

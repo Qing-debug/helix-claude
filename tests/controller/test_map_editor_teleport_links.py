@@ -157,6 +157,25 @@ def test_a_node_reached_only_by_a_teleport_link_is_no_orphan(make_editor):
 
 # -- the editor draws what the walker uses (Review Focus 5) ----------------------------------------------------------------
 
+@pytest.mark.parametrize("x, y", [(58, 53), (58, 54)])
+def test_a_teleport_link_the_gap_cap_leaves_with_no_edge_stays_undrawn(make_editor, x, y):
+    # ANYMAP198-R4 m1: a 3-4 px step across an 18 px gap. The walker's step adds the links (4 px rule) and the cap (H112)
+    # then leaves them with no edge, so `_previewTeleportLinks` must not offer them: no magenta line, no link for the
+    # orphan check (a drawn link the walker never uses would hide a real orphan)
+    rig = preview(make_editor, lone(x, y), orphans=True)
+    editor = rig.editor
+    path_graph, _ = editor._buildPreviewGraph()
+    route = editor._buildPreviewRoute(path_graph)
+    assert {(u.minimap_position, v.minimap_position) for u, v in route.teleport_links} == {((40, 50), (x, y)), ((x, y), (40, 50))}
+    assert not any(route.graph.has_edge(u, v) for u, v in route.teleport_links)  # the case is not vacuous
+    assert editor._previewTeleportLinks(route) == []
+
+    assert link_lines(editor) == []
+    assert orphan_xs(editor) == {(x, y)}  # the lone node is still an orphan: the red X is drawn on it
+    verdict, message = editor._validateForSave()
+    assert verdict == "warn" and f"  • #3 at ({x}, {y})" in message.split("\n")
+
+
 @pytest.mark.parametrize("rows", [step(3), step(-4), FAR_NODE, lone(50, 54)], ids=["step3", "step-4", "far_node", "lone"])
 def test_the_editor_draws_what_the_walker_uses(make_editor, tmp_path, rows):
     rig = preview(make_editor, rows)

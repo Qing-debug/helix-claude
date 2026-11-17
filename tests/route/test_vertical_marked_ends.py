@@ -24,7 +24,7 @@ from src.controller.node import Node
 from src.input.protocol import Key
 from src.route.leg_log import LegOutcome
 from src.route.params import MovementParams
-from src.route.planner import Move, MoveKind, next_move
+from src.route.planner import Move, MoveKind, _launch_x, next_move
 from src.route.route_graph import RouteGraph
 from src.route.sim.run import REAL_GROUND_SIM
 from src.route.sim.world import load_terrain
@@ -169,4 +169,45 @@ def test_made_up_maps_without_the_mark_move_from_the_whole_window(stood_y, other
         decision = _decide(rg, (x, stood_y), nodes[3])
         assert decision.move == vertical and decision.toward is nodes[3], x
         assert _first_hop_problems(rg, (x, stood_y), nodes[3]) == [], x
+
+
+# --- 3. B14-inv-D1 case 2: the launch is the end of the platform stood on, not the target's own x -----------------------
+# When the platform stood on ends before the target's x, the move is made from that platform's end (`_launch_x` gives the
+# end's x). Every case above launches from the target's own x, so a walk that aimed at the target's x instead of the launch
+# passed them all (ANYMAP199-R5 m1). Here the end is at x 40 (the launch), and the target is 1 px past it, at x 41, one px
+# nearer in y than the marked end M at x 39, so terrain's finder (nearest |dy|, then |dx|) links the end to the target and
+# not to M; M and the target are one platform, M its first node (a right mark is the mirror: M at 41, the target at 39). A
+# read 2 px on M's side of the end is lined up (P4's `arrive_px`) and past M's mark: the walk has to cover the 2 px to the
+# end, not the 3 px to the target. A made-up map: a real one needs two nodes of the upper platform within 2 px of each
+# other.
+
+
+def _case2_rows(stood_y: int, m_y: int, h_y: int, mark: str, marked: bool) -> list[Row]:
+    if mark == "left":
+        return [(30, stood_y, False, False), (40, stood_y, False, False), (39, m_y, marked, False), (41, h_y, False, False)]
+    return [(40, stood_y, False, False), (50, stood_y, False, False), (41, m_y, False, marked), (39, h_y, False, False)]
+
+
+@pytest.mark.parametrize(("stood_y", "m_y", "h_y", "vertical"), [
+    (60, 42, 43, TP_UP),
+    (30, 48, 47, TP_DOWN),
+], ids=["up", "down"])
+@pytest.mark.parametrize("mark", ["left", "right"])
+@pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
+def test_a_launch_at_the_end_stood_on_is_walked_to_not_the_targets_x(stood_y, m_y, h_y, vertical, mark, marked):
+    nodes, rg = _build(_case2_rows(stood_y, m_y, h_y, mark, marked))
+    target, end = nodes[3], nodes[1 if mark == "left" else 0]
+    assert rg.graph.has_edge(end, target) and _launch_x(rg, end, target) == 40 != target.minimap_position[0]  # case 2
+    past, inside = ((38,), (39, 40)) if mark == "left" else ((42,), (41, 40))
+    toward_launch = R if mark == "left" else L
+    for x in past:
+        decision = _decide(rg, (x, stood_y), target)
+        # marked: onto the launch (2 px), not onto the target's x (3 px); unmarked: the platform is taken to go on
+        assert decision.move == (walk(toward_launch, 2) if marked else vertical), x
+        assert decision.toward is target
+        assert _first_hop_problems(rg, (x, stood_y), target) == [], x
+    for x in inside:
+        decision = _decide(rg, (x, stood_y), target)
+        assert decision.move == vertical and decision.toward is target, x
+        assert _first_hop_problems(rg, (x, stood_y), target) == [], x
 
