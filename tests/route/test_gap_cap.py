@@ -53,11 +53,18 @@ def test_the_cap_is_computed_from_the_settings():  # no 16 anywhere: shortest 19
     assert not built.rg.graph.has_edge(built.n[40], built.n[56])
 
 
-@pytest.mark.parametrize("x", [32, 33, 34, 35, 36])  # the whole lined-up range of launch 34 on gap(10)
-def test_every_lined_up_x_is_crossed_by_an_18_px_teleport(x):
-    built = Built(gap(10))
-    assert x + MovementParams().shortest_side_teleport_px >= 50
-    assert decide(built, (x, 50), 66).move == TP_R
+@pytest.mark.parametrize(
+    "w, launch, x",
+    # the whole lined-up range of the launch: 34 on gap(10), and 40 (A2's, clamped onto A's end) on gap(16), the widest
+    # offered gap, where from 38 an 18 px teleport reaches B's start at 56 exactly (p1-anymap Task 1 fix, R1 m1)
+    [(10, 34, x) for x in range(32, 37)] + [(16, 40, x) for x in range(38, 43)],
+)
+def test_every_lined_up_x_is_crossed_by_an_18_px_teleport(w, launch, x):
+    built = Built(gap(w))
+    params = MovementParams()
+    assert built.rg.gap_launch(built.n[40], built.n[40 + w]) == launch and abs(x - launch) <= params.arrive_px
+    assert x + params.shortest_side_teleport_px >= 40 + w
+    assert decide(built, (x, 50), 56 + w).move == TP_R
 
 
 # Review Focus 2: B's near node (50, 53) is 3 px below A's end, so PathGraph links (40, 50) to B's far node (58, 50), 18 px

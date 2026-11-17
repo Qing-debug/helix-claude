@@ -93,7 +93,12 @@ FF2 = ff2()
 # walk-fluid Task 3 (QB282): platform A (24, 50), (40, 50) marked right; platform B (50, 52) marked left, (66, 52); the
 # gap between them is crossed by a teleport from x 34 (option A2, Hong's pick walkfix170-1: 3 px nearer the gap than 31)
 GAP_MAP = marked([(24, 50, False, False), (40, 50, False, True), (50, 52, True, False), (66, 52, False, False)])
-# p1-anymap Task 1: GAP18_MAP retired with row T27 (B 18 px past A's end has no GAP edge under the gap cap, H112)
+# p1-anymap Task 1: GAP18_MAP retired with the old row T27 (B 18 px past A's end has no GAP edge under the cap, H112).
+# p1-anymap Task 1 fix (ANYMAP197-R1 I1), for the new row T27: platform P (14, 50), (30, 50) marked right; platform Q,
+# the one node (32, 48) marked as both ends; platform R (38, 44), (54, 44). A GAP edge joins P's end (30, 50) and Q
+GUARD_MAP = marked([
+    (14, 50, False, False), (30, 50, False, True), (32, 48, True, True), (38, 44, True, False), (54, 44, False, False),
+])
 STRANGER = "a node not in the graph"  # T16's target, made when the graphs are built (not at import)
 
 
@@ -197,11 +202,17 @@ CASES = [
         (TP_UP, (48, 45), (48, 45)),
         (walk(R, 800), (58, 46), (58, 46)),
     ])),
-    # T25 and T26: P5's GAP branch. T25 from 3 px short of the A2 launch 34 (the cost is the approach 0.72 + the GAP edge 1.27
+    # T25 to T27: P5's GAP branch. T25 from 3 px short of the A2 launch 34 (the cost is the approach 0.72 + the GAP edge 1.27
     # + the walk 1.28): P4 walks to the launch, the sideways teleport lands 3 px past (50, 52), the walk is 13 px. T26 from
     # 5 px short (the approach is the teleport that stops on the end node, 0.55): the same three hops. On GAP_MAP the I2 guard
-    # never walks (from 32-34 even an 18 px teleport reaches B). p1-anymap Task 1: T27 retired; it was on GAP18_MAP, from
-    # 2 px short of its exact-A launch 39, the guard's walk, and under the gap cap (H112) that map has no GAP edge
+    # never walks (from 32-34 even an 18 px teleport reaches B). p1-anymap Task 1: the old T27 (GAP18_MAP, from 2 px
+    # short of its exact-A launch 39) retired, as that map has no GAP edge under the gap cap (H112).
+    # p1-anymap Task 1 fix (ANYMAP197-R1 I1): the new T27 is the I2 guard's walk at the default settings, on GUARD_MAP.
+    # From (30, 45), 2 px left of Q's node and 3 px above it, `attach` anchors on Q past its left end (A3). The path
+    # starts at Q with the GAP edge to (30, 50); its launch is 32 (A2's 46 clamped onto Q's only node), so x 30 is lined
+    # up, but from 30 a teleport left stops at Q's end (P's end at 30 is 0 px away, not past px: `side_landing`), so the
+    # guard walks back to 32 (2 px) and the teleport from there lands at P's start 14. The cost is the approach 0.16 +
+    # the GAP edge 1.83 + the walk 1.28
     ("T25", GAP_MAP, (31, 50), 3, (3.27, [
         (walk(R, 240), 2, (34, 50)),
         (TP_R, 2, (53, 52)),
@@ -211,6 +222,10 @@ CASES = [
         (walk(R, 400), 2, (34, 50)),
         (TP_R, 2, (53, 52)),
         (walk(R, 1040), 3, (66, 52)),
+    ])),
+    ("T27", GUARD_MAP, (30, 45), 0, (3.27, [
+        (walk(R, 160), 1, (32, 48)),
+        (TP_L, 1, (14, 50)),
     ])),
     ("D1", FF2, (129, 60), (97, 43), (3.11, [  # 2.62 before QB266 (walk-fluid Task 1); the hops are the same
         (TP_L, (105, 42), (110, 60)),
@@ -391,11 +406,13 @@ _BRANCH_LINES = {
     253: "return Failure(anchor_result.failure())",
     265: 'return Failure(f"no path from ',
     299: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
-    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25)
+    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25), and the I2 guard's walk to
+    # the launch (T27). p1-anymap Task 1 fix (ANYMAP197-R1 I1): the gap cap (H112) leaves the walk reachable through
+    # `next_move` at the default settings: lined up past a launch clamped onto a platform end, a teleport may stop at
+    # that end (T27, a 2 px gap); with `shortest_side_teleport_px` 20 or 21 it is also reached from the far 1-2 px of
+    # the lined-up range
     309: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
-    # p1-anymap Task 1: the I2 guard's walk to the launch (311, was reached by T27) is removed. Under the gap cap (H112) an
-    # 18 px teleport crosses an offered gap from anywhere lined up, so the guard always teleports for a character anchored on
-    # the GAP edge's platform, and `locate.attach` never gives an anchor with no platform; the planner keeps the line as a guard
+    311: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
 }
 
 
@@ -433,6 +450,37 @@ def test_s3_the_table_takes_the_planner_branches(built):
     assert {(planner_file, number) for number in _BRANCH_LINES} <= recorded, sorted(
         number for number in _BRANCH_LINES if (planner_file, number) not in recorded
     )
+
+
+# p1-anymap Task 1 fix (ANYMAP197-R1 I1): the preview's mirror of the guard's walk (route_preview.py:209-211, straight
+# code, so its last line stands for the three) runs for T27's first hop, traced as the planner's lines are above
+_PREVIEW_GUARD_LINE = (211, "return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
+
+
+def test_t27_takes_the_previews_mirror_of_the_guard_walk(built):
+    number, text = _PREVIEW_GUARD_LINE
+    preview_file = preview.__code__.co_filename
+    lines = Path(preview_file).read_text(encoding="utf-8").splitlines()
+    assert lines[number - 1].strip() == text, (number, lines[number - 1])  # a moved line fails here
+    recorded = set()
+
+    def local(frame, event, arg):
+        if event == "line":
+            recorded.add(frame.f_lineno)
+        return local
+
+    def global_trace(frame, event, arg):  # 'call': a local tracer for route_preview.py's frames only
+        return local if frame.f_code.co_filename == preview_file else None
+
+    case = built["T27"]
+    previous = sys.gettrace()
+    sys.settrace(global_trace)
+    try:
+        result = preview(case.rg, case.pos, case.target)
+    finally:
+        sys.settrace(previous)
+    assert [hop.options for hop in result.unwrap().hops] == [(walk(R, 160),), (TP_L,)]  # the guard's walk, then across
+    assert number in recorded
 
 
 # ---- 4. starts ----

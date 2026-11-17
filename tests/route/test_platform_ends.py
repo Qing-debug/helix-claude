@@ -382,8 +382,8 @@ def test_raised_limit_keeps_the_end_node_teleport():  # Hong (QB282): "even unde
 
 
 # p1-anymap Task 1: test_short_of_the_launch_walks_to_it retired. It walked to M18's exact-A launch 39 from 37 and 38 (the
-# I2 guard's walk); M18 has no GAP edge under the gap cap (H112), and on an offered gap every lined-up x is crossed by an
-# 18 px teleport (tests/route/test_gap_cap.py, test_every_lined_up_x_is_crossed_by_an_18_px_teleport).
+# I2 guard's walk); M18 has no GAP edge under the gap cap (H112). The guard's walk is still reachable (ANYMAP197-R1 I1):
+# row T27 in tests/route/test_route_preview.py pins it; tests/route/test_gap_cap.py pins the teleport when lined up.
 
 
 @pytest.mark.parametrize("x", [32, 33, 34])  # A2 on M: anywhere P4 counts as lined up on launch 34, even an 18 px
