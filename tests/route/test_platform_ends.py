@@ -175,26 +175,34 @@ def test_gap_launch_margin_is_computed(arrive_px, shortest, launch):
 
 
 # M18: A (24, 50), (40, 50) marked right; B (58, 50) marked left, (74, 50). B's near node is 18 px past A's end, more than
-# the 16 px (reach - margin) A2 needs inside A, so the launch stays exact A's (ANYMAP181-D2, gaps over 16 px, waits on Hong)
+# the 16 px (shortest_side_teleport_px - arrive_px) of the gap cap, so the gap is not offered (p1-anymap Task 1, H112)
 M18 = [(24, 50, False, False), (40, 50, False, True), (58, 50, True, False), (74, 50, False, False)]
 
 
-def test_gap_launch_past_the_platform_end_keeps_exact_a():
+# p1-anymap Task 1: re-pinned (was test_gap_launch_past_the_platform_end_keeps_exact_a, launches 39 and 59): no exact-A
+# fallback any more, an 18 px gap has no launch and no GAP edge, and both ends still stop a teleport (T2R m2)
+def test_a_gap_over_the_cap_has_no_gap_edge():
     built = Built(M18)
-    assert built.kind(40, 58) == EdgeKind.GAP and built.kind(58, 40) == EdgeKind.GAP
-    assert built.rg.gap_launch(built.n[40], built.n[58]) == 39 and built.rg.gap_launch(built.n[58], built.n[40]) == 59
+    assert not built.rg.graph.has_edge(built.n[40], built.n[58]) and not built.rg.graph.has_edge(built.n[58], built.n[40])
+    assert built.rg.gap_launch(built.n[40], built.n[58]) is None and built.rg.gap_launch(built.n[58], built.n[40]) is None
+    assert built.rg.split_ends == {(built.p(24), +1), (built.p(58), -1)}
 
 
 @pytest.mark.parametrize(
     "far_x, forward, backward",
-    [(56, 40, 56), (57, 38, 59)],  # A2REV183 m1: 16 px past A's end still takes A2 (the end node), 17 px takes exact A
+    # A2REV183 m1: 16 px past A's end still takes A2 (the end node); p1-anymap Task 1: 17 px has no launch (was 38, 59)
+    [(56, 40, 56), (57, None, None)],
 )
-def test_gap_launch_boundary_between_a2_and_exact_a(far_x, forward, backward):
-    """B's near node is `far_x - 40` px past A's end. At exactly 16 px (reach - margin) the A2 spot is the end node itself
-    and stays A2 (`> 0`, not `>= 0`: exact A would give 37 and 59); at 17 px the A2 spot is off the platform and the
-    launch is exact A's, `v.x - sign * 19`."""
+def test_gap_launch_boundary_between_a2_and_the_cap(far_x, forward, backward):  # p1-anymap Task 1: was ..._and_exact_a
+    """B's near node is `far_x - 40` px past A's end. At exactly 16 px (`shortest_side_teleport_px - arrive_px`) the A2
+    spot is the end node itself and the gap is offered; at 17 px, from 38 (the far edge of the lined-up range of the end
+    node) an 18 px teleport would not reach B, so the gap cap (H112) leaves it no launch and no GAP edge."""
     built = Built([(24, 50, False, False), (40, 50, False, True), (far_x, 50, True, False), (far_x + 16, 50, False, False)])
-    assert built.kind(40, far_x) == EdgeKind.GAP and built.kind(far_x, 40) == EdgeKind.GAP
+    offered = forward is not None
+    assert built.rg.graph.has_edge(built.n[40], built.n[far_x]) is offered
+    assert built.rg.graph.has_edge(built.n[far_x], built.n[40]) is offered
+    if offered:
+        assert built.kind(40, far_x) == EdgeKind.GAP and built.kind(far_x, 40) == EdgeKind.GAP
     assert built.rg.gap_launch(built.n[40], built.n[far_x]) == forward
     assert built.rg.gap_launch(built.n[far_x], built.n[40]) == backward
 
@@ -373,11 +381,9 @@ def test_raised_limit_keeps_the_end_node_teleport():  # Hong (QB282): "even unde
     assert decide(raised, (28, 50), 40).move == TP_R
 
 
-@pytest.mark.parametrize("x, walk_ms", [(37, 160.0), (38, 80.0)])  # review I2, on M18: inside arrive_px of the exact-A
-def test_short_of_the_launch_walks_to_it(x, walk_ms):               # launch 39, but B starts 21 / 20 px away: the teleport would stop at 40
-    built = Built(M18)
-    d = decide(built, (x, 50), 74)
-    assert d.move == walk(Key.RIGHT, walk_ms) and d.toward is built.n[58]  # the I2 guard's walk (P5), toward the GAP edge's far node
+# p1-anymap Task 1: test_short_of_the_launch_walks_to_it retired. It walked to M18's exact-A launch 39 from 37 and 38 (the
+# I2 guard's walk); M18 has no GAP edge under the gap cap (H112), and on an offered gap every lined-up x is crossed by an
+# 18 px teleport (tests/route/test_gap_cap.py, test_every_lined_up_x_is_crossed_by_an_18_px_teleport).
 
 
 @pytest.mark.parametrize("x", [32, 33, 34])  # A2 on M: anywhere P4 counts as lined up on launch 34, even an 18 px

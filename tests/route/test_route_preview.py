@@ -93,9 +93,7 @@ FF2 = ff2()
 # walk-fluid Task 3 (QB282): platform A (24, 50), (40, 50) marked right; platform B (50, 52) marked left, (66, 52); the
 # gap between them is crossed by a teleport from x 34 (option A2, Hong's pick walkfix170-1: 3 px nearer the gap than 31)
 GAP_MAP = marked([(24, 50, False, False), (40, 50, False, True), (50, 52, True, False), (66, 52, False, False)])
-# The same with B (58, 50), (74, 50): its near node is 18 px past A's end, more than A2's 16, so the launch stays exact A's
-# (x 39, ANYMAP181-D2 waits on Hong), and from 1-2 px short of it the teleport would stop at A's end (the I2 guard)
-GAP18_MAP = marked([(24, 50, False, False), (40, 50, False, True), (58, 50, True, False), (74, 50, False, False)])
+# p1-anymap Task 1: GAP18_MAP retired with row T27 (B 18 px past A's end has no GAP edge under the gap cap, H112)
 STRANGER = "a node not in the graph"  # T16's target, made when the graphs are built (not at import)
 
 
@@ -199,11 +197,11 @@ CASES = [
         (TP_UP, (48, 45), (48, 45)),
         (walk(R, 800), (58, 46), (58, 46)),
     ])),
-    # T25 to T27: P5's GAP branch. T25 from 3 px short of the A2 launch 34 (the cost is the approach 0.72 + the GAP edge 1.27
+    # T25 and T26: P5's GAP branch. T25 from 3 px short of the A2 launch 34 (the cost is the approach 0.72 + the GAP edge 1.27
     # + the walk 1.28): P4 walks to the launch, the sideways teleport lands 3 px past (50, 52), the walk is 13 px. T26 from
     # 5 px short (the approach is the teleport that stops on the end node, 0.55): the same three hops. On GAP_MAP the I2 guard
-    # never walks (from 32-34 even an 18 px teleport reaches B), so T27 is on GAP18_MAP, from 2 px short of its exact-A launch
-    # 39, where the teleport would stop at the end (B starts 21 px away): the guard walks to the launch first
+    # never walks (from 32-34 even an 18 px teleport reaches B). p1-anymap Task 1: T27 retired; it was on GAP18_MAP, from
+    # 2 px short of its exact-A launch 39, the guard's walk, and under the gap cap (H112) that map has no GAP edge
     ("T25", GAP_MAP, (31, 50), 3, (3.27, [
         (walk(R, 240), 2, (34, 50)),
         (TP_R, 2, (53, 52)),
@@ -213,11 +211,6 @@ CASES = [
         (walk(R, 400), 2, (34, 50)),
         (TP_R, 2, (53, 52)),
         (walk(R, 1040), 3, (66, 52)),
-    ])),
-    ("T27", GAP18_MAP, (37, 50), 3, (2.46, [
-        (walk(R, 160), 2, (39, 50)),
-        (TP_R, 2, (58, 50)),
-        (walk(R, 1280), 3, (74, 50)),
     ])),
     ("D1", FF2, (129, 60), (97, 43), (3.11, [  # 2.62 before QB266 (walk-fluid Task 1); the hops are the same
         (TP_L, (105, 42), (110, 60)),
@@ -398,9 +391,11 @@ _BRANCH_LINES = {
     253: "return Failure(anchor_result.failure())",
     265: 'return Failure(f"no path from ',
     299: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
-    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25), and the I2 guard's walk to the launch (T27)
+    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25)
     309: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
-    311: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
+    # p1-anymap Task 1: the I2 guard's walk to the launch (311, was reached by T27) is removed. Under the gap cap (H112) an
+    # 18 px teleport crosses an offered gap from anywhere lined up, so the guard always teleports for a character anchored on
+    # the GAP edge's platform, and `locate.attach` never gives an anchor with no platform; the planner keeps the line as a guard
 }
 
 

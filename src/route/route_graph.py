@@ -229,19 +229,26 @@ class RouteGraph:
         (walkfix170-1, "A with a margin: line up 3 px nearer the gap, so the teleport lands on the node or up to 5 px
         past it"). The launch is `v.x - sign * (reach_h - margin)`, with margin = `arrive_px` (the planner counts the
         character lined up within it) + `reach_h` - `shortest_side_teleport_px` (the shortest recorded teleport),
-        3 px for Kanna (WALKFIX172-D1). When that x lies past the end of `u`'s platform toward `v` (`v` more than
-        `reach_h - margin` px past that end), the margin cannot be had and the launch is exact A's, `v.x - sign *
-        reach_h`, as before A2 (gaps that wide wait on Hong, ANYMAP181-D2). The target is clamped into `u`'s platform
-        and checked with `side_landing`."""
+        3 px for Kanna (WALKFIX172-D1). The target is clamped into `u`'s platform.
+
+        The gap cap (Hong's anymap182-2, H112: "Offer a gap only when an 18 px teleport crosses it from anywhere counted
+        as lined up"): None when, from the far edge of the lined-up range (`arrive_px` short of the target), the
+        shortest recorded teleport would not reach the start of `v`'s platform (its near node, not `v`, which may lie
+        deeper in that platform). For an unclamped target that always reaches, so only a gap of more than
+        `shortest_side_teleport_px - arrive_px` (16 px for Kanna) between the end of `u`'s platform and the start of
+        `v`'s loses its launch, and with it its GAP edge (`_edge_cost`). Otherwise the target is checked with
+        `side_landing`."""
         sign = _sign(v.minimap_position[0] - u.minimap_position[0])
         platform = self.terrain.platform_index(u)
         nodes = self.terrain.platforms[platform]
         first_x, last_x = nodes[0].minimap_position[0], nodes[-1].minimap_position[0]
         margin = self.params.arrive_px + self.reach_h - self.params.shortest_side_teleport_px
         target = v.minimap_position[0] - sign * (self.reach_h - margin)  # A2
-        if sign * (target - (last_x if sign > 0 else first_x)) > 0:
-            target = v.minimap_position[0] - sign * self.reach_h  # exact A, past the end
         target = min(max(target, first_x), last_x)
+        far = self.terrain.platforms[self.terrain.platform_index(v)]
+        near_x = (far[0] if sign > 0 else far[-1]).minimap_position[0]
+        if sign * (near_x - (target - sign * self.params.arrive_px)) > self.params.shortest_side_teleport_px:
+            return None  # the gap cap (H112)
         if self.side_landing(platform, target, sign)[1] == self.terrain.platform_index(v):
             return target
         return None
