@@ -9,6 +9,7 @@ marked as a left end, and (66, 50 + dy). `step(2)` is test_platform_ends' map M.
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from returns.pipeline import is_successful
 from test_gap_cap import FAR_NODE, decide_result
@@ -19,6 +20,7 @@ from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
 from src.input.protocol import Key
 from src.route.params import MovementParams
+from src.route.planner import next_move
 from src.route.route_graph import EdgeKind, RouteGraph
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -161,5 +163,8 @@ def test_preview_matches_next_move_on_a_stepped_map(dy):  # as test_preview_matc
     problems: list[str] = []
     for x, y, targets in [(x, 50, (50, 66)) for x in range(24, 41)] + [(x, 50 + dy, (24, 40)) for x in range(50, 67)]:
         for target in targets:
+            # without a crossing, preview and next_move both fail with "no path" and `_first_hop_problems` calls that agreement
+            # (ANYMAP198-R2 m1): so the test also needs next_move to succeed, which it does only through the teleport link
+            assert is_successful(next_move(built.rg, (x, y), built.n[target], np.random.default_rng(0))), (x, y, target)
             problems += _first_hop_problems(built.rg, (x, y), built.n[target])
     assert problems == []
