@@ -2,7 +2,7 @@
 H111 and H112, whose done rule is H102's: "tested in the simulator, every check passing, reviewed by a second agent").
 
 Fossil Foundry 2 has neither case, so the map is made up here (`_write_world` writes it into `tmp_path`; no fixture files).
-Five platforms, minimap 162 x 82, y grows downward (the heights are the nodes' own, the world's terrain is the same lines):
+Four platforms and a floor, minimap 162 x 82, y grows downward (the heights are the nodes' own, the world's terrain is the same lines):
 
        A  x 24-40  y 30       B  x 50-66  y 34       C  x 96-112  y 30       D  x 130-146  y 30
                     (40,30) | (50,34)                          (112,30) | (130,30)
@@ -126,8 +126,8 @@ def _sideways(rec: Rec, row: int, span: tuple[int, int], direction: str) -> list
     events = rec.events
     for i, e in enumerate(events):
         if e[0] == "planned" and e[3] == "teleport" and e[4] == direction and _on(e[2], row, span):
-            settled = next(s for s in events[i + 1:] if s[0] == "settled")
-            out.append((e[2], settled[2]))
+            settled = next((s for s in events[i + 1:] if s[0] == "settled"), None)
+            out.append((e[2], None if settled is None else settled[2]))
     return out
 
 
