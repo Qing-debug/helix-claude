@@ -6,6 +6,9 @@ graph itself (`MapEditor._buildPreviewRoute`) and, under "Show edges", draws eac
 (ANYMAP194-D1); the orphan check (the Highlight orphans X and the Save warning) counts them as links. When the route graph
 cannot be built, no link is drawn and the orphan check uses the PathGraph edges alone, silently (D1).
 
+Task 4b (at the end, ANYMAP194-D2): a PathGraph gap edge the walker drops gets no arrowhead, a pair it drops every way is
+drawn grey and dashed, and a dropped edge does not count for the orphan check.
+
 Like `test_map_editor_nodemove.py`, these share `test_map_editor_ropes.py`'s fixture and helpers (there is no conftest.py
 under tests/): a real `MapEditor` on a withdrawn Tk root, never shown, every box patched. Maps are rows
 `(x, y, marked left, marked right)` as in `tests/route/test_teleport_links.py`.
@@ -178,7 +181,7 @@ def test_a_failed_route_build_draws_no_link(make_editor, monkeypatch, capsys):
     rig = preview(make_editor, lone(50, 54), orphans=True)
     editor = rig.editor
     assert link_lines(editor) == []
-    # the PathGraph line is drawn as it is with no route graph at all (Task 4b's seam: nothing counts as dropped)
+    # the PathGraph line is drawn as it is with no route graph at all (nothing counts as dropped: m-new1, Task 4b below)
     (line,) = lines(editor, map_editor.CANVAS_TAG_EDGE)
     assert sorted((line.a, line.b)) == [(24, 50), (40, 50)] and (line.fill, line.dash, line.arrow) == ("limegreen", "", "both")
     assert orphan_xs(editor) == {(50, 54)}  # PathGraph edges alone: the lone node has none
@@ -187,3 +190,77 @@ def test_a_failed_route_build_draws_no_link(make_editor, monkeypatch, capsys):
     out, err = capsys.readouterr()
     assert set(out.splitlines()) <= PATH_GRAPH_PRINTS and err == ""  # only the PathGraph build's own lines
     assert rig.dialogs.errors == [] and rig.dialogs.infos == [] and editor._status_label.cget("text") == ""
+
+
+# -- Task 4b: gaps the walker does not cross show as not crossed (ANYMAP194-D2, Ruling ANYMAP195-PR-I1) ----------------------
+
+def gap(w: int) -> list[Row]:
+    """A (24, 50), (40, 50) marked right; B (40 + w, 50) marked left, (56 + w, 50): Task 1's map."""
+    return [(24, 50, False, False), (40, 50, False, True), (40 + w, 50, True, False), (56 + w, 50, False, False)]
+
+
+INTERCEPT_C = [(24, 50, False, False), (40, 50, False, True), (48, 53, False, False), (56, 50, True, False),
+               (72, 50, False, False)]  # ANYMAP195-ADJ "intercept C"
+ASYM_C = [(24, 50, False, False), (40, 50, False, True), (45, 46, False, False), (52, 51, False, False),
+          (68, 51, False, False)]  # ANYMAP195-PR "asym C"
+
+
+def line_between(editor, p, q) -> SimpleNamespace:
+    """The one PathGraph line (not a teleport link) between native points p and q, whichever end it starts at."""
+    (line,) = [l for l in lines(editor, map_editor.CANVAS_TAG_EDGE)
+               if {l.a, l.b} == {p, q} and map_editor.CANVAS_TAG_TELEPORT_LINK not in l.tags]
+    return line
+
+
+@pytest.mark.parametrize("w, style", [(18, ("grey50", "2 2", "none")), (16, ("limegreen", "", "both"))])
+def test_a_gap_the_walker_drops_both_ways_is_grey_and_dashed(make_editor, w, style):
+    rig = preview(make_editor, gap(w))
+    line = line_between(rig.editor, (40, 50), (40 + w, 50))
+    assert (line.fill, line.dash, line.arrow) == style
+    assert (line_between(rig.editor, (24, 50), (40, 50)).fill, link_lines(rig.editor)) == ("limegreen", [])
+
+
+def test_a_gap_whose_teleport_lands_on_a_nearer_platform_is_grey_and_its_links_are_drawn(make_editor):
+    rig = preview(make_editor, INTERCEPT_C)  # the 16 px gap's teleport lands on C, 3 px lower and nearer
+    editor = rig.editor
+    line = line_between(editor, (40, 50), (56, 50))
+    assert (line.fill, line.dash, line.arrow) == ("grey50", "2 2", "none")
+    assert drawn_links(editor) == {((40, 50), (48, 53)), ((48, 53), (40, 50)), ((56, 50), (48, 53)), ((48, 53), (56, 50))}
+    assert {(l.fill, l.dash, l.arrow) for l in link_lines(editor)} == {("magenta", "4 2", "both")}
+
+
+def test_a_pair_the_walker_drops_one_way_keeps_one_arrowhead(make_editor):
+    # from A's end the teleport lands on C (4 px up, 5 px on), so the walker drops (40, 50) -> (52, 51); from B's end the
+    # nearest platform in reach is A, so it offers (52, 51) -> (40, 50)
+    rig = preview(make_editor, ASYM_C, orphans=True)
+    editor = rig.editor
+    line = line_between(editor, (40, 50), (52, 51))
+    assert (line.fill, line.dash) == ("limegreen", "") and directed(line) == {((52, 51), (40, 50))}
+    assert drawn_links(editor) == {((40, 50), (45, 46)), ((45, 46), (40, 50))}
+    assert orphan_xs(editor) == set() and editor._validateForSave() == ("ok", "")  # the offered direction connects both
+
+
+@pytest.mark.parametrize("x, orphan", [(58, True), (56, False)])
+def test_a_node_whose_only_edge_is_a_dropped_gap_is_an_orphan(make_editor, x, orphan):
+    rig = preview(make_editor, lone(x, 50), orphans=True)
+    editor = rig.editor
+    verdict, message = editor._validateForSave()
+    if orphan:  # its only PathGraph edge is the 18 px gap, dropped both ways
+        assert verdict == "warn"
+        assert message.split("\n")[:2] == ["Orphan nodes (no link the walker can use):", "  • #3 at (58, 50)"]
+        assert orphan_xs(editor) == {(58, 50)}
+    else:
+        assert (verdict, orphan_xs(editor)) == ("ok", set())
+
+
+def test_a_failed_route_build_drops_nothing(make_editor, monkeypatch):
+    # plan minor m-new1: with no route graph the editor cannot tell what the walker drops, so, as ANYMAP194-D1 rules for
+    # the links, it shows and counts the PathGraph edges as they are, saying nothing
+    monkeypatch.setattr(map_editor.RouteGraph, "build", staticmethod(lambda path_graph, params: Failure("x")))
+    rig = preview(make_editor, gap(18))
+    line = line_between(rig.editor, (40, 50), (58, 50))
+    assert (line.fill, line.dash, line.arrow) == ("limegreen", "", "both")
+
+    rig = preview(make_editor, lone(58, 50), orphans=True)
+    assert orphan_xs(rig.editor) == set() and rig.editor._validateForSave() == ("ok", "")
+    assert rig.dialogs.errors == [] and rig.dialogs.infos == []

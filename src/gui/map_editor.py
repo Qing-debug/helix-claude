@@ -1212,7 +1212,7 @@ class MapEditor:
                 if n not in connected_nodes
             ]
             if orphan_nodes:
-                issues.append("Orphan nodes (no edges):")
+                issues.append("Orphan nodes (no link the walker can use):")  # Task 4b: a dropped gap is still drawn
                 for n in orphan_nodes:
                     issues.append(f"  • #{n.local_id} at {n.pos}")
 
@@ -1558,11 +1558,35 @@ class MapEditor:
         offered = [(u, v) for u, v in route.teleport_links if route.graph.has_edge(u, v)]
         return sorted(offered, key=lambda pair: (pair[0].minimap_position, pair[1].minimap_position))
 
+    @staticmethod
+    def _droppedPreviewEdges(path_graph, route: Optional[RouteGraph]) -> set:
+        """The PathGraph side edges u -> v the walker drops (ANYMAP194-D2): u and v are on different platforms, the
+        platform end u leaves from toward v stops a teleport (`route.split_ends`: a marked gap, or an end of one), and the
+        walker's graph has no u -> v. That is a gap wider than the cap (H112), or one whose teleport lands on a nearer
+        platform (H103's nearest rule).
+
+        Empty when there is no route graph: the editor cannot tell what the walker drops, so it shows and counts the
+        PathGraph edges as they are, silently, as ANYMAP194-D1 rules for the links (plan minor m-new1)."""
+        if route is None:
+            return set()
+        dropped = set()
+        for u, v in path_graph.graph.edges():
+            (ux, uy), (vx, vy) = u.minimap_position, v.minimap_position
+            if abs(vx - ux) < abs(vy - uy) or route.graph.has_edge(u, v):
+                continue  # a vertical edge is no gap (the test RouteGraph.build types by); the walker has this one
+            start = route.terrain.platform_index(u)
+            if start != route.terrain.platform_index(v) and (start, 1 if vx > ux else -1) in route.split_ends:
+                dropped.add((u, v))
+        return dropped
+
     def _previewConnectedNodes(self, path_graph, route: Optional[RouteGraph]) -> set:
-        """The preview Nodes that have a link, for the orphan check (Highlight orphans and the Save warning): the nodes of
-        the PathGraph edges plus those of the teleport links the walker offers (anymap182-1). With no route graph, the
-        PathGraph edges alone (ANYMAP194-D1). `_buildPreviewGraph`'s `id_to_node` maps editor ids to these same Nodes."""
-        connected = {n for edge in path_graph.graph.edges() for n in edge}
+        """The preview Nodes that have a link the walker can use, for the orphan check (Highlight orphans and the Save
+        warning): the nodes of the PathGraph edges the walker does not drop (Task 4b, ANYMAP194-D2; a pair with one
+        direction offered still connects both nodes) plus those of the teleport links it offers (anymap182-1). With no
+        route graph, the PathGraph edges alone (ANYMAP194-D1). `_buildPreviewGraph`'s `id_to_node` maps editor ids to
+        these same Nodes."""
+        dropped = self._droppedPreviewEdges(path_graph, route)
+        connected = {n for edge in path_graph.graph.edges() if edge not in dropped for n in edge}
         for u, v in self._previewTeleportLinks(route):
             connected.update((u, v))
         return connected
@@ -1611,31 +1635,44 @@ class MapEditor:
                 # Dedupe by unordered pair so one line renders per pair; arrowheads encode which
                 # directed edges actually exist (asymmetric vertical edges with platform-edge gating
                 # would otherwise look bidirectional to the eye — see _isVerticalEdgeValid).
+                # Arrowheads go only on the directions the walker offers (Task 4b, ANYMAP194-D2, Ruling ANYMAP195-PR-I1):
+                # a direction it drops (_droppedPreviewEdges) gets none, and a pair it drops every way is drawn grey50,
+                # dashed (2, 2), with no arrowhead, as not crossed. With no route graph nothing is dropped (m-new1).
+                dropped = self._droppedPreviewEdges(path_graph, route)
                 drawn = set()
                 for u, v in path_graph.graph.edges():
                     key = frozenset((u, v))
                     if key in drawn:
                         continue
                     drawn.add(key)
-                    has_uv = path_graph.graph.has_edge(u, v)
-                    has_vu = path_graph.graph.has_edge(v, u)
+                    has_uv = path_graph.graph.has_edge(u, v) and (u, v) not in dropped
+                    has_vu = path_graph.graph.has_edge(v, u) and (v, u) not in dropped
                     if has_uv and has_vu:
                         arrow_spec = tk.BOTH
                     elif has_uv:
                         arrow_spec = tk.LAST
-                    else:
+                    elif has_vu:
                         arrow_spec = tk.FIRST
+                    else:
+                        arrow_spec = None  # the walker drops every direction of this pair
                     ux, uy = u.minimap_position
                     vx, vy = v.minimap_position
                     is_vertical = abs(vy - uy) > abs(vx - ux)
                     color = "darkgreen" if is_vertical else "limegreen"
                     sx1, sy1 = ux * RENDER_SCALE, uy * RENDER_SCALE
                     sx2, sy2 = vx * RENDER_SCALE, vy * RENDER_SCALE
-                    self.minimap_canvas.create_line(
-                        sx1, sy1, sx2, sy2,
-                        fill=color, width=1, arrow=arrow_spec,
-                        tags=CANVAS_TAG_EDGE,
-                    )
+                    if arrow_spec is None:
+                        self.minimap_canvas.create_line(
+                            sx1, sy1, sx2, sy2,
+                            fill="grey50", dash=(2, 2), width=1,  # Tk's default arrow is none
+                            tags=CANVAS_TAG_EDGE,
+                        )
+                    else:
+                        self.minimap_canvas.create_line(
+                            sx1, sy1, sx2, sy2,
+                            fill=color, width=1, arrow=arrow_spec,
+                            tags=CANVAS_TAG_EDGE,
+                        )
                 # The walker's teleport links (Hong's anymap182-1, H111), which are not PathGraph edges: one line per
                 # pair, from the end node to the landing platform's near node, arrowheads on the directions the walker
                 # offers. Style ANYMAP194-D1 (colour per the ANYMAP195-PF ruling): dashed magenta, width 1. Also tagged
@@ -1684,7 +1721,8 @@ class MapEditor:
     def _renderOrphanHighlights(self):
         """Draw a red X within each orphan node's circle when the 'Highlight orphans' toggle is on.
 
-        Orphan = no edges to or from this node in the throwaway preview graph. Helps the
+        Orphan = no link the walker can use to or from this node: no PathGraph edge it keeps (a gap it drops does not
+        count, though its grey line is drawn) and no teleport link it offers (_previewConnectedNodes). Helps the
         user visually identify isolated nodes (especially orange ones, which don't get
         local_id labels on the canvas) when the orphan warning lists ids.
         """
