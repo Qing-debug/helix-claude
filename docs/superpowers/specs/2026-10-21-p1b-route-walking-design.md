@@ -61,10 +61,10 @@ These are test cases, not things to fix by editing the map.
 
 The walk must work on maps other than Fossil Foundry 2. Two rules for gaps between platforms, both from the any-map audit (ANYMAP181) and Hong's answers:
 
-- A gap whose two facing sides differ by up to `side_teleport_land_dy_px` (4 px) in height, where a facing end is marked as a platform end, is crossed by a sideways teleport, even where the map's own links (2 px allowance) do not join them: the walker's route step adds the teleport link by the landing rule of H103, and the map editor's preview shows it (H111).
+- A gap whose two facing sides differ by up to `side_teleport_land_dy_px` (4 px) in height, where a facing end stops a teleport (marked as a platform end, or the far end of another such crossing), is crossed by a sideways teleport, even where the map's own links (2 px allowance) do not join them: the walker's route step adds the teleport link by the landing rule of H103, and the map editor's preview shows it (H111).
 - A gap is offered only when the shortest recorded sideways teleport (18 px) crosses it from anywhere the planner counts as lined up, which is a gap of up to 16 px for Kanna; a wider gap is not crossed, and a route that needs it is "no path" (H112).
 
-Plan: `docs/superpowers/plans/2026-11-17-p1-anymap.md`. Not checkable on Fossil Foundry 2 (its gap is 10 px with a 2 px step): the simulator walks both on a made-up map.
+Plan: `docs/superpowers/plans/2026-11-17-p1-anymap.md`. Built: 2f7af2c, 30a5a5c (the cap, H112), 964f9ac, 4f1e51b (the teleport links, H111), 934fead (the simulator test), 36a21af, d2cc80b (the editor's preview), 5c6aadb (the walk to the launch point from past a marked end, H123), 0aae5be and 13ac3cd (test fixes). Not checkable on Fossil Foundry 2 (its gap is 10 px with a 2 px step): the simulator walks both on a made-up map.
 
 ## Verification (first guess — tried early, gaps filled by Claude first)
 
