@@ -99,6 +99,10 @@ GAP_MAP = marked([(24, 50, False, False), (40, 50, False, True), (50, 52, True, 
 GUARD_MAP = marked([
     (14, 50, False, False), (30, 50, False, True), (32, 48, True, True), (38, 44, True, False), (54, 44, False, False),
 ])
+# ANYMAP198-FIX (ANYMAP198-R3-D1 B), for row T28: a floor (20, 60), (36, 60), (52, 60) under platform (36, 42) marked as a
+# left end, (52, 42); the UP edge (36, 60) -> (36, 42) is made from x 36, so a read at x 34 is lined up but past the mark
+END_MAP = marked([(20, 60, False, False), (36, 60, False, False), (52, 60, False, False), (36, 42, True, False),
+                  (52, 42, False, False)])
 STRANGER = "a node not in the graph"  # T16's target, made when the graphs are built (not at import)
 
 
@@ -226,6 +230,12 @@ CASES = [
     ("T27", GUARD_MAP, (30, 45), 0, (3.27, [
         (walk(R, 160), 1, (32, 48)),
         (TP_L, 1, (14, 50)),
+    ])),
+    # ANYMAP198-FIX: lined up on the launch (x 36) but 2 px past the marked left end of the target's platform, the
+    # planner walks onto the launch before it teleports up (P5's marked-end walk)
+    ("T28", END_MAP, (34, 60), 3, (0.55, [
+        (walk(R, 160), 3, (36, 60)),
+        (TP_UP, 3, (36, 42)),
     ])),
     ("D1", FF2, (129, 60), (97, 43), (3.11, [  # 2.62 before QB266 (walk-fluid Task 1); the hops are the same
         (TP_L, (105, 42), (110, 60)),
@@ -399,20 +409,23 @@ def test_the_table_literals(built, case_id):
 
 # ---- 3. the six planner branches are really taken (spec S3) ----
 
+# ANYMAP198-FIX moved every line after 189 down: `_past_marked_end` (11 lines) went in before `_go_down`, and P5's
+# marked-end walk (5 lines, 316, reached by T28) before the GAP branch
 _BRANCH_LINES = {
     189: "return None",
-    211: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
-    212: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
-    253: "return Failure(anchor_result.failure())",
-    265: 'return Failure(f"no path from ',
-    299: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    222: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
+    223: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
+    264: "return Failure(anchor_result.failure())",
+    276: 'return Failure(f"no path from ',
+    310: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
+    316: "return Success(Decision(_walk(rg, px, h.minimap_position[0] if launch_x is None else launch_x), total, h))",
     # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25), and the I2 guard's walk to
     # the launch (T27). p1-anymap Task 1 fix (ANYMAP197-R1 I1): the gap cap (H112) leaves the walk reachable through
     # `next_move` at the default settings: lined up past a launch clamped onto a platform end, a teleport may stop at
     # that end (T27, a 2 px gap); with `shortest_side_teleport_px` 20 or 21 it is also reached from the far 1-2 px of
     # the lined-up range
-    309: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
-    311: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
+    325: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
+    327: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
 }
 
 
@@ -420,7 +433,7 @@ def test_s3_the_table_takes_the_planner_branches(built):
     lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
     for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
         assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 265:
+        if number != 276:
             assert lines[number - 1].strip() == text, (number, lines[number - 1])
 
     planner_file = planner.__file__
@@ -453,8 +466,10 @@ def test_s3_the_table_takes_the_planner_branches(built):
 
 
 # p1-anymap Task 1 fix (ANYMAP197-R1 I1): the preview's mirror of the guard's walk (route_preview.py:209-211, straight
-# code, so its last line stands for the three) runs for T27's first hop, traced as the planner's lines are above
-_PREVIEW_GUARD_LINE = (211, "return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
+# code, so its last line stands for the three) runs for T27's first hop, traced as the planner's lines are above;
+# ANYMAP198-FIX moved it from 211 to 217 (the marked-end walk's mirror went in before it, and its last line, 206, has the
+# same text)
+_PREVIEW_GUARD_LINE = (217,"return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
 
 
 def test_t27_takes_the_previews_mirror_of_the_guard_walk(built):

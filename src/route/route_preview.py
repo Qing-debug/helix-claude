@@ -44,6 +44,7 @@ from src.route.planner import (
     _launch_x,
     _offered,
     _on_slope_segment,
+    _past_marked_end,
     _run,
     _starts,
     _surface_ys,
@@ -198,6 +199,11 @@ def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | 
         g_next = path[_walk_run_end(rg, path, gi + 1)]
         move = _run(rg, px, g_next.minimap_position[0], anchor.platform)
         return planned((move,), g_next, _Across(g_next.minimap_position[0], g_next))
+    if kind in (EdgeKind.UP, EdgeKind.DOWN) and _past_marked_end(rg, px, h):
+        # the walk to the launch x from past a marked end of h's platform (ANYMAP198-R3-D1 B); its aim is `_Across`
+        launch_x = _launch_x(rg, g, h)  # never None: `_offered` dropped the edges without one
+        launch_x = h.minimap_position[0] if launch_x is None else launch_x
+        return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))
     if kind == EdgeKind.UP:
         return planned((Move(MoveKind.TELEPORT, Key.UP, None),), h, _Edge(g, h))
     if kind == EdgeKind.GAP:
