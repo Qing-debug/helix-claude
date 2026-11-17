@@ -2976,3 +2976,35 @@ Affects: no code; the status of H85, H88 and H93.
 Cost if wrong: small; if a later walk shows a rope or off-map fault it is raised again. Undo: Hong says so.
 
 Pointer: question bank QB267; `ledger-ROPE.md` (the line `QA answers (page, 16:22)`); H85, H88, H93.
+
+## H110 (2026-11-16): The walker adds sideways teleport links in its own route step by the 4 px landing rule, so a gap whose two sides differ by 3 or 4 px in height is crossed; the map editor's preview shows those links and its orphan check counts them (Hong's anymap182-1, option A; ANYMAP181-D1, QB292)
+
+Context: the any-map audit ANYMAP181 (workspace `.superpowers/orchestrator/2026-10-21-phase1/notes/ANYMAP181.md`, finding 1) found that a gap between two platforms is crossable only when its two facing nodes are within 2 px in height, PathGraph's side-edge allowance (`edge_y_tolerance_level = 2`, `src/controller/controller.py:63`), though Hong's landing rule (H103) carries a sideways teleport onto a platform within 4 px. Fossil Foundry 2's one gap has a 2 px step, so it works there; a 3 or 4 px step gives "no path" (confirmed by running the planner on a test map; nothing run in the game). The page question anymap182-1 (set anymap182, not a blocker) offered: A, add teleport links in the walker's own route step from the 4 px rule (the recommendation; its stated downside: the editor's preview would not show them); B, raise the map's 2 px allowance to 4 px (changes every sideways link on every map and the editor's preview); C, leave it and write the limit down.
+
+Ruling [Hong] (Q&A page, set anymap182, 2026-11-16 23:59 UTC): option A, with no note; the label of the option he picked, verbatim: "Add teleport links in the walker's own route step, using your 4 px rule". Earlier the same day, on the page question q-20261116-234824-47a3, verbatim, typos included: "We will deefinitely need to show these links in the map editors preview so the user can see them." (the orchestrator's record of it: the builder also draws those links in the map editor's preview and updates the orphan check; the option's stated downside no longer holds). Sources: SHARE `progress.md` (`C:/Users/Qing_programming/Desktop/helix-share/.superpowers/sdd/2026-11-15-share/progress.md`, lines starting `Decision (Hong) (page, 2026-11-16 23:59 UTC, anymap182` and `Decision (Hong) (page, q-20261116-234824-47a3`), question bank QB292.
+
+In plain words: from every platform end that stops a sideways teleport (a marked end, or an end of a gap), the walker's route step (`RouteGraph.build`, `src/route/route_graph.py`) asks the landing rule (`side_landing`) where a teleport from that end lands; when that is another platform and the map gives no link to it yet, it adds a sideways teleport link (a `GAP` edge) to that platform's nearest node. Links that exist today are untouched and the 2 px allowance of the map's own links stays. The links follow the 4 px setting (`side_teleport_land_dy_px`), so changing it changes them. The map editor's preview draws them when Show edges is on, and a node joined only by such a link is no orphan. Neither Fossil Foundry 2 map gets a link (its step is 2 px). Plan: `docs/superpowers/plans/2026-11-17-p1-anymap.md` (Tasks 2 and 4; the choices it made provisionally, ANYMAP194-D1 and -D3, are listed there).
+
+Affects: `src/route/route_graph.py` (opened by this ruling; frozen otherwise), one keyword in `src/route/planner.py`, `src/gui/map_editor.py`; new tests.
+
+Cost if wrong: if the game does not carry a teleport across a 3 or 4 px step, the walker tries the crossing and stops at the end; the 4 px is a setting.
+
+Undo: Hong says so; the build's commits on `p1-anymap` (named here when built).
+
+Pointer: question bank QB292; H103; `notes/ANYMAP181.md`, `notes/anymap182-qa-set.md`, `notes/anymap182-d1.png` in the phase-1 workspace; set file `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/anymap182.json`.
+
+## H111 (2026-11-16): A gap is offered only when an 18 px teleport crosses it from anywhere counted as lined up, so gaps over 16 px get no crossing (Hong's anymap182-2, option A; ANYMAP181-D2, QB293)
+
+Context: ANYMAP181's finding 2: the 3 px margin of H103's launch rule A2 exists only when the far platform is at most 16 px past the end of the near one (the reach 19, minus the 2 px the walker counts as lined up, minus 1 px for the shortest recorded teleport, 18 px). On a gap of 17 or 18 px a teleport from 2 px short of the end stops at the end, wasting one teleport; on 19 px an 18 px teleport never crosses and the leg gives up after 10 s (run with A2 applied in a test, not in the game; Fossil Foundry 2's gap is about 10 px). The page question anymap182-2 offered: A, offer a gap only when an 18 px teleport crosses it from anywhere counted as lined up, gaps up to 16 px (the recommendation; its downside: gives up the 17-18 px gaps that would still cross after one wasted teleport); B, keep gaps up to 18 px, stand exactly on the end node and check with 18 px; C, leave it and add a test that records the stall.
+
+Ruling [Hong] (Q&A page, set anymap182, 2026-11-16 23:59 UTC): option A, with no note; the label of the option he picked, verbatim: "Offer a gap only when an 18 px teleport crosses it from anywhere counted as lined up (gaps up to 16 px)". Sources: SHARE `progress.md` (the line starting `Decision (Hong) (page, 2026-11-16 23:59 UTC, anymap182`), question bank QB293.
+
+In plain words: `RouteGraph.gap_launch` returns a launch point only when, from every x the planner counts as lined up on it, the shortest recorded sideways teleport (`shortest_side_teleport_px`, 18) reaches the far platform; otherwise the gap gets no crossing link and a route that needs it is "no path" when it is planned, not after retries. The 16 px is computed (`shortest_side_teleport_px - arrive_px`), not written in. The ends of such a gap still stop a teleport. The old fallback to exact A for gaps over 16 px (H103, amended 2026-11-15) goes. Plan: `docs/superpowers/plans/2026-11-17-p1-anymap.md` (Task 1; what the editor shows for such a gap is ANYMAP194-D2, there).
+
+Affects: `src/route/route_graph.py` (`gap_launch`, opened by this ruling) and the comment of `shortest_side_teleport_px` in `src/route/params.py`; re-pinned tests in `tests/route/test_platform_ends.py` and `tests/route/test_route_preview.py`; new tests.
+
+Cost if wrong: a map with a 17 or 18 px gap and no other way round cannot be walked; the cap follows the setting, so a longer measured shortest teleport widens it.
+
+Undo: Hong says so; the build's commit on `p1-anymap` (named here when built).
+
+Pointer: question bank QB293; H103 (the A2 amendment); `notes/ANYMAP181.md`, `notes/anymap182-d2.png` in the phase-1 workspace.
