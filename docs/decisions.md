@@ -2977,7 +2977,7 @@ Cost if wrong: small; if a later walk shows a rope or off-map fault it is raised
 
 Pointer: question bank QB267; `ledger-ROPE.md` (the line `QA answers (page, 16:22)`); H85, H88, H93.
 
-## H110 (2026-11-16): The walker adds sideways teleport links in its own route step by the 4 px landing rule, so a gap whose two sides differ by 3 or 4 px in height is crossed; the map editor's preview shows those links and its orphan check counts them (Hong's anymap182-1, option A; ANYMAP181-D1, QB292)
+## H111 (2026-11-16): The walker adds sideways teleport links in its own route step by the 4 px landing rule, so a gap whose two sides differ by 3 or 4 px in height is crossed; the map editor's preview shows those links and its orphan check counts them (Hong's anymap182-1, option A; ANYMAP181-D1, QB292)
 
 Context: the any-map audit ANYMAP181 (workspace `.superpowers/orchestrator/2026-10-21-phase1/notes/ANYMAP181.md`, finding 1) found that a gap between two platforms is crossable only when its two facing nodes are within 2 px in height, PathGraph's side-edge allowance (`edge_y_tolerance_level = 2`, `src/controller/controller.py:63`), though Hong's landing rule (H103) carries a sideways teleport onto a platform within 4 px. Fossil Foundry 2's one gap has a 2 px step, so it works there; a 3 or 4 px step gives "no path" (confirmed by running the planner on a test map; nothing run in the game). The page question anymap182-1 (set anymap182, not a blocker) offered: A, add teleport links in the walker's own route step from the 4 px rule (the recommendation; its stated downside: the editor's preview would not show them); B, raise the map's 2 px allowance to 4 px (changes every sideways link on every map and the editor's preview); C, leave it and write the limit down.
 
@@ -2993,7 +2993,7 @@ Undo: Hong says so; the build's commits on `p1-anymap` (named here when built).
 
 Pointer: question bank QB292; H103; `notes/ANYMAP181.md`, `notes/anymap182-qa-set.md`, `notes/anymap182-d1.png` in the phase-1 workspace; set file `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/anymap182.json`.
 
-## H111 (2026-11-16): A gap is offered only when an 18 px teleport crosses it from anywhere counted as lined up, so gaps over 16 px get no crossing (Hong's anymap182-2, option A; ANYMAP181-D2, QB293)
+## H112 (2026-11-16): A gap is offered only when an 18 px teleport crosses it from anywhere counted as lined up, so gaps over 16 px get no crossing (Hong's anymap182-2, option A; ANYMAP181-D2, QB293)
 
 Context: ANYMAP181's finding 2: the 3 px margin of H103's launch rule A2 exists only when the far platform is at most 16 px past the end of the near one (the reach 19, minus the 2 px the walker counts as lined up, minus 1 px for the shortest recorded teleport, 18 px). On a gap of 17 or 18 px a teleport from 2 px short of the end stops at the end, wasting one teleport; on 19 px an 18 px teleport never crosses and the leg gives up after 10 s (run with A2 applied in a test, not in the game; Fossil Foundry 2's gap is about 10 px). The page question anymap182-2 offered: A, offer a gap only when an 18 px teleport crosses it from anywhere counted as lined up, gaps up to 16 px (the recommendation; its downside: gives up the 17-18 px gaps that would still cross after one wasted teleport); B, keep gaps up to 18 px, stand exactly on the end node and check with 18 px; C, leave it and add a test that records the stall.
 

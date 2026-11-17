@@ -57,12 +57,12 @@ These are test cases, not things to fix by editing the map.
 - If no platform line is within 6 px, the walk ends at once with "the character is standing at (x, y), more than 6 px from any platform of the map; ending the run" (exit 10, `stop.json` reason `off_map`) instead of waiting for the leg timeout. (x, y) is the point the walker reads, 3 px below the dot's centre. The Route tab shows its usual exit-10 line, "Ended: the character was lost (exit 10)."; the console box shows the walker's reason line and then the usual `stopped: off_map` line that every stop prints (Hong, QB215; "Keep both lines", 2026-11-07).
 - While the position keeps changing (a fall, a knockback through the air) nothing is attached loosely and no key is sent, as before.
 
-## Gaps between platforms on any map (added 2026-11-17, Hong's anymap182, H110 and H111)
+## Gaps between platforms on any map (added 2026-11-17, Hong's anymap182, H111 and H112)
 
 The walk must work on maps other than Fossil Foundry 2. Two rules for gaps between platforms, both from the any-map audit (ANYMAP181) and Hong's answers:
 
-- A gap whose two facing sides differ by up to `side_teleport_land_dy_px` (4 px) in height is crossed by a sideways teleport, even where the map's own links (2 px allowance) do not join them: the walker's route step adds the teleport link by the landing rule of H103, and the map editor's preview shows it (H110).
-- A gap is offered only when the shortest recorded sideways teleport (18 px) crosses it from anywhere the planner counts as lined up, which is a gap of up to 16 px for Kanna; a wider gap is not crossed, and a route that needs it is "no path" (H111).
+- A gap whose two facing sides differ by up to `side_teleport_land_dy_px` (4 px) in height, where a facing end is marked as a platform end, is crossed by a sideways teleport, even where the map's own links (2 px allowance) do not join them: the walker's route step adds the teleport link by the landing rule of H103, and the map editor's preview shows it (H111).
+- A gap is offered only when the shortest recorded sideways teleport (18 px) crosses it from anywhere the planner counts as lined up, which is a gap of up to 16 px for Kanna; a wider gap is not crossed, and a route that needs it is "no path" (H112).
 
 Plan: `docs/superpowers/plans/2026-11-17-p1-anymap.md`. Not checkable on Fossil Foundry 2 (its gap is 10 px with a 2 px step): the simulator walks both on a made-up map.
 
