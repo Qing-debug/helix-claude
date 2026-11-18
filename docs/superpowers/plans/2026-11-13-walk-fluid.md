@@ -737,6 +737,8 @@ Between those moments: no key at all on the PC (every key is an extra key event 
 
 Done: the result is recorded; the setting is the number found (or 0); Hong is told through the orchestrator.
 
+Result (2026-11-18, run `walkfix-20261116b`, exit 0): 0 ms. Keys no later with no pause (146.671 pictures/s, residual p50 28.353 ms, p99 62.678 ms) than with 20 ms (44.62 and 44.667 pictures/s, p50 28.842 and 28.409 ms, p99 67.666 and 61.393 ms); Delivery PASS in all three. `THREAD_SLEEP_DURATION_S` stays 0.0; no code changed; recorded in H104 (b).
+
 ---
 
 ## Task 11: Docs: decisions entries and CLAUDE.md files (subtle: no; size: M)

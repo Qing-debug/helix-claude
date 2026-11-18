@@ -10,7 +10,7 @@ from collections import namedtuple
 # Constants
 MINIMAP_POSITION_RECALC_S = 22.0  # the minimap is searched for again after this many seconds (WALKFIX Task 8, QB283 2c)
 _monotonic = time.monotonic  # the clock of that re-find; a seam, so the tests fake it and not the global time.monotonic
-THREAD_SLEEP_DURATION_S = 0.0  # pause between pictures: none (Hong QB283 2b, lifts H80's 20 ms); Task 10B's key-timing check sets the smallest pause that keeps the keys on time, if one is needed
+THREAD_SLEEP_DURATION_S = 0.0  # pause between pictures: none (Hong QB283 2b, lifts H80's 20 ms); the key-timing check (Task 10B, 2026-11-18) found 0 ms: no pause is needed to keep the keys on time (H104 (b))
 FOREGROUND_CHECK_SLEEP_S = 5
 MINIMAP_DETECTION_RETRY_DELAY_S = 1
 WINDOW_HANDLE_RETRY_DELAY_S = 3
