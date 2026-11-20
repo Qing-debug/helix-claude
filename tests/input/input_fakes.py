@@ -110,7 +110,7 @@ def write_run(tmp_path: Path, commands, keys, *, faults=None, link_faults=(), po
 
 def focus_lost_row(seq: int) -> dict:
     """A commands.jsonl row for a command the sink lost focus during: every field None but seq, action and status."""
-    row = dict.fromkeys(COMMAND_KEYS)
+    row: dict[str, object] = {k: None for k in COMMAND_KEYS}
     row.update(seq=seq, action="tap", status="FOCUS_LOST", error="FOCUS_LOST")
     return row
 
