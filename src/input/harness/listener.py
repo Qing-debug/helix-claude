@@ -54,6 +54,7 @@ FLASHW_TIMERNOFG = 0x0000000C
 KEYS_FILE = "keys.jsonl"
 _STARTUP_TIMEOUT_S = 5.0
 
+
 def sink_rect(screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
     """(w, h, x, y) of the sink window: a quarter of the screen width (at least 600x300), centred, never off the
     top-left. ``wm geometry`` takes x/y after a ``+`` as pixels from the left / top of the screen (Tk wm docs)."""

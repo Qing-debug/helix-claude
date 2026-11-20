@@ -1,21 +1,29 @@
 """The bot's virtual-key tables live in a pure module, so the offline checkers never import listener.py (W0-4)."""
-import ast
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from src.input.harness import analyze, listener, vk_codes
 
-HARNESS = Path(vk_codes.__file__).parent
+REPO = Path(__file__).resolve().parents[2]
+
+LISTENER = "src.input.harness.listener"
 
 
-def _imported_modules(path: Path) -> set[str]:
-    """Every module a file names in an import statement, anywhere in it (also the ones inside functions)."""
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            names.add(node.module)
-    return names
+def _loaded_after_importing(module: str) -> set[str]:
+    """The names in `sys.modules` of a fresh interpreter that did nothing but `import src.input.harness.<module>`.
+
+    A child process, because this process has already imported the listener. `-I` drops the current directory from
+    `sys.path`, so the repo root is added by hand. It sees every way a module can be reached (`from x import listener`,
+    a relative import, an import inside a function that runs at import time), which a scan of the source does not.
+    """
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import src.input.harness." + module
+            + "; print('\\n'.join(sys.modules))")
+    done = subprocess.run([sys.executable, "-I", "-c", code, str(REPO)], capture_output=True, text=True, timeout=120,
+                          check=True)
+    return set(done.stdout.split())
 
 
 def test_the_tables_are_one_object_under_every_name():
@@ -25,11 +33,12 @@ def test_the_tables_are_one_object_under_every_name():
     assert analyze.BOT_VKS is vk_codes.BOT_VKS
 
 
-def test_analyze_does_not_import_the_listener():
-    modules = _imported_modules(HARNESS / "analyze.py")
-    assert "src.input.harness.listener" not in modules
-    assert "src.input.harness.vk_codes" in modules
+@pytest.mark.parametrize("module", ["analyze", "realism", "vk_codes"])
+def test_the_offline_checkers_do_not_load_the_listener(module):
+    assert LISTENER not in _loaded_after_importing(module)
 
 
-def test_the_vk_module_imports_no_windows_api():
-    assert "ctypes" not in _imported_modules(HARNESS / "vk_codes.py")
+@pytest.mark.parametrize("module", ["analyze", "vk_codes"])
+def test_these_load_no_windows_api(module):
+    # realism is left out: it imports numpy, which loads ctypes
+    assert "ctypes" not in _loaded_after_importing(module)

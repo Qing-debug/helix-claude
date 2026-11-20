@@ -22,7 +22,7 @@ from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done, Key, encode_play
 from src.input.timing import Sample, TimingModel, TimingType
 
-from input_fakes import FakeClock, patch_clock, pong  # tests/input/input_fakes.py
+from input_fakes import COMMAND_KEYS, FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 JSONL = ("commands.jsonl", "pongs.jsonl", "link_faults.jsonl", "faults.jsonl")
 
@@ -102,6 +102,7 @@ def test_success_row_has_c5_fields_from_the_record():
     rec = _record()
     row = command_row(4, "tap", 999, Success(rec))
     assert list(row) == list(COMMAND_FIELDS)
+    assert tuple(COMMAND_KEYS) == tuple(COMMAND_FIELDS)  # input_fakes keeps its own copy of the list (W0R2 M-3)
     assert list(COMMAND_FIELDS) == ["seq", "action", "intended_ms", "stimulus_ns", "steps", "samples", "reaction_ms",
                                     "reaction_index", "waited_ms", "sent_ns", "written_ns", "accepted_ns", "done_ns",
                                     "t0_us", "late_us", "status", "error", "bytes"]
@@ -178,7 +179,9 @@ def test_open_creates_every_file_empty_and_lines_end_in_lf(tmp_path, fake_clock)
 
 def test_pongs_reach_pongs_jsonl_once_each_in_order_with_flags_rebuilt(tmp_path, fake_clock):
     link = FakeLink()
-    a, b, c = pong(board_us=123_456, itvl=12), pong(board_us=123_456, itvl=9, authenticated=True), pong(board_us=123_456, bonded=False, subscribed=False)
+    a = pong(board_us=123_456, itvl=12)
+    b = pong(board_us=123_456, itvl=9, authenticated=True)
+    c = pong(board_us=123_456, bonded=False, subscribed=False)
     with _writer(tmp_path, link) as w:
         link.pongs += [(100, a), (200, b)]
         w.drain()
