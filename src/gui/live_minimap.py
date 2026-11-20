@@ -113,7 +113,7 @@ class LiveMinimap:
             return
         controller = self._gui.controller
         csv = controller.agent.CSVParser.CSV_file if controller is not None else None
-        if csv is not self._csv:  # a new object per load (controller.py:121): a reload of the same file reads again
+        if csv is not self._csv:  # a new object per load (MapleAgent.setCSV): a reload of the same file reads again
             self._csv = csv
             self._marks = _readMarks(csv)
         s = DEFAULT_SCALE

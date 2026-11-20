@@ -115,7 +115,7 @@ def test_minimap_reads_nodes_again_only_when_the_csv_changes(make_minimap, monke
         minimap.draw()
     assert reads == [str(FIXTURE_MAP)]
     parser = gui.controller.agent.CSVParser
-    parser.CSV_file = Path(str(FIXTURE_MAP))  # Load Map again, the same file: a new object (controller.py:121)
+    parser.CSV_file = Path(str(FIXTURE_MAP))  # Load Map again, the same file: a new object (MapleAgent.setCSV)
     minimap.draw()
     minimap.draw()
     assert reads == [str(FIXTURE_MAP)] * 2 and len(_items(minimap.canvas, "node")) == 21
