@@ -189,6 +189,25 @@ def test_missing_file(tmp_path):
     assert CSVParser().parseCSV([], {}) == Failure("CSV file is a None object, failed to load CSV file.")
 
 
+@pytest.mark.parametrize("separator", ["/", "\\"])
+def test_editor_reads_a_path_with_a_trailing_separator_as_it_always_did(tmp_path, separator):
+    """The old editor opened `Path(path)`, which drops a trailing separator; `open("map.csv/")` is [Errno 22] (W03R m1)."""
+    path = _csv(tmp_path, HEADER + OK_ROW)
+    result = read_editor_nodes(str(path) + separator)
+    assert result == _editor(path)
+    assert isinstance(result, Success)
+
+
+def test_success_message_is_printed_once_on_success_and_not_on_failure(tmp_path, capsys):
+    message = "Map file matches the expected format.\n"
+    good = _csv(tmp_path, HEADER + OK_ROW)
+    assert isinstance(_runtime(good)[0], Success)
+    assert capsys.readouterr().out.count(message) == 1
+    bad = _csv(tmp_path, HEADER + "blue_node,oops\n")
+    assert isinstance(_runtime(bad)[0], Failure)
+    assert message not in capsys.readouterr().out
+
+
 # --- row shape ------------------------------------------------------------------------------------------------------
 
 WRONG_COUNT = ("cells, expected 6 (nodetype, pos_in_minimap, can_fall, fall_dist_exceeds_vertical_tp, "

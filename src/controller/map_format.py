@@ -231,7 +231,7 @@ def load_rows(
     if not Path(path).exists():
         return Failure(not_found_message(path))
     try:
-        with open(path, "r", newline=open_line_mode) as file:
+        with open(Path(path), "r", newline=open_line_mode) as file:
             if pre_check is None:
                 rows, problems = read_rows(file)
             else:
