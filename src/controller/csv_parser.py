@@ -1,7 +1,6 @@
 from returns.result import Failure, Success, Result
 from returns.pipeline import is_successful
-from src.controller.map_format import (BLUE_NODE, HEADER, MapRow, no_nodes_message, not_found_message,
-                                       problems_message, read_rows, unreadable_message)
+from src.controller.map_format import BLUE_NODE, HEADER, MapRow, load_rows
 from src.controller.node import Node
 from typing import Dict
 
@@ -32,17 +31,8 @@ class CSVParser:
         if self.CSV_file is None:
             return Failure("CSV file is a None object, failed to load CSV file.")
 
-        if not self.CSV_file.exists():
-            return Failure(not_found_message(self.CSV_file))
-
-        try:
-            with open(self.CSV_file) as csv_file:
-                rows, problems = read_rows(csv_file)
-        except (OSError, UnicodeDecodeError) as e:
-            return Failure(unreadable_message(self.CSV_file, e))
-        if problems:
-            return Failure(problems_message(self.CSV_file, problems))
-        if not rows:
-            return Failure(no_nodes_message(self.CSV_file))  # a header (and #/blank lines) but no node rows (H19)
-        print("Map file matches the expected format.")
-        return Success(rows)
+        # No pre-check, and open(path)'s own line-end handling (newline=None): the runtime parser's way of reading.
+        res_rows = load_rows(self.CSV_file, None, None)
+        if is_successful(res_rows):
+            print("Map file matches the expected format.")
+        return res_rows

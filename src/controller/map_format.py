@@ -3,19 +3,24 @@
 Shared by the runtime parser (`csv_parser.CSVParser`) and the editor's reader and writer (`map_csv`). It holds what
 both sides do identically: the header, the node types, the boolean cells, the `(x, y)` position cell, the check of a
 whole file against them with the messages the user sees (`read_rows`, `problems_message`, `no_nodes_message`;
-decisions H16 and H19) and the order the editor writes rows in (which the editor's edge preview must copy,
+decisions H16 and H19), the loading of a file through that check (`load_rows`: exists, open, `read_rows`, problems, no
+nodes) and the order the editor writes rows in (which the editor's edge preview must copy,
 because edge ties go to the first-inserted node). What still differs between the readers (the editor's strict
-`# minimap_size=` line, the runtime's message for a `None` path) stays in their own modules;
-tests/controller/test_map_csv_characterization.py pins both.
+`# minimap_size=` line, the runtime's message for a `None` path, how each opens the file: `load_rows` takes the mode)
+stay in their own modules; tests/controller/test_map_csv_characterization.py and test_map_reader_line_endings.py pin
+both.
 
 Pure: it builds no `Node` or `EditorNode`, so importing or calling it never touches `Node.node_id_counter`.
 """
 
 import ast
 import csv
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, TypeGuard
+
+from returns.result import Failure, Result, Success
 
 HEADER: tuple[str, ...] = (
     "nodetype",
@@ -202,3 +207,43 @@ def no_nodes_message(path: object) -> str:
 
 def unreadable_message(path: object, error: Exception) -> str:
     return f"The map file {path} could not be read, so it was not loaded: {error}"
+
+
+def load_rows(
+    path: str | Path,
+    pre_check: Callable[[list[str]], str | None] | None,
+    open_line_mode: str | None,
+) -> Result[list[MapRow], str]:
+    """Open a map file and check it with `read_rows`: its node rows, or the message the user sees (decisions H16, H19).
+
+    A `Failure` holds `not_found_message`, `unreadable_message` (it cannot be opened or decoded), `problems_message`
+    (`read_rows` found problems) or `no_nodes_message` (a header but no node rows). The messages print `path` as given,
+    so the editor's `str` stays a `str` and the runtime's `Path` a `Path`.
+
+    `open_line_mode` is `open`'s `newline` argument, which each reader keeps as it was: the runtime parser passes `None`
+    (line ends become "\\n"), the editor `""` (line ends kept; `read_rows` strips them).
+
+    `pre_check(lines)`, if given, runs on every line before `read_rows` and returns one problem line or None. A problem
+    is reported alone, in `problems_message`'s wording (the editor's `# minimap_size=` check). With a `pre_check` the
+    whole file is read first; without one `read_rows` takes the lines as it asks for them, so a bad header ends the
+    read there, as the runtime parser always did.
+    """
+    if not Path(path).exists():
+        return Failure(not_found_message(path))
+    try:
+        with open(path, "r", newline=open_line_mode) as file:
+            if pre_check is None:
+                rows, problems = read_rows(file)
+            else:
+                lines = file.readlines()
+                problem = pre_check(lines)
+                if problem is not None:
+                    return Failure(problems_message(path, [problem]))
+                rows, problems = read_rows(lines)
+    except (OSError, UnicodeDecodeError) as error:
+        return Failure(unreadable_message(path, error))
+    if problems:
+        return Failure(problems_message(path, problems))
+    if not rows:
+        return Failure(no_nodes_message(path))  # a header (and #/blank lines) but no node rows (H19)
+    return Success(rows)
