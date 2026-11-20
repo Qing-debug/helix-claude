@@ -107,3 +107,54 @@ def test_map_editor_shows_lost_over_the_frozen_picture(make_gui):
     MapEditor._updateCanvas(editor)  # type: ignore[arg-type]
     assert not canvas.find_withtag(LOST_TAG) and canvas.image is not first_image  # type: ignore[attr-defined]
     assert [ms for ms, _ in scheduled] == [10, 10, 10]
+
+
+def _editor(gui, shared, canvas_class=tk.Canvas):
+    """A stand-in `MapEditor` for `_updateCanvas` (a real canvas, `after` only records)."""
+    w, h = FRAME_W * 2, FRAME_H * 2  # RENDER_SCALE 2
+    canvas = canvas_class(gui.gui, width=w, height=h)
+    scheduled = []
+    editor = SimpleNamespace(window=SimpleNamespace(winfo_exists=lambda: True, after=lambda ms, fn: scheduled.append((ms, fn))),
+                             minimap_canvas=canvas, minimap_canvas_width=w, minimap_canvas_height=h,
+                             minimap_canvas_bg_img_id=None, sharedInfo=shared, _updateCanvas=lambda: None)
+    return editor, canvas, scheduled
+
+
+def test_map_editor_draws_with_the_lock_free(make_gui):
+    """G9-217: the editor's redraw reads the frame under `minimap_frame_lock` and makes every Tk call after releasing it
+    (src/gui/CLAUDE.md), so the vision thread's publish never waits on a Tk call."""
+    gui, shared, _ = make_gui(frame=_frame(), route_tab_factory=None)
+    lock_free_at = []
+
+    class RecordingCanvas(tk.Canvas):
+        def create_image(self, *args, **kwargs):  # type: ignore[override]
+            lock_free_at.append(("create_image", _lock_is_free(shared)))
+            return super().create_image(*args, **kwargs)
+
+        def itemconfig(self, *args, **kwargs):  # type: ignore[override]
+            lock_free_at.append(("itemconfig", _lock_is_free(shared)))
+            return super().itemconfig(*args, **kwargs)
+
+    editor, _, _ = _editor(gui, shared, RecordingCanvas)
+    MapEditor._updateCanvas(editor)  # type: ignore[arg-type]
+    shared.minimap_frame = _frame(200)
+    MapEditor._updateCanvas(editor)  # type: ignore[arg-type]
+    assert lock_free_at == [("create_image", True), ("itemconfig", True)]
+
+
+def test_map_editor_redraw_that_raises_frees_the_lock_and_schedules_the_next_pass(make_gui, monkeypatch):
+    """G9-217: one bad redraw does not end the editor's 10 ms loop (as gui.py's `_updateCanvas`), and the lock is free."""
+    import src.gui.map_editor as map_editor
+
+    gui, shared, _ = make_gui(frame=_frame(), route_tab_factory=None)
+
+    def broken_photo(_image):
+        raise RuntimeError("bad frame")
+
+    monkeypatch.setattr(map_editor.ImageTk, "PhotoImage", broken_photo)
+    editor, _, scheduled = _editor(gui, shared)
+    try:
+        MapEditor._updateCanvas(editor)  # type: ignore[arg-type]
+    except RuntimeError:
+        pass
+    assert [ms for ms, _ in scheduled] == [10] and _lock_is_free(shared)

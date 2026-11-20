@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image, ImageTk
-from src.gui.minimap_lost import clear_lost, show_lost
+from src.gui.minimap_lost import clear_lost, read_minimap, show_lost
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
@@ -1731,17 +1731,17 @@ class MapEditor:
     def _updateCanvas(self):
         """
         Pull the latest minimap frame and draw it. Schedules itself every 10ms
-        via tk.after, matching MapleGUI._updateCanvas's cadence. Stops when the
-        editor window has been destroyed.
+        via tk.after, matching MapleGUI._updateCanvas's cadence, also after a
+        pass that raised. Stops when the editor window has been destroyed.
         """
         if not self.window.winfo_exists():
             return  # window destroyed — stop the loop
-        if self.minimap_canvas is None:
-            self.window.after(10, self._updateCanvas)
-            return
-        with self.sharedInfo.minimap_frame_lock:
-            frame = self.sharedInfo.minimap_frame
-            lost = bool(getattr(self.sharedInfo, "minimap_lost", False))
+        try:
+            if self.minimap_canvas is None:
+                return  # the finally below still schedules the next pass
+            # Read the reference under the lock and draw outside it: the lock is never held across a Tk call (G9-217).
+            # The vision thread stores a new array for every frame (src/vision/vision.py:87), so this one is not mutated.
+            frame, lost = read_minimap(self.sharedInfo)
             if frame is not None and not lost:
                 pil_minimap = Image.fromarray(frame)
                 if RENDER_SCALE != 1:
@@ -1759,8 +1759,10 @@ class MapEditor:
                     self.minimap_canvas.itemconfig(
                         self.minimap_canvas_bg_img_id, image=minimap_img
                     )
-        if frame is not None and lost:  # the capture lost the minimap: the message over the frozen picture (VIS162-FIX)
-            show_lost(self.minimap_canvas, self.minimap_canvas_width, self.minimap_canvas_height)
-        else:
-            clear_lost(self.minimap_canvas)
-        self.window.after(10, self._updateCanvas)
+            if frame is not None and lost:  # the capture lost the minimap: the message over the frozen picture (VIS162-FIX)
+                show_lost(self.minimap_canvas, self.minimap_canvas_width, self.minimap_canvas_height)
+            else:
+                clear_lost(self.minimap_canvas)
+        finally:
+            # Schedule the next frame, also after a body that raised: one bad frame does not end the loop (as gui.py's)
+            self.window.after(10, self._updateCanvas)
