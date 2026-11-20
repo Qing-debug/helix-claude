@@ -21,12 +21,12 @@ VectorInfo = namedtuple("VectorInfo", ["dom_direction", "node_tuple"])
 
 # One row per edge direction, in the order the edges are built (left, right, up, down). `axis` is the coordinate the
 # direction runs along (0 = x, 1 = y); `sign` is which way it points in minimap pixels, where y grows downward (up is -1).
-_Direction = namedtuple("_Direction", ["name", "axis", "sign"])
+_Direction = namedtuple("_Direction", ["axis", "sign"])
 _DIRECTIONS = (
-    _Direction("left", 0, -1),
-    _Direction("right", 0, 1),
-    _Direction("up", 1, -1),
-    _Direction("down", 1, 1),
+    _Direction(0, -1),   # left
+    _Direction(0, 1),    # right
+    _Direction(1, -1),   # up
+    _Direction(1, 1),    # down
 )
 
 class PathGraph:
