@@ -9,7 +9,7 @@ import pytest
 
 from src.input import actions
 from src.input.harness import realism
-from src.input.harness.listener import VK_BY_KEY
+from src.input.harness.vk_codes import VK_BY_KEY
 from src.input.protocol import Key
 from src.input.timing import TimingModel, TimingType
 

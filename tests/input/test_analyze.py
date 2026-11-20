@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from src.input.harness import analyze
-from src.input.harness.listener import VK_BY_KEY
+from src.input.harness.vk_codes import VK_BY_KEY
 from src.input.protocol import Key
 
 from input_fakes import focus_lost_row, write_jsonl, write_run  # tests/input/input_fakes.py
