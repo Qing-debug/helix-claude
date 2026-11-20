@@ -39,10 +39,7 @@ class CharacterClass(ABC):
 
 
 class Kanna(CharacterClass):
-    # Source: pre-existing measurement in the prior commented-out
-    # `tp_max_traversal_dist = (19, 23)  # (x, y)`. Split into two
-    # named attributes so PathGraph can consume just the horizontal
-    # axis without tuple-indexing.
+    # Split from one (x, y) tuple so PathGraph reads each axis by name.
     movement_type = "teleport"
     max_horizontal_traversal_dist = 19
     max_vertical_traversal_dist = 23
