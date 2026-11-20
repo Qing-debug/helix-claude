@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import io
-import json
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,6 +12,8 @@ from src.input.harness import realism
 from src.input.harness.listener import VK_BY_KEY
 from src.input.protocol import Key
 from src.input.timing import TimingModel, TimingType
+
+from input_fakes import focus_lost_row, write_run  # tests/input/input_fakes.py
 
 MS = 1_000_000
 SPACING = 5_000 * MS            # stimulus_ns of command i (0-based); longer than any action + reaction
@@ -61,12 +61,6 @@ def raw_row(seq: int, steps: list[list[int]], samples: list[dict], **kw) -> dict
     return row
 
 
-def focus_lost_row(seq: int) -> dict:
-    row = {k: None for k in plan_row(1, actions.tap(model(), Key.E))}
-    row.update(seq=seq, action="tap", status="FOCUS_LOST", error="FOCUS_LOST")
-    return row
-
-
 def key(qpc: int, vk: int, down: bool, *, repeat: bool = False) -> dict:
     return {"qpc_ns": qpc, "vk": vk, "down": down, "injected": False, "tick_ms": qpc // MS, "repeat": repeat}
 
@@ -81,20 +75,6 @@ def events_for(row: dict, shift: dict[int, int] | None = None) -> list[dict]:
                 out.append(key(t + (shift or {}).get(len(out), 0), VK[k], bool(mask & k)))
         prev = mask
     return out
-
-
-def write_jsonl(path: Path, rows) -> None:
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-
-
-def write_run(tmp_path: Path, commands, keys, *, pongs=None, name: str = "run") -> Path:
-    run = tmp_path / name
-    run.mkdir()
-    write_jsonl(run / "commands.jsonl", commands)
-    write_jsonl(run / "keys.jsonl", sorted(keys, key=lambda e: e["qpc_ns"]))
-    if pongs is not None:
-        write_jsonl(run / "pongs.jsonl", pongs)
-    return run
 
 
 def soak(teleports: int = 1_000, sequences: int = 400, walks: int = 50, seed: int = 7) -> list[dict]:

@@ -12,6 +12,8 @@ from src.input.harness import analyze
 from src.input.harness.listener import VK_BY_KEY
 from src.input.protocol import Key
 
+from input_fakes import focus_lost_row, write_jsonl, write_run  # tests/input/input_fakes.py
+
 MS = 1_000_000
 S = 1_000 * MS
 H = 3_600 * S
@@ -51,12 +53,6 @@ def failed_cmd(seq: int, error: str = "ACK_TIMEOUT", *, stim: int | None = None)
     return row
 
 
-def focus_lost_row(seq: int) -> dict:
-    row = {k: None for k in ok_cmd(seq)}
-    row.update(seq=seq, action="tap", status="FOCUS_LOST", error="FOCUS_LOST")
-    return row
-
-
 def key(qpc: int, vk: int, down: bool, *, repeat: bool = False, injected: bool = False) -> dict:
     return {"qpc_ns": qpc, "vk": vk, "down": down, "injected": injected, "tick_ms": qpc // MS, "repeat": repeat}
 
@@ -76,26 +72,6 @@ def events_for(row: dict, latency: int = LATENCY) -> list[dict]:
 def perfect(n: int, spacing: int = SPACING) -> tuple[list[dict], list[dict]]:
     cmds = [ok_cmd(i + 1, stim=i * spacing) for i in range(n)]
     return cmds, [e for c in cmds for e in events_for(c)]
-
-
-def write_jsonl(path: Path, rows) -> None:
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-
-
-def write_run(tmp_path: Path, commands, keys, *, faults=None, link_faults=(), pongs=None) -> Path:
-    """faults=None leaves faults.jsonl absent; link_faults=None leaves link_faults.jsonl absent; pongs=None leaves
-    pongs.jsonl absent."""
-    run = tmp_path / "run"
-    run.mkdir()
-    write_jsonl(run / "commands.jsonl", commands)
-    write_jsonl(run / "keys.jsonl", sorted(keys, key=lambda e: e["qpc_ns"]))
-    if faults is not None:
-        write_jsonl(run / "faults.jsonl", faults)
-    if link_faults is not None:
-        write_jsonl(run / "link_faults.jsonl", link_faults)
-    if pongs is not None:
-        write_jsonl(run / "pongs.jsonl", [{"qpc_ns": t, "board_us": t // 1000} for t in pongs])
-    return run
 
 
 def fault(injected: int | None, reported: int | None, kind: str = "bluetooth_off_on", error="LINK_LOST") -> dict:
@@ -694,7 +670,7 @@ def reset_run(tmp_path, *, gated_ms: float, worst_ms: float, pongs=True, launch_
            "launch_ns": launch if launch_ns == "default" else launch_ns, "fault_seen_ns": None, "failure_ns": reported}
     cmds, keys = perfect(8)
     return write_run(tmp_path, cmds, keys, faults=[row], link_faults=[{"qpc_ns": first_report, "error": "LINK_LOST"}],
-                     pongs=[launch - 5 * MS, pong] if pongs else None), row
+                     pongs=[{"qpc_ns": t, "board_us": t // 1000} for t in (launch - 5 * MS, pong)] if pongs else None), row
 
 
 @pytest.mark.parametrize("gated_ms, worst_ms, verdict", [

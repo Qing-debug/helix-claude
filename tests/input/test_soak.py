@@ -19,35 +19,20 @@ from src.input.harness.soak import (COMMAND_FIELDS, FOCUS_LOST, FOCUS_RECHECKS, 
                                     plan_mix, pong_flags, run_command, run_soak, sample_counts)
 from src.input.input_layer import ActionRecord
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Key, Pong, encode_play
+from src.input.protocol import Accepted, Done, Key, encode_play
 from src.input.timing import Sample, TimingModel, TimingType
+
+from input_fakes import FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 JSONL = ("commands.jsonl", "pongs.jsonl", "link_faults.jsonl", "faults.jsonl")
 
 
 # ---- fakes ---------------------------------------------------------------------------------
 
-class FakeClock:
-    """perf_counter_ns stand-in; sleep() advances it."""
-
-    def __init__(self, start_ns=1_000_000_000):
-        self.now = start_ns
-        self.sleeps = []
-
-    def clock(self):
-        self.now += 1_000  # every read moves 1 us, so stamps taken in order are strictly increasing
-        return self.now
-
-    def sleep(self, s):
-        self.sleeps.append(s)
-        self.now += int(s * 1e9)
-
-
 @pytest.fixture
 def fake_clock(monkeypatch):
     fc = FakeClock()
-    monkeypatch.setattr(soak, "_clock", fc.clock)
-    monkeypatch.setattr(soak, "_sleep", fc.sleep)
+    patch_clock(monkeypatch, fc, soak)
     return fc
 
 
@@ -85,11 +70,6 @@ class FakeSink:
         if self.back_on is not None and len(self.brings) >= self.back_on:
             self.away = False
         return self.sink_is_foreground()
-
-
-def _pong(bonded=True, encrypted=True, authenticated=False, subscribed=True, itvl=12, mtu=247):
-    return Pong(seq=1, itvl_units=itvl, latency=0, timeout_units=100, mtu=mtu, bonded=bonded,
-                encrypted=encrypted, authenticated=authenticated, subscribed=subscribed, board_us=123_456)
 
 
 def _record(seq=3, reaction=True, walk_ms=None):
@@ -187,7 +167,7 @@ def test_open_creates_every_file_empty_and_lines_end_in_lf(tmp_path, fake_clock)
             assert (run / name).exists(), name
         w.write_command(command_row(0, "tap", 1, Success(_record())))
         w.write_fault({"kind": "reset_board", "injected_ns": None})
-        link.pongs.append((5, _pong()))
+        link.pongs.append((5, pong(board_us=123_456)))
         link.fault_log.append((6, InputError.LINK_LOST))
         w.drain()
     for name in JSONL + ("session.json",):
@@ -198,7 +178,7 @@ def test_open_creates_every_file_empty_and_lines_end_in_lf(tmp_path, fake_clock)
 
 def test_pongs_reach_pongs_jsonl_once_each_in_order_with_flags_rebuilt(tmp_path, fake_clock):
     link = FakeLink()
-    a, b, c = _pong(itvl=12), _pong(itvl=9, authenticated=True), _pong(bonded=False, subscribed=False)
+    a, b, c = pong(board_us=123_456, itvl=12), pong(board_us=123_456, itvl=9, authenticated=True), pong(board_us=123_456, bonded=False, subscribed=False)
     with _writer(tmp_path, link) as w:
         link.pongs += [(100, a), (200, b)]
         w.drain()
@@ -210,7 +190,7 @@ def test_pongs_reach_pongs_jsonl_once_each_in_order_with_flags_rebuilt(tmp_path,
     assert rows[0] == {"qpc_ns": 100, "itvl_units": 12, "latency": 0, "timeout_units": 100, "mtu": 247,
                        "flags": 11, "board_us": 123_456}  # bonded + encrypted + subscribed
     assert [r["flags"] for r in rows] == [11, 15, 2]
-    assert pong_flags(_pong(bonded=False, encrypted=False, authenticated=True, subscribed=False)) == 4
+    assert pong_flags(pong(board_us=123_456, bonded=False, encrypted=False, authenticated=True, subscribed=False)) == 4
 
 
 def test_link_faults_logged_in_order_including_one_just_before_ctrl_c(tmp_path, fake_clock):
@@ -252,8 +232,8 @@ def test_ctrl_c_still_writes_session_json(tmp_path, fake_clock):
 
 def test_session_json_fields(tmp_path, fake_clock):
     with RunWriter(tmp_path / "r1", FakeLink(), seed=42, git_sha="deadbeef") as w:
-        w.record_connect(SessionInfo("AA:BB", 247, _pong(itvl=12)))
-        w.record_connect(SessionInfo("AA:BB", 185, _pong(itvl=24)))  # a reconnect does not overwrite
+        w.record_connect(SessionInfo("AA:BB", 247, pong(board_us=123_456, itvl=12)))
+        w.record_connect(SessionInfo("AA:BB", 185, pong(board_us=123_456, itvl=24)))  # a reconnect does not overwrite
         w.session["process_check"] = "answered y: MapleStory closed"
     s = _session(w.run_dir)
     assert s["run_id"] == "r1" and s["seed"] == 42 and s["git_sha"] == "deadbeef"
@@ -503,8 +483,8 @@ class DriverLink(FakeLink):
         if not self.connect_ok or (self.connect_fails_after is not None and self.connects > self.connect_fails_after):
             return Failure("no device named 'Guiness' found")
         self.connected = True
-        self.pongs.append((self.clock.clock(), _pong()))
-        return Success(SessionInfo("AA:BB", 247, _pong()))
+        self.pongs.append((self.clock.clock(), pong(board_us=123_456)))
+        return Success(SessionInfo("AA:BB", 247, pong(board_us=123_456)))
 
     def close(self):
         self.events.append("close")
@@ -541,8 +521,7 @@ class DriverSink(FakeSink):
 
 @pytest.fixture
 def driver_clock(monkeypatch, fake_clock):
-    monkeypatch.setattr(input_layer, "_clock", fake_clock.clock)
-    monkeypatch.setattr(input_layer, "_sleep", fake_clock.sleep)
+    patch_clock(monkeypatch, fake_clock, input_layer)
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     return fake_clock
 

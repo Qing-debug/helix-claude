@@ -15,7 +15,7 @@ from src.input.harness.session_starts import (BT_OFF_SECONDS, PLAN, STARTS_FIELD
 from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done, Key
 
-from input_fakes import FakeClock, pong  # tests/input/input_fakes.py
+from input_fakes import FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 S = 1_000_000_000
 VK_E = listener.VK_BY_KEY[Key.E]
@@ -26,9 +26,7 @@ VK_E = listener.VK_BY_KEY[Key.E]
 @pytest.fixture
 def clock(monkeypatch):
     fc = FakeClock()
-    for mod in (session_starts, soak):
-        monkeypatch.setattr(mod, "_clock", fc.clock)
-        monkeypatch.setattr(mod, "_sleep", fc.sleep)
+    patch_clock(monkeypatch, fc, session_starts, soak)
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     return fc
 

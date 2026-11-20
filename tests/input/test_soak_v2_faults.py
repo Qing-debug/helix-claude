@@ -14,7 +14,7 @@ from src.input.harness import faults, soak
 from src.input.link import InputError, SendReport, SessionInfo
 from src.input.protocol import Accepted, Done
 
-from input_fakes import FakeClock, pong  # tests/input/input_fakes.py
+from input_fakes import FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 S = 1_000_000_000
 ARGV = ["--commands", "1000", "--short", "--seed", "42", "--faults", "reset_board=5,bluetooth_off_on=5"]
@@ -82,9 +82,7 @@ def _setup(monkeypatch, tmp_path):
     clock = FakeClock()
     link = Link(clock)
     calls = []
-    for mod in (soak, input_layer):
-        monkeypatch.setattr(mod, "_clock", clock.clock)
-        monkeypatch.setattr(mod, "_sleep", clock.sleep)
+    patch_clock(monkeypatch, clock, soak, input_layer)
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     monkeypatch.setattr(soak, "_new_link", lambda: link)
     monkeypatch.setattr(soak, "_start_sink", lambda run_dir: Sink())
