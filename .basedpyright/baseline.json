@@ -122,22 +122,6 @@
                     "endColumn": 22,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 74,
-                    "endColumn": 84,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportInvalidTypeForm",
-                "range": {
-                    "startColumn": 135,
-                    "endColumn": 145,
-                    "lineCount": 1
-                }
             }
         ],
         "./src/controller/node.py": [
