@@ -19,6 +19,16 @@ class Path(list):
 AxisAngleThreshold = namedtuple("AxisAngleThreshold", ["min_angle", "max_angle"]) #creates an immutable data structure - we can think of it as a class with only field attributes, no methods.
 VectorInfo = namedtuple("VectorInfo", ["dom_direction", "node_tuple"])
 
+# One row per edge direction, in the order the edges are built (left, right, up, down). `axis` is the coordinate the
+# direction runs along (0 = x, 1 = y); `sign` is which way it points in minimap pixels, where y grows downward (up is -1).
+_Direction = namedtuple("_Direction", ["name", "axis", "sign"])
+_DIRECTIONS = (
+    _Direction("left", 0, -1),
+    _Direction("right", 0, 1),
+    _Direction("up", 1, -1),
+    _Direction("down", 1, 1),
+)
+
 class PathGraph:
     def __init__(self, node_map, edge_y_alignment_allowance, edge_x_alignment_allowance, max_horizontal_traversal_dist, max_vertical_traversal_dist):
         self.node_map = node_map #used to build the graph
@@ -111,7 +121,7 @@ class PathGraph:
             nxt_x_px, nxt_y_px = nxt.minimap_position
 
             x_component = nxt_x_px - curr_x_px
-            y_component = (-nxt_y_px) - (-curr_y_px) #account for top-left as origin. The graph uses bottom-left as origin, but the image uses top_left as origin. By doing this, we get the correct vector direction relative to the image.
+            y_component = (-nxt_y_px) - (-curr_y_px) #minimap pixels have a top-left origin (y grows downward); negate y to get the vector in a bottom-left frame, where up is positive, for atan2
 
             angle_vec = math.degrees(math.atan2(y_component, x_component))
 
@@ -175,8 +185,8 @@ class PathGraph:
         """
         Create edges between nodes in the graph based on their spatial relationships.
 
-        This method orchestrates the creation of all edges in the graph by calling specialized
-        edge creation methods for each direction (left, right, up, down). It performs several
+        This method creates all edges in the graph with one `_findClosestNode` call per node and direction,
+        in the order of `_DIRECTIONS` (left, right, up, down). It performs several
         validation checks before proceeding with edge creation:
         1. Validates that character node parameters are consistent
         2. Ensures the node map is not empty
@@ -207,207 +217,67 @@ class PathGraph:
         if set(self.node_map.values()) != set(self.graph.nodes()):
             return Failure(f"mismatch between nodes in node_map ({len(self.node_map.values())}) and nodes in graph ({len(set(self.graph.nodes()))}). node_map should always contain all nodes in the graph.")
 
-        create_edge_methods = [self._createLeftEdges, self._createRightEdges, self._createUpEdges, self._createDownEdges]
-        args = {"is_for_character_node": is_for_character_node, "char_node": char_node} if is_for_character_node else {}
-        for createEdgeMethod in create_edge_methods:
-            create_edge_res = createEdgeMethod(**args)
-            if not is_successful(create_edge_res):
-                return create_edge_res
-        return Success(None)
-
-    def _createLeftEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
-
         source_nodes = [char_node] if is_for_character_node else self.node_map.values()
-
-        for curr_node in source_nodes:
-            closest = self._findClosestLeftNode(curr_node)
-            if closest is not None:
-                abs_dist = abs(curr_node.minimap_position[0] - closest.minimap_position[0])
-                self.graph.add_edge(curr_node, closest, weight=abs_dist)
-
+        for direction in _DIRECTIONS:
+            for curr_node in source_nodes:
+                closest = self._findClosestNode(curr_node, direction)
+                if closest is not None:
+                    axis = direction.axis
+                    abs_dist = abs(curr_node.minimap_position[axis] - closest.minimap_position[axis])
+                    self.graph.add_edge(curr_node, closest, weight=abs_dist)
         return Success(None)
 
-    def _findClosestLeftNode(self, curr_node: Node):
+    def _findClosestNode(self, curr_node: Node, direction: _Direction):
         """
-        Find the closest node to the left of the current node within a vertical alignment threshold.
+        Find the closest node to the current node in one direction (left, right, up or down).
 
         This method searches through all nodes in the node map to find the closest node that:
-        1. Is positioned to the left of the current node (has a smaller x-coordinate)
-        2. Is approximately at the same vertical level (y-coordinate within edge_y_alignment_allowance)
-        3. Is within max_horizontal_traversal_dist on the x-axis (character-class horizontal reach gate)
+        1. Lies on the `direction` side of the current node along the direction's axis (x for left and right, y for
+           up and down; y grows downward since the origin is top-left, so up is a smaller y)
+        2. Is within the reach along that axis (max_horizontal_traversal_dist on the x-axis for left and right,
+           max_vertical_traversal_dist on the y-axis for up and down: the character-class reach gate)
+        3. Is approximately level across the other axis (within edge_y_alignment_allowance for left and right,
+           edge_x_alignment_allowance for up and down)
+        4. Is not the same node as the current node (up and down)
+        5. Up and down only: passes _isVerticalEdgeValid (the platform-edge rule), checked last: a candidate the
+           character can't teleport to is skipped, so a farther valid node can win over a nearer invalid one
+           (decision H17)
+
+        Among equally close candidates the first one in node_map order wins (strict `>`), so node_map insertion
+        order can change the edges.
 
         Args:
             curr_node (Node): The reference node to search from
+            direction (_Direction): One row of `_DIRECTIONS`
 
         Returns:
-            Node or None: The closest qualifying node to the left, or None if no suitable node is found
+            Node or None: The closest qualifying node, or None if no suitable node is found
         """
+        axis = direction.axis
+        vertical = axis == 1
+        if vertical:
+            reach, allowance = self.max_vertical_traversal_dist, self.edge_x_alignment_allowance
+        else:
+            reach, allowance = self.max_horizontal_traversal_dist, self.edge_y_alignment_allowance
+
         closest = None
-        curr_node_x_pos, curr_node_y_pos = curr_node.minimap_position
+        curr_along = curr_node.minimap_position[axis]
+        curr_across = curr_node.minimap_position[1 - axis]
 
         for next_node in self.node_map.values():
-            next_node_x_pos, next_node_y_pos = next_node.minimap_position
+            if vertical and curr_node == next_node: #ignore if same node
+                continue
+            next_along = next_node.minimap_position[axis]
+            next_across = next_node.minimap_position[1 - axis]
             # Distance heuristic only — does NOT detect terrain gaps. Two nodes
-            # within `max_horizontal_traversal_dist` get an edge even if the
-            # gap between them is unwalkable air (no platform data available).
-            if curr_node_x_pos > next_node_x_pos \
-                    and abs(curr_node_x_pos - next_node_x_pos) <= self.max_horizontal_traversal_dist \
-                    and curr_node_y_pos - self.edge_y_alignment_allowance <= next_node_y_pos <= curr_node_y_pos + self.edge_y_alignment_allowance:
-                if closest is None:
+            # within the reach get an edge even if the gap between them is
+            # unwalkable air (no platform data available).
+            if direction.sign * (next_along - curr_along) > 0 \
+                    and abs(curr_along - next_along) <= reach \
+                    and curr_across - allowance <= next_across <= curr_across + allowance \
+                    and (not vertical or self._isVerticalEdgeValid(curr_node, next_node)):
+                if closest is None or abs(curr_along - closest.minimap_position[axis]) > abs(curr_along - next_along):
                     closest = next_node
-                else:
-                    closest_x_pos = closest.minimap_position[0]
-                    if abs(curr_node_x_pos - closest_x_pos) > abs(
-                            curr_node_x_pos - next_node_x_pos):
-                        closest = next_node
-        return closest
-
-    def _createRightEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
-        source_nodes = [char_node] if is_for_character_node else self.node_map.values()
-
-        for curr_node in source_nodes:
-            closest = self._findClosestRightNode(curr_node)
-            if closest is not None:
-                abs_dist = abs(curr_node.minimap_position[0] - closest.minimap_position[0])
-                self.graph.add_edge(curr_node, closest, weight=abs_dist)
-
-        return Success(None)
-
-    def _findClosestRightNode(self, curr_node: Node):
-        """
-        Find the closest node to the right of the current node within a vertical alignment threshold.
-
-        This method searches through all nodes in the node map to find the closest node that:
-        1. Is positioned to the right of the current node (has a larger x-coordinate)
-        2. Is approximately at the same vertical level (y-coordinate within edge_y_alignment_allowance)
-        3. Is within max_horizontal_traversal_dist on the x-axis (character-class horizontal reach gate)
-
-        Args:
-            curr_node (Node): The reference node to search from
-
-        Returns:
-            Node or None: The closest qualifying node to the right, or None if no suitable node is found
-        """
-        closest = None
-        curr_node_x_pos, curr_node_y_pos = curr_node.minimap_position
-
-        for next_node in self.node_map.values():
-            next_node_x_pos, next_node_y_pos = next_node.minimap_position
-            # Distance heuristic only — see comment in _findClosestLeftNode.
-            if curr_node_x_pos < next_node_x_pos \
-                    and abs(next_node_x_pos - curr_node_x_pos) <= self.max_horizontal_traversal_dist \
-                    and curr_node_y_pos - self.edge_y_alignment_allowance <= next_node_y_pos <= curr_node_y_pos + self.edge_y_alignment_allowance:
-                if closest is None:
-                    closest = next_node
-                else:
-                    closest_x_pos = closest.minimap_position[0]
-                    if abs(curr_node_x_pos - closest_x_pos) > abs(
-                            curr_node_x_pos - next_node_x_pos):
-                        closest = next_node
-        return closest
-
-    def _createUpEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
-        source_nodes = [char_node] if is_for_character_node else self.node_map.values()
-        for curr_node in source_nodes:
-            # The finder only returns nodes that pass _isVerticalEdgeValid (decision H17).
-            closest = self._findClosestNodeAbove(curr_node)
-            if closest is not None:
-                abs_dist = abs(curr_node.minimap_position[1] - closest.minimap_position[1])
-                self.graph.add_edge(curr_node, closest, weight=abs_dist)
-        return Success(None)
-
-    def _findClosestNodeAbove(self, curr_node: Node):
-        """
-        Find the closest node above the current node within a horizontal alignment threshold.
-
-        This method searches through all nodes in the node map to find the closest node that:
-        1. Is positioned above the current node (has a smaller y-coordinate, since origin is top-left)
-        2. Is approximately at the same horizontal level (x-coordinate within edge_x_alignment_allowance)
-        3. Is within max_vertical_traversal_dist on the y-axis (character-class vertical reach gate)
-        4. Is not the same node as the current node
-        5. Passes _isVerticalEdgeValid (the platform-edge rule): a candidate the character can't teleport to is
-           skipped, so a farther valid node can win over a nearer invalid one (decision H17)
-
-        Args:
-            curr_node (Node): The reference node to search from
-
-        Returns:
-            Node or None: The closest qualifying node above, or None if no suitable node is found
-        """
-        closest = None
-        curr_node_x_pos, curr_node_y_pos = curr_node.minimap_position
-        for next_node in self.node_map.values():
-            if curr_node == next_node: #ignore if same node
-                continue
-            next_node_x_pos, next_node_y_pos = next_node.minimap_position
-            # lower y value means higher up since origin is topleft.
-            if next_node_y_pos < curr_node_y_pos \
-                    and abs(curr_node_y_pos - next_node_y_pos) <= self.max_vertical_traversal_dist \
-                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance \
-                    and self._isVerticalEdgeValid(curr_node, next_node):
-                if closest is None:
-                    closest = next_node
-                else:
-                    closest_y_pos = closest.minimap_position[1]
-                    if abs(curr_node_y_pos - closest_y_pos) > abs(curr_node_y_pos - next_node_y_pos):
-                        closest = next_node
-        return closest
-
-    def _createDownEdges(self, char_node: Node|None = None, is_for_character_node: bool = False) -> Result[None, str]:
-        """
-        Create edges from nodes to their closest valid nodes below (the closest node that passes _isVerticalEdgeValid).
-
-        Args:
-            char_node (Node|None): Character node to connect (when is_for_character_node=True)
-            is_for_character_node (bool): If True, only create edges for char_node
-
-        Returns:
-            Result[None, str]: Success(None) if edges created successfully
-        """
-        source_nodes = [char_node] if is_for_character_node else self.node_map.values()
-        for curr_node in source_nodes:
-            # The finder only returns nodes that pass _isVerticalEdgeValid (decision H17).
-            closest = self._findClosestNodeBelow(curr_node)
-            if closest is not None:
-                abs_dist = abs(curr_node.minimap_position[1] - closest.minimap_position[1])
-                self.graph.add_edge(curr_node, closest, weight=abs_dist)
-        return Success(None)
-
-    def _findClosestNodeBelow(self, curr_node: Node):
-        """
-        Find the closest node below the current node within a horizontal alignment threshold.
-
-        This method searches through all nodes in the node map to find the closest node that:
-        1. Is positioned below the current node (has a larger y-coordinate, since origin is top-left)
-        2. Is approximately at the same horizontal level (x-coordinate within edge_x_alignment_allowance)
-        3. Is within max_vertical_traversal_dist on the y-axis (character-class vertical reach gate)
-        4. Is not the same node as the current node
-        5. Passes _isVerticalEdgeValid (the platform-edge rule): a candidate the character can't teleport to is
-           skipped, so a farther valid node can win over a nearer invalid one (decision H17)
-
-        Args:
-            curr_node (Node): The reference node to search from
-
-        Returns:
-            Node or None: The closest qualifying node below, or None if no suitable node is found
-        """
-        closest = None
-        curr_node_x_pos, curr_node_y_pos = curr_node.minimap_position
-        for next_node in self.node_map.values():
-            if curr_node == next_node: #ignore if same node
-                continue
-            next_node_x_pos, next_node_y_pos = next_node.minimap_position
-            # lower y value means higher up since origin is topleft.
-            if next_node_y_pos > curr_node_y_pos \
-                    and abs(next_node_y_pos - curr_node_y_pos) <= self.max_vertical_traversal_dist \
-                    and curr_node_x_pos - self.edge_x_alignment_allowance <= next_node_x_pos <= curr_node_x_pos + self.edge_x_alignment_allowance \
-                    and self._isVerticalEdgeValid(curr_node, next_node):
-                if closest is None:
-                    closest = next_node
-                else:
-                    closest_y_pos = closest.minimap_position[1]
-                    if abs(curr_node_y_pos - closest_y_pos) > abs(curr_node_y_pos - next_node_y_pos):
-                        closest = next_node
         return closest
 
     @staticmethod

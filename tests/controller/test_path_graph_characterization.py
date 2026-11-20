@@ -184,7 +184,7 @@ def test_vertical_edge_to_a_left_platform_edge_only_from_a_source_with_x_at_or_r
     assert pg_equal.graph.has_edge(equal, target)       # source x 50 >= target x 50 (equality counts)
 
 
-# 4b. Vertical edges: the closest node that passes the platform-edge rule (decision H17, path_graph.py:319-411) ----
+# 4b. Vertical edges: the closest node that passes the platform-edge rule (decision H17, the up and down rows of PathGraph._findClosestNode) ----
 
 # Per direction (up = smaller y, down = larger y): the source at y 50, a nearer candidate 5 px away and a farther
 # plain candidate 15 px away. x offsets stay inside the alignment allowance of 2.

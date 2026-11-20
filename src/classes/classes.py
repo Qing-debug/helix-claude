@@ -32,7 +32,7 @@ class CharacterClass(ABC):
     def max_vertical_traversal_dist(self) -> int:
         """Maximum vertical pixel distance (on the minimap) covered in a
         single traversal action. Consumed by PathGraph to gate vertical
-        edge creation (_findClosestNodeAbove / _findClosestNodeBelow) —
+        edge creation (the up and down rows of PathGraph._findClosestNode) —
         two nodes farther apart than this on the y-axis will not have a
         vertical edge between them, even if no closer candidate exists."""
         ...
