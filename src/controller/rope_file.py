@@ -89,30 +89,10 @@ def read_ropes(path: Path) -> Result[RopeFile, str]:
         else:
             problems.append('"minimap_size" must be a list of two positive whole numbers, like [162, 82]')
 
-    ropes: list[RopeMark] = []
-    raw_ropes = data.get("ropes")
-    if not isinstance(raw_ropes, list):
-        problems.append('"ropes" must be a list')
-    else:
-        for number, item in enumerate(raw_ropes, start=1):
-            mark, rope_problems = _check_rope(item)
-            if mark is None:
-                problems.extend(f"rope {number}: {problem}" for problem in rope_problems)
-            else:
-                ropes.append(mark)
-
+    ropes = _read_marks(data.get("ropes"), "ropes", "rope", problems)
     deleted: list[RopeMark] = []
     if "deleted_ropes" in data:
-        raw_deleted = data["deleted_ropes"]
-        if not isinstance(raw_deleted, list):
-            problems.append('"deleted_ropes" must be a list')
-        else:
-            for number, item in enumerate(raw_deleted, start=1):
-                mark, rope_problems = _check_rope(item)
-                if mark is None:
-                    problems.extend(f"deleted rope {number}: {problem}" for problem in rope_problems)
-                else:
-                    deleted.append(mark)
+        deleted = _read_marks(data["deleted_ropes"], "deleted_ropes", "deleted rope", problems)
 
     if problems:
         return _refused(path, problems, NEWER_FIX_TEXT if newer else FIX_TEXT)
@@ -125,9 +105,9 @@ def write_ropes(path: Path, file: RopeFile) -> Result[None, str]:
     data: dict[str, object] = {"format": FORMAT, "version": VERSION}
     if file.minimap_size is not None:
         data["minimap_size"] = list(file.minimap_size)
-    data["ropes"] = [{"x": rope.x, "top_y": rope.top_y, "bottom_y": rope.bottom_y} for rope in file.ropes]
+    data["ropes"] = [_mark_dict(rope) for rope in file.ropes]
     if file.deleted:  # left out when empty, so a file with nothing deleted is what it always was
-        data["deleted_ropes"] = [{"x": rope.x, "top_y": rope.top_y, "bottom_y": rope.bottom_y} for rope in file.deleted]
+        data["deleted_ropes"] = [_mark_dict(rope) for rope in file.deleted]
     for key, value in file.extra.items():
         data.setdefault(key, value)
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -180,6 +160,26 @@ def _check_rope(item: object) -> tuple[RopeMark | None, list[str]]:
     if problems:
         return None, problems
     return RopeMark(values["x"], values["top_y"], values["bottom_y"]), []
+
+
+def _read_marks(raw: object, key: str, noun: str, problems: list[str]) -> list[RopeMark]:
+    """The marks of one list in the file: `key` is the list's name and `noun` what its bad entries are called ("rope"
+    or "deleted rope"). What is wrong is appended to `problems`, each bad entry by its number."""
+    marks: list[RopeMark] = []
+    if not isinstance(raw, list):
+        problems.append(f'"{key}" must be a list')
+        return marks
+    for number, item in enumerate(raw, start=1):
+        mark, rope_problems = _check_rope(item)
+        if mark is None:
+            problems.extend(f"{noun} {number}: {problem}" for problem in rope_problems)
+        else:
+            marks.append(mark)
+    return marks
+
+
+def _mark_dict(rope: RopeMark) -> dict[str, int]:
+    return {"x": rope.x, "top_y": rope.top_y, "bottom_y": rope.bottom_y}
 
 
 def _refused(path: Path, problems: list[str], fix: str = FIX_TEXT) -> Failure[str]:
