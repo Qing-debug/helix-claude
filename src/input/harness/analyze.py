@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from src.input.harness.listener import BOT_VKS, VK_BY_KEY
+from src.input.harness.vk_codes import BOT_VKS, VK_BY_KEY
 from src.input.protocol import Key, Step, transitions
 
 Row = dict[str, Any]
