@@ -91,8 +91,8 @@ class PathGraph:
                   plus the final destination node.
 
         Note:
-            - Coordinate system conversion: Converts from graph's bottom-left origin
-              to image's top-left origin for correct vector calculations by negating y-component of vectors
+            - Coordinate system conversion: Converts from the image's top-left origin
+              (minimap pixels) to a bottom-left frame for correct vector calculations by negating y-component of vectors
             - Always includes the final destination node
 
         Example:
