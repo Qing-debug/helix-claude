@@ -658,16 +658,6 @@
                 }
             }
         ],
-        "./src/input/harness/g4_check.py": [
-            {
-                "code": "reportOperatorIssue",
-                "range": {
-                    "startColumn": 43,
-                    "endColumn": 76,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./src/input/harness/probe.py": [
             {
                 "code": "reportArgumentType",
