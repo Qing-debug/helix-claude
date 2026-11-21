@@ -198,14 +198,13 @@ def test_editor_reads_a_path_with_a_trailing_separator_as_it_always_did(tmp_path
     assert isinstance(result, Success)
 
 
-def test_success_message_is_printed_once_on_success_and_not_on_failure(tmp_path, capsys):
-    message = "Map file matches the expected format.\n"
+def test_the_runtime_reader_prints_nothing_on_success_or_on_failure(tmp_path, capsys):
     good = _csv(tmp_path, HEADER + OK_ROW)
     assert isinstance(_runtime(good)[0], Success)
-    assert capsys.readouterr().out.count(message) == 1
+    assert capsys.readouterr().out == ""
     bad = _csv(tmp_path, HEADER + "blue_node,oops\n")
     assert isinstance(_runtime(bad)[0], Failure)
-    assert message not in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
 
 
 # --- row shape ------------------------------------------------------------------------------------------------------

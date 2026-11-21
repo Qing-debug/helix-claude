@@ -22,9 +22,6 @@ class CSVParser:
             node_map.update({node.uuid:node})
             if row.nodetype == BLUE_NODE:
                 map_rotation_order.append(node)
-            print(f"succesfully created node for line {row.line}")
-
-        print("successfully created all nodes in memory, next step: graph creation.")
         return Success(None)
 
     def _readRows(self) -> Result[list[MapRow], str]:
@@ -32,7 +29,4 @@ class CSVParser:
             return Failure("CSV file is a None object, failed to load CSV file.")
 
         # No pre-check, and open(path)'s own line-end handling (newline=None): the runtime parser's way of reading.
-        res_rows = load_rows(self.CSV_file, None, None)
-        if is_successful(res_rows):
-            print("Map file matches the expected format.")
-        return res_rows
+        return load_rows(self.CSV_file, None, None)
