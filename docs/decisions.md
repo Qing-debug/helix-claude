@@ -2878,3 +2878,93 @@ In plain words: nothing more is built; the provisional choice is confirmed.
 Cost if wrong: the message may flash on each map change (an open review point, VIS162-FIX-review M1). Undo: Hong asks for option B.
 
 Pointer: question bank QB263; H97.
+
+## H134 (2026-11-21): The camelCase rename may rename the eight controller names inside the frozen walking files too, names only (Hong's QB380)
+
+Context: the cleanup plan (CLEAN216) renames the controller's camelCase names to snake_case in its own wave (wave 4). Eight of those names (`loadMap`, `buildPathGraphFor`, `buildGraph`, `characterClass`, `pathGraph`, `CSVParser`, `parseCSV`, `_isVerticalEdgeValid`) are used on 36 lines inside the walking files that `src/route/CLAUDE.md` marks frozen. Hong was asked what the rename should do there (set orch217, orch217-1, CLEAN216-D1). Options shown: A, a name-only rename including those lines (the recommendation); B, rename and keep the old names as aliases, so the frozen files stay untouched; C, leave the eight names as they are. He chose A, verbatim: "Allow a name-only rename in the walking files (recommended)".
+
+In plain words: wave 4 (W4-1) renames the eight names everywhere, inside the frozen files too, with no alias. Only the names change; under H141 the text of every message stays as it is.
+
+Cost if wrong: the frozen walking files change on 36 lines (names only). Undo: Hong asks for B or C before wave 4 runs, or the rename is reverted.
+
+Pointer: question bank QB380; plan `CLEAN216-plan.md` W4-1; H141.
+
+## H135 (2026-11-21): The minimap-capture code's "don't restructure" rule is dropped; it is cleaned like the rest (Hong's QB381)
+
+Context: `src/vision/CLAUDE.md` line 7 forbade restructuring `vision.py` and `vision_helper_lib.py`, because Feature C was to port the main Helix repo's vision changes; the runes branch changes no vision file. Hong was asked whether the rule still holds (set orch217, orch217-2, V9). Options shown: A, keep the rule; B, drop it; C, not sure. No recommendation was given. He chose B, verbatim: "Drop the rule: clean the minimap-capture code like the rest".
+
+In plain words: the cleanup pieces for vision (W2-7, W2-8) and the vision names in the rename (W4-3) go ahead once their merges land; the piece that edits vision (W2-7) also deletes the rule line.
+
+Cost if wrong: porting the main repo's vision changes later would meet restructured files. Undo: Hong says so before W2-7 runs, or the pieces are reverted.
+
+Pointer: question bank QB381; `src/vision/CLAUDE.md`; plan W2-7, W2-8, W4-3.
+
+## H136 (2026-11-21): The five testing-only buttons on the Setup tab are removed, with the code only they use (Hong's QB382)
+
+Context: the Setup tab has five buttons whose text starts "(delete or move to a separate tab on the GUI)": setup agent, visualise the graph, add character node, delete character node, and get the path to goal node. The project notes call them test leftovers; the walking never uses the code behind them (a path-finding routine, a "character node" type, a drawing helper and their debug prints). Hong was asked whether they may go (set orch217, orch217-3, G3 and C2). Options shown: A, remove all five and the code only they use (the recommendation); B, keep them. He chose A, verbatim: "Remove all five buttons and the code only they use (recommended)".
+
+In plain words: the five buttons disappear from the Setup tab, the lock that greys out Setup buttons during a walk covers six buttons instead of eleven, and their code and terminal prints go (plan piece W2-17). H20 still holds for the two draw buttons, which stay; only its get-path part goes with that button. The chart library (matplotlib) stays installed: whether to stop installing it is a separate, later question. This is one of the two visible changes H141 allows.
+
+Cost if wrong: the buttons and the debug path-finding would have to be brought back from git history. Undo: revert W2-17.
+
+Pointer: question bank QB382; plan W2-17; H20; H141.
+
+## H137 (2026-11-21): The map reader's progress lines and the minimap-found printout are removed from the terminal window (Hong's QB383)
+
+Context: on Load Map the map reader prints one line per node ("succesfully created node for line 12"), then "successfully created all nodes in memory, next step: graph creation." and "Map file matches the expected format."; every time the minimap is found the capture prints the raw details of the four corner matches. These lines go to the terminal window that started the app, not to the Setup tab's console box. Hong was asked whether both kinds may go (set orch217, orch217-4, C6 and V6). Options shown: A, remove both kinds of lines (the recommendation); B, keep them. He chose A, verbatim: "Remove both kinds of lines (recommended)".
+
+In plain words: the terminal window is quieter after Load Map and after every minimap find; nothing in the app window changes (plan pieces W0-9 and W2-18). The capture's other prints, such as the black-minimap line, stay. This is the second visible change H141 allows.
+
+Cost if wrong: anyone who read those lines to follow a map load loses them. Undo: revert W0-9 or W2-18.
+
+Pointer: question bank QB383; plan W0-9, W2-18; H141.
+
+## H138 (2026-11-21): The walk's `--record` option stays (Hong's QB384)
+
+Context: `python -m src.route.walk` accepts `--record`, which does nothing now because every walk records; removing it would make old command lines stop with exit 2. Hong was asked whether to keep it (set orch217, orch217-5, R3). Options shown: A, keep the option (the recommendation); B, remove it. He chose A, verbatim: "Keep the option (recommended)".
+
+In plain words: no change; the cleanup leaves `--record` as it is.
+
+Cost if wrong: one unused option stays in the walk's help. Undo: Hong asks for its removal.
+
+Pointer: question bank QB384; `src/route/walk.py`.
+
+## H139 (2026-11-21): The one-off board reset check `g4_check` and its test are deleted (Hong's QB385)
+
+Context: `python -m src.input.harness.g4_check` was written once to check whether the program reads the board's reset message as it is printed; it was run during the soak dry run and answered READ_BEFORE_EXIT, so its question is closed. Nothing else uses it. Hong was asked whether it may go (set orch217, orch217-6, I14). Options shown: A, delete the tool and its test (the recommendation); B, keep it. He chose A, verbatim: "Delete the tool and its test (recommended)".
+
+In plain words: `src/input/harness/g4_check.py` and `tests/input/test_g4_check.py` are deleted and the input notes' line is corrected (plan piece W0-10). The decision records and plans keep their history mentions.
+
+Cost if wrong: re-running the check means bringing the tool back from git history. Undo: revert W0-10.
+
+Pointer: question bank QB385; plan W0-10; decisions PA-rev3b G4.
+
+## H140 (2026-11-21): The frozen walking files are opened for three cleanup changes: one shared plan, a shorter walking routine, a home for shared basics (Hong's QB386)
+
+Context: the cleanup survey found three simplifications that need edits inside the walking files `src/route/CLAUDE.md` marks frozen: R13, the route preview repeats the planner's decision statement for statement, so one shared routine would serve both (planner.py, route_preview.py); R20, the walker's `walk_leg` is very long (131 statements, complexity 35) and would be split into smaller routines (walker.py); R30, the position source, the clock, the "no new picture yet" marker and the step observer would move out of walker.py into their own small file. Hong was asked whether to open the files for them (set orch217, orch217-7). Options shown: A, leave the files frozen (the recommendation); B, open them for all three. He chose B, verbatim: "Open the walking files for all three changes".
+
+In plain words: plan pieces W1-6 (R30), W1-7 (R20) and W1-8 (R13) may edit the frozen walking files named in their rows, after p1-walk-fluid and p1-anymap merge. Each is treated as subtle (opus-xhigh implementer for W1-7 and W1-8, a review of its own) and must leave the walker's decisions and the preview exactly as they are (H141): the frozen tests stay unchanged and the simulator's output stays byte-identical. The other frozen-file items stay frozen; R1 (`ability_mix_band`) is not among the three. This replaces the orchestrator's earlier choice that the route preview keeps its own copy (RV1-D4 in H53).
+
+Cost if wrong: the code that drives the real game changes shape; the tests and the simulator cannot show how it plays in the real game. Undo: revert W1-6, W1-7 or W1-8.
+
+Pointer: question bank QB386; plan W1-6, W1-7, W1-8; `src/route/CLAUDE.md` (frozen list); H53; H141.
+
+## H141 (2026-11-21): The cleanup must not change how the app behaves; a change for the better is shown to Hong first (Hong, in chat)
+
+Context: after answering set orch217, Hong set a rule for the whole cleanup (CLEAN216 and its waves), verbatim: "Ensure that all thes changes do not effect the current beehavviour of the application, if you  find that a chhannge results in a positive change, tell me w hatt  that positivee cchannge is so  i can approve whtehr we keep it or  not, else the app before and t he app after should remain the exact same in  terms of how it behaves".
+
+In plain words: every cleanup piece keeps the app's behaviour exactly the same: what it does in the game, what the window and the terminal show, exit codes, refusals, and the files it writes. His own picks H136 (the five buttons go) and H137 (the two kinds of terminal lines go) are approved visible changes. A piece that finds it would change behaviour, even for the better, stops and the change is put to Hong, saying what the improvement is, so he can approve keeping it or not. Every implementer brief quotes this rule and every review checks it (plan constraints 8 and 13).
+
+Cost if wrong: some small improvements wait for Hong's approval. Undo: Hong changes the rule.
+
+Pointer: Hong in chat, 2026-11-21; plan `CLEAN216-plan.md` constraints 8 and 13; H136; H137; H142.
+
+## H142 (2026-11-21): The map editor's minimap-lock fix (G9) is kept (Hong, in chat)
+
+Context: the cleanup survey found that the map editor's redraw loop held the minimap frame's lock while it drew, and that one error stopped the editor's redraw for good (G9). The fix, on branch `p1-g9-fix` (47d3078, 7b440de), copies the frame under the lock, draws outside it, and keeps redrawing after an error instead of freezing. Under H141 it was put to Hong as a positive behaviour change. His answer, verbatim: "keep it".
+
+In plain words: the G9 fix stays and merges as built; wave 2's map editor cleanup pieces build on it.
+
+Cost if wrong: none known; the change shows only when a redraw raises an error. Undo: revert p1-g9-fix.
+
+Pointer: Hong in chat, 2026-11-21; branch `p1-g9-fix`; plan section 5 "Fixes found"; H141.
