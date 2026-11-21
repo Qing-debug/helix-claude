@@ -5,12 +5,14 @@ the plan leaves to the builder: `judge`'s 0/0 recovery rule and check order on h
 and hard rules 4 and 5 on the module's source.
 """
 
+import hashlib
 import json
 import re
 import time
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 from returns.pipeline import is_successful
 
@@ -235,3 +237,37 @@ def test_run_module_writes_no_teleport_reach_and_no_map_position():
     source = Path(run_module.__file__).read_text(encoding="utf-8")
     assert re.search(r"(?<![\w.])(19|23)(?![\w.])", source) is None
     assert re.search(r"\(\s*\d+\s*,\s*\d+\s*\)", source) is None
+
+
+def test_offset_copy_of_the_fixture_is_byte_identical_and_draws_once_per_data_row(tmp_path):
+    """The node-offset copy (`_write_offset_csv`) of Fossil Foundry 2 with a fixed generator: the bytes are pinned (taken
+    from the code before the sim/run split, CLEAN222-W1-2), and it draws exactly one `integers(-k, k + 1)` per data
+    row, in file order, so the world's generator is left where it was before the split."""
+    rng = np.random.default_rng(5)
+    run_module._write_offset_csv(CSV, tmp_path / "ff2.csv", 2, rng)
+    digest = hashlib.sha256((tmp_path / "ff2.csv").read_bytes()).hexdigest()
+    assert digest == "c11b6b036c2a365f2060754a9126cb3924e42ad5ef23b5e03d92c43c093946a6"
+    data_rows = sum(1 for line in CSV.read_text(encoding="utf-8").splitlines() if not line.startswith("#")) - 1
+    twin = np.random.default_rng(5)
+    for _ in range(data_rows):
+        twin.integers(-2, 3)
+    assert rng.integers(0, 1 << 30) == twin.integers(0, 1 << 30)
+
+
+def test_offset_copy_moves_comments_ahead_of_the_header_and_writes_lf(tmp_path):
+    """Every `#` line (an indented one and one after the rows too) goes ahead of the header, unchanged; CRLF becomes LF;
+    each position is rewritten as `(x, y + draw)` with the draws in file order."""
+    src = tmp_path / "small.csv"
+    src.write_bytes(
+        b"# minimap_size=10,20\r\n  # indented note\r\n"
+        b"nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge\r\n"
+        b'blue_node,"(1, 2)",FALSE,FALSE,TRUE,FALSE\r\norange_node,"(30, 40)",TRUE,FALSE,FALSE,TRUE\r\n'
+        b'# tail comment\r\nblue_node,"(5,6)",FALSE,TRUE,FALSE,FALSE\r\n')
+    rng = np.random.default_rng(11)   # its first three integers(-3, 4) draws are -3, -3, 2
+    run_module._write_offset_csv(src, tmp_path / "out.csv", 3, rng)
+    assert (tmp_path / "out.csv").read_bytes() == (
+        b"# minimap_size=10,20\n  # indented note\n# tail comment\n"
+        b"nodetype,pos_in_minimap,can_fall,fall_dist_exceeds_vertical_tp,is_left_platform_edge,is_right_platform_edge\n"
+        b'blue_node,"(1, -1)",FALSE,FALSE,TRUE,FALSE\norange_node,"(30, 37)",TRUE,FALSE,FALSE,TRUE\n'
+        b'blue_node,"(5, 8)",FALSE,TRUE,FALSE,FALSE\n')
+    assert rng.integers(0, 1 << 30) == 536095522
