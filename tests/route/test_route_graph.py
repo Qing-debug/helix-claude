@@ -156,7 +156,7 @@ V, T = P.walk_px_per_s, P.teleport_s
 
 @pytest.mark.parametrize("d, expected", [
     (4, 4 / V),            # walk all of it
-    (13, T + 6 / V),       # one teleport overshoots by 6 px, walk back
+    (13, 13 / V),          # closer than walk_under_px (17): walked (QB266)
     (17, T + 2 / V),       # one teleport overshoots by 2 px, walk back
     (19, T),               # exactly one teleport
     (23, T + 4 / V),       # one teleport, walk the remaining 4 px

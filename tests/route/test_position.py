@@ -79,11 +79,12 @@ class TrackingLock:
 
 
 class FakeShared:
-    """Duck-types `SharedInfo` (src/main.py): `minimap_frame_lock` and `minimap_frame`."""
+    """Duck-types `SharedInfo` (src/main.py): `minimap_frame_lock`, `minimap_frame` and its stamp `minimap_frame_ns`."""
 
     def __init__(self) -> None:
         self.minimap_frame_lock = TrackingLock()
         self.minimap_frame = None
+        self.minimap_frame_ns = None
 
 
 class SpyLocator:

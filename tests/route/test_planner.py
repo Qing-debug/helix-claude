@@ -151,7 +151,7 @@ def test_on_the_slope_the_nearer_end_towards_the_target_is_the_goal(ff2):
     [
         ((82, 60), MoveKind.TELEPORT, None),  # d = 17
         ((88, 60), MoveKind.WALK, _ms(11)),  # d = 11
-        ((86, 60), MoveKind.TELEPORT, None),  # d = 13
+        ((86, 60), MoveKind.WALK, _ms(13)),  # d = 13, under the 17 px walk limit (QB266)
         ((95, 60), MoveKind.WALK, _ms(4)),  # d = 4
     ],
 )
@@ -401,7 +401,7 @@ def test_case_2_the_move_is_not_offered_when_another_platform_is_below_the_end()
     nodes, rg = _synthetic(points, can_fall=True)
     assert rg.graph.edges[nodes[1], nodes[2]]["kind"] == EdgeKind.DOWN  # in the route graph, but not offered
     decision = _decide(rg, (25, 10), nodes[2])
-    assert decision.move == Move(MoveKind.TELEPORT, Key.LEFT, None)  # run to (10,10), d = 15
+    assert decision.move == Move(MoveKind.WALK, Key.LEFT, _ms(15))  # walk to (10,10), d = 15 (under 17: walked, QB266)
     assert decision.toward is nodes[4]
     assert _decide(rg, (10, 10), nodes[2]).move == DROP
 
@@ -424,7 +424,7 @@ def test_case_2_the_up_move_is_not_offered_when_another_platform_is_above_the_en
     nodes, rg = _synthetic(points)
     assert rg.graph.edges[nodes[1], nodes[2]]["kind"] == EdgeKind.UP  # in the route graph, but not offered
     decision = _decide(rg, (25, 60), nodes[2])
-    assert decision.move == Move(MoveKind.TELEPORT, Key.LEFT, None)  # run to the launch x 10, d = 15
+    assert decision.move == Move(MoveKind.WALK, Key.LEFT, _ms(15))  # walk to the launch x 10, d = 15 (under 17: walked, QB266)
     assert decision.toward is nodes[4]
     assert _decide(rg, (10, 60), nodes[2]).move == Move(MoveKind.TELEPORT, Key.UP, None)
 

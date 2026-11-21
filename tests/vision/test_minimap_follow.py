@@ -2,6 +2,7 @@
 when it is lost. Synthetic screens built from the real corner templates (assets/brds): a random dark background with the
 four templates pasted where a minimap's border corners would be. No camera, no window; the loop tests patch the grab."""
 
+import itertools
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,19 +144,21 @@ def test_a_reject_prints_only_when_verbose(capsys):
 # ---- the lost flag and its lines ------------------------------------------------------------------------------------
 
 def new_shared():
-    return SimpleNamespace(minimap_frame_lock=threading.Lock(), minimap_frame=None, minimap_lost=False)
+    lock = threading.Lock()  # `publish` notifies the condition, which has to be on the same lock (QB283 2a)
+    return SimpleNamespace(minimap_frame_lock=lock, minimap_frame_new=threading.Condition(lock), minimap_frame=None,
+                           minimap_lost=False)
 
 
 def test_tracker_says_lost_once_and_found_once():
     shared, said = new_shared(), []
     tracker = follow.LostTracker(shared, said.append)
     first = np.zeros((2, 2, 3), np.uint8)
-    tracker.publish(first)
+    tracker.publish(first, 1)
     for _ in range(50):  # fifty failed searches
         tracker.search_failed()
     assert said == [follow.LOST_LINE] and shared.minimap_lost and shared.minimap_frame is first
-    tracker.publish(np.ones((2, 2, 3), np.uint8))
-    tracker.publish(np.ones((2, 2, 3), np.uint8))
+    tracker.publish(np.ones((2, 2, 3), np.uint8), 2)
+    tracker.publish(np.ones((2, 2, 3), np.uint8), 2)
     assert said == [follow.LOST_LINE, follow.FOUND_AGAIN_LINE] and not shared.minimap_lost
     tracker.search_failed()
     assert said[-1] == follow.LOST_LINE and said.count(follow.LOST_LINE) == 2
@@ -167,7 +170,7 @@ def test_tracker_before_the_first_picture_leaves_the_flag_alone():
     for _ in range(5):
         tracker.search_failed()
     assert said == [follow.NOT_FOUND_LINE] and not shared.minimap_lost
-    tracker.publish(np.zeros((2, 2, 3), np.uint8))
+    tracker.publish(np.zeros((2, 2, 3), np.uint8), 3)
     assert said == [follow.NOT_FOUND_LINE, follow.FOUND_LINE]
 
 
@@ -176,15 +179,32 @@ def test_tracker_writes_the_frame_and_the_flag_under_the_lock():
     seen = []
 
     class Spy:
+        """A real lock that notes each `with`; `acquire` and `release`, which the condition uses itself, are not noted."""
+
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def acquire(self, *args):
+            return self.lock.acquire(*args)
+
+        def release(self):
+            self.lock.release()
+
+        def locked(self):
+            return self.lock.locked()
+
         def __enter__(self):
             seen.append("in")
+            self.lock.acquire()
 
         def __exit__(self, *exc):
+            self.lock.release()
             seen.append("out")
 
     shared.minimap_frame_lock = Spy()
+    shared.minimap_frame_new = threading.Condition(shared.minimap_frame_lock)
     tracker = follow.LostTracker(shared, lambda _line: None)
-    tracker.publish(np.zeros((2, 2, 3), np.uint8))
+    tracker.publish(np.zeros((2, 2, 3), np.uint8), 3)
     tracker.search_failed()
     assert seen == ["in", "out", "in", "out"]
 
@@ -221,10 +241,19 @@ class FakeScreen:
 def run_loop(monkeypatch, capsys):
     vision_mod = pytest.importorskip("src.vision.vision")  # needs Windows and bettercam
 
-    def run(screen, shared):
+    def run(screen, shared, seconds_per_grab=0.0):
         sleeps = []
+        stamps = itertools.count(1)
+        clock = {"now": 0.0}  # the fake monotonic clock behind the 22 s re-find (WALKFIX Task 8): each grab moves it on
+
+        def ticking_grab(camera, region=None):
+            clock["now"] += seconds_per_grab
+            return screen.grab(camera, region)
+
         monkeypatch.setattr(vision_mod.bettercam, "create", lambda **_kw: object())
-        monkeypatch.setattr(vision_mod.vision, "cameraGrab", screen.grab)
+        monkeypatch.setattr(vision_mod.vision, "cameraGrab", ticking_grab)  # the whole-screen search
+        monkeypatch.setattr(vision_mod, "_grab_stamped", lambda camera, region: (ticking_grab(camera, region), next(stamps)))
+        monkeypatch.setattr(vision_mod, "_monotonic", lambda: clock["now"])
         monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
         with pytest.raises(Stop):
             vision_mod.capture_and_process_minimap(shared)
@@ -368,3 +397,95 @@ def test_loop_keeps_the_black_frame_early_exit(run_loop):
     sleeps, _ = run_loop(screen, shared)
     assert shared.minimap_frame is None
     assert vision_mod.MINIMAP_DETECTION_RETRY_DELAY_S in sleeps
+
+
+def test_minimap_is_re_found_after_22_seconds(run_loop):
+    """WALKFIX Task 8 (QB283 2c): the minimap is searched for again about every 22 s, not every 1000 pictures. The clock
+    moves 1 s per grab: the search at the start is grab 1, the loop publishes 22 pictures (grabs 2 to 23), and grab 24
+    is the whole-screen search again."""
+    a, _ = build_screen()
+    shared = new_shared()
+    watch = Watch(shared)
+    screen = FakeScreen(a, watch, max_grabs=24)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert screen.whole_screen_grabs == [1, 24]
+    assert len(watch.distinct_frames()) == 22
+
+
+def test_the_period_restarts_after_every_re_find(run_loop):
+    """WALKFIX Task 8 review (I1): three periods. Grab 47 is the third search, 22 pictures after the second (grab 24).
+    A timer that is set once and never reset searches again at grab 25 instead."""
+    a, _ = build_screen()
+    shared = new_shared()
+    screen = FakeScreen(a, Watch(shared), max_grabs=48)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert screen.whole_screen_grabs == [1, 24, 47]
+
+
+def test_the_period_restarts_when_the_minimap_comes_back_after_a_loss(run_loop):
+    """WALKFIX Task 8 review (I1): the minimap is lost at grab 10 and found again at grab 30; the next search is 22 s
+    after the find, at grab 53. A timer that counts from the first lock, or that keeps the loss's time, searches early."""
+    a, _ = build_screen()
+    shared = new_shared()
+    watch = Watch(shared)
+
+    def script(screen):
+        if screen.n == 10:
+            screen.gray = build_screen(minimap=False)[0]
+        if screen.n == 30:
+            screen.gray = a
+        watch(screen)
+
+    screen = FakeScreen(a, script, max_grabs=56)
+    run_loop(screen, shared, seconds_per_grab=1.0)
+    assert [n for n in screen.whole_screen_grabs if n >= 30] == [30, 53]  # found at 30, 22 pictures, timed search at 53
+
+
+def test_fast_pictures_do_not_re_find_early(run_loop):
+    """WALKFIX Task 8: the clock is frozen, so 2000 pictures (more than the old count of 1000) publish with one search."""
+    a, _ = build_screen()
+    shared = new_shared()
+    screen = FakeScreen(a, max_grabs=2001)
+    run_loop(screen, shared, seconds_per_grab=0.0)
+    assert screen.whole_screen_grabs == [1]
+
+
+def test_loop_pause_is_the_setting(run_loop, monkeypatch):
+    """WALKFIX Task 9 (QB283 2b): no fixed pause between pictures. The loop's one sleep is THREAD_SLEEP_DURATION_S, 0.0,
+    and it follows every publish and nothing else in this run."""
+    vision_mod = pytest.importorskip("src.vision.vision")
+    publishes = []
+    original_publish = follow.LostTracker.publish
+
+    def counting_publish(self, frame_rgb, frame_ns):
+        publishes.append(frame_ns)
+        return original_publish(self, frame_rgb, frame_ns)
+
+    monkeypatch.setattr(follow.LostTracker, "publish", counting_publish)
+    a, _ = build_screen()
+    shared = new_shared()
+    sleeps, _ = run_loop(FakeScreen(a, max_grabs=40), shared)
+    assert vision_mod.THREAD_SLEEP_DURATION_S == 0.0
+    assert len(publishes) > 30
+    assert sleeps == [0.0] * len(publishes)
+
+
+def test_grab_stamped_retries_without_sleeping(monkeypatch):
+    """WALKFIX Task 9 (T89R-m1): `run_loop` replaces `_grab_stamped`, so `test_loop_pause_is_the_setting` cannot see a
+    `time.sleep` inside it. This runs the real one over a `frame_wait` that returns no picture once: it asks again at once,
+    with no sleep. (A wait made some other way than `time.sleep` is not seen; the measured arms of the key-timing check
+    are the real check of the timing.)"""
+    vision_mod = pytest.importorskip("src.vision.vision")
+    answers = iter([None, ("picture", 123)])
+    asked = []
+    sleeps = []
+
+    def grab_new_frame_stamped(camera, region):
+        asked.append((camera, region))
+        return next(answers)
+
+    monkeypatch.setattr(vision_mod.frame_wait, "grab_new_frame_stamped", grab_new_frame_stamped)
+    monkeypatch.setattr(vision_mod.time, "sleep", sleeps.append)
+    assert vision_mod._grab_stamped("camera", "region") == ("picture", 123)
+    assert asked == [("camera", "region")] * 2
+    assert sleeps == []

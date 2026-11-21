@@ -49,15 +49,17 @@ BOTH_NOISES = pytest.mark.parametrize("noise", [NoiseConfig(), OFFSETS], ids=["p
 # and mean_lap_s 14.926615. The two floats are ns counts over 1e9.
 PINNED_REPORT = dict(
     laps_requested=20, laps_completed=20, legs=141, legs_reached=141, stalls=0, timeouts=0, link_down=0,
-    known_cases={}, single_error_legs=43, single_error_within_bound=43, multi_error_legs=5, multi_error_within_bound=5,
-    moves=371, no_ops=20, drops=0, teleport_downs=44,
-    sim_seconds=pytest.approx(237.642, rel=1e-9), mean_lap_s=pytest.approx(11.8821, rel=1e-9),
+    known_cases={}, single_error_legs=31, single_error_within_bound=31, multi_error_legs=9, multi_error_within_bound=9,
+    moves=348, no_ops=23, drops=0, teleport_downs=49,
+    sim_seconds=pytest.approx(257.8572, rel=1e-9), mean_lap_s=pytest.approx(12.89286, rel=1e-9),
     knockbacks=0,  # the field OFFP141 T3 added to the report; no knockback noise in these runs
     off_map=0,     # the field OFFP141 T7 added (legs that ended off_map); none in these runs
     drop_only_edges=0,  # the field ROPE T1 added (H87); no rotation leg needs a drop
     rope_grabs=0,       # the field ROPE T5 added (H88); no grab noise in these runs and no drop over a rope
-    jump_offs=2,        # the field ROPE T7 added (H88); no grab noise, but C10 option B: 2 laps' last leg takes the rope order at the foot
+    jump_offs=1,        # the field ROPE T7 added (H88); no grab noise, but C10 option B: a lap's last leg takes the rope order at the foot
 )
+# QB266 (walk-fluid Task 1): a node closer than 17 px is walked to, not teleported past. This run was single_error_legs 43,
+# multi_error_legs 5, moves 371, no_ops 20, teleport_downs 44, sim_seconds 237.642, mean_lap_s 11.8821, jump_offs 2.
 # C10 option B (ROPE158-C10B, b551c1e, cf94129): a no-op at the rope-107 foot takes the rope order, which moved this run from
 # single_error_legs 37, multi_error_legs 8, moves 355, no_ops 17, teleport_downs 41, sim_seconds 228.6318 and mean_lap_s
 # 11.43159 (jump_offs 0), and the judge bound (a no-op in a zone may cost the rope order) counts its legs as recovered.
@@ -68,10 +70,12 @@ PINNED_REPORT = dict(
 # sim_seconds 314.927 and mean_lap_s 15.74635). Before H87 (ROPE T1) at 12.5 px/s it had drops 21, teleport_downs 19,
 # sim_seconds 253.9981 and mean_lap_s 12.699905.
 PINNED_OFFSET_REPORT = dict(
-    PINNED_REPORT, single_error_legs=40, single_error_within_bound=40, multi_error_legs=6, multi_error_within_bound=6,
-    moves=356, no_ops=19, drops=0, teleport_downs=44,
-    sim_seconds=pytest.approx(252.6421, rel=1e-9), mean_lap_s=pytest.approx(12.632105, rel=1e-9), jump_offs=1,
+    PINNED_REPORT, single_error_legs=35, single_error_within_bound=35, multi_error_legs=2, multi_error_within_bound=2,
+    moves=332, no_ops=18, drops=0, teleport_downs=49,
+    sim_seconds=pytest.approx(298.1968, rel=1e-9), mean_lap_s=pytest.approx(14.90984, rel=1e-9), jump_offs=3,
 )
+# QB266 (walk-fluid Task 1), the offset run: it was single_error_legs 40, multi_error_legs 6, moves 356, no_ops 19,
+# teleport_downs 44, sim_seconds 252.6421, mean_lap_s 12.632105, jump_offs 1.
 # Before C10 option B: single_error_legs 38, multi_error_legs 5, moves 350, no_ops 20, teleport_downs 40, sim_seconds
 # 249.8481, mean_lap_s 12.492405, jump_offs 0.
 

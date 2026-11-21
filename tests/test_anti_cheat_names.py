@@ -106,7 +106,7 @@ def test_scope():
 
 
 def test_capture_loop_keeps_its_pause():
-    """The grab waits inside Windows for a new frame (H77); the loop keeps only its 20 ms floor sleep (H80)."""
+    """The grab waits inside Windows for a new frame (H77); the loop keeps its pause line (H77; its value is the setting, 0 since QB283 2b)."""
     text = (REPO / "src" / "vision" / "vision.py").read_text(encoding="utf-8")
     assert "time.sleep(THREAD_SLEEP_DURATION_S)" in text
     assert "FRAME_DELAY_MS" not in text

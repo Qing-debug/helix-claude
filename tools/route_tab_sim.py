@@ -6,7 +6,8 @@ section 9; H75).
 
 No board, no key, no game, no vision capture thread and no screen grab (H58): the link and the positions are the
 simulator's, and every part runs on real time, so the walker's waits, the link's plays and the world's settles take as
-long as in a board run. A frame pump stores a fixed minimap-sized picture every 20 ms, as the capture loop would, so the
+long as in a board run. A frame pump stores a fixed minimap-sized picture every 20 ms (the capture loop has no pause since H104, so it
+makes pictures faster; the pump is not meant to match it), so the
 run writes `minimap.png` and its step log, the recorder saves frames and the live view redraws.
 
 `measure` walks the same settings twice: "cli" (`RunSession.run()` on the main thread, no Tk), then "app" (a real
@@ -75,9 +76,10 @@ NOT_COVERED = (
 MODES = ("cli", "app")
 
 FRAME_SHAPE = (82, 162, 3)   # FF2's minimap, `# minimap_size=162,82` (tests/fixtures/fossil_foundry_2.csv:1)
-PUMP_PERIOD_S = 0.020        # the capture loop's pace: a 10 ms key wait plus its 10 ms sleep before RT-11; since H77
-                             # the wait in Windows for the game's next frame plus a 20 ms floor (src/vision/vision.py);
-                             # 20 ms is about that pace (measured gap 21.7 ms, H80)
+PUMP_PERIOD_S = 0.020        # the sim's own display pump, 20 ms. The real capture loop's pace was a 10 ms key wait plus
+                             # its 10 ms sleep before RT-11, then the wait in Windows for the game's next frame plus a
+                             # 20 ms floor (H77, H80; measured gap 21.7 ms); H104 lifted the floor (no fixed pause,
+                             # THREAD_SLEEP_DURATION_S in src/vision/vision.py), and 20 ms stays as the sim's choice
 START_AFTER_MS = 500         # measure: Start is pressed this long after the window starts
 APP_COUNTDOWN_S = 1
 WATCH_MS = 200               # measure: how often the tool looks for the tab's end

@@ -284,6 +284,8 @@ needs no other file except the map:
 (The `planned` values above are the first move of `b21-test1`; the `toward`, `sent` and `settled` times are
 illustrative.) For the simulator, `source` is `"sim"` and `clock` is `"sim_ns"` (virtual time).
 
+Since WALKFIX Task 6 (QB283 2d, 2026-11-13) a `planned` and a `settled` line of a walk may end with one more key, `"frame_ns": <int>`: the stamp of the minimap picture the line's position was read from (`time.perf_counter_ns()` when Windows handed the picture over, the clock of `t_ns` and of the keys); on a `settled` with no position it is null. The version stays 1: a reader that does not know the key ignores it, and `step_log.py` reads an old line without it (the event's `data` then has no `frame_ns` key). A simulator run has none (its `StepLog` is given no stamp source). `EXTRA_FIELDS` in `step_log.py` lists them; `frames/index.jsonl` lines carry the same stamp as `frame_ns`.
+
 Writing (walk process):
 
 - The observer turns each event into a tuple of plain values and puts it on a `queue.SimpleQueue`; `put` "never
@@ -403,6 +405,12 @@ file order (root `CLAUDE.md`, "Map CSVs"; `controller.py:94`). Orange nodes are 
 | `leg_end` | "leg ended: <outcome> (<misses> misses, <off_graph> off-graph, <stalls> stalls)" |
 | any re-plan whose route differs from the last prediction | "route changed: expected next <node>, now <node> (landed <d> px short/past)" |
 
+Note (2026-11-14, as-Hong ruling, option B; FLUID176-ROPELABEL): a `planned` event with `toward` null in a run with a
+step log is the walker's rope move (a planner move always has a target node), so it has no node and no aim. Its lines
+are "plan: <move> to leave the rope" and "route changed: expected next <...>, now <move> to leave the rope (landed <d> px
+short/past)"; the panel and picture show only the sent move (no aim, no route), and the next plan has no
+"route changed" line (the rope move predicted nothing). A rope move gets a "route changed" line only when a plan is still in force when it is planned: a read the map places (C10, no `no_plan` first) keeps the plan and gets one; a read the map cannot place is preceded by a `no_plan` (the walker logs one for every read of the 0.1 s hold), which clears the plan, so a real run shows `cannot plan from ...`, the "at ... off the graph" line and the plan line, with no "route changed" line (ROPELABEL-m1, FLUID177-T7R). A legs-only run keeps the preview's target and aim.
+
 "Why it re-planned" has one structural answer: the walker always plans again after every settle and after every
 failed read or failed plan (`walker.py:1-7`, `:129-190`). The log says which of those it was and whether the new
 plan differs from what the previous one predicted.
@@ -433,8 +441,10 @@ checked against `map_sha256`; a mismatch gives the warning of section 5.3.
 
 The design (separate process, decision RV1-D1 A, Hong's):
 
-- **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). Events come at most about every
-  50 ms (the poll interval, `params.py:24`) while the character is lost, and a handful per move otherwise. It takes
+- **Walker thread**: per event, one tuple and one `SimpleQueue.put` (never blocks). While the
+  character is lost, a simulated walk sleeps the 50 ms poll interval (`params.py:30`) between reads, so its events
+  come at most about every 50 ms; a live walk waits for the next picture instead (`wait_frame`, `walker.py:460`), so it
+  logs one `read_failed` or `no_plan` per picture, at the capture's rate (H104), and a handful per move otherwise. It takes
   no lock that the vision thread takes.
 - **Vision thread**: unchanged. The walk adds no reader of `minimap_frame` except the one-off snapshot at the start,
   which takes the reference under `minimap_frame_lock`, releases the lock, then encodes the PNG (section 3.5).
@@ -1099,7 +1109,7 @@ The plan is `73b7559`. RV-11 (the docs) is `1a2be63`, `a3cb445`, `21040ce` and t
   reported on the simulator runs.
 - **The why line's time is the local time of day (RV3-D6, answered C: H55, tab spec 5.10).** The first build showed
   elapsed `mm:ss.mmm` (`h:mm:ss.mmm` from one hour), which is now the fallback for a header with no clock anchor
-  (`model.py:415-419`). The header's clock anchor (`wall_ns`, `perf_ns`) is recorded (item 8 above) and read for it.
+  (`model.py:425-429`). The header's clock anchor (`wall_ns`, `perf_ns`) is recorded (item 8 above) and read for it.
 - **The no-key check clicks what the live window has, plus the title bar (RV3-D7 A).** Item 4 above.
 - **"Route changed" compares kind and direction (RV3-D8 B).** Item 5 above.
 - **`--replay` is refused with `--ready`, and a silent live view names `--replay` (RV4-D1 A).** Item 7 above.

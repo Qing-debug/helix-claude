@@ -2,8 +2,9 @@
 
 bettercam 1.0.0's `BetterCam.grab` asks Windows' desktop duplication for a new image with a time-out of 0
 (`bettercam/core/duplicator.py:25-29`), so with nothing new it returns None at once and the caller asks again.
-`grab_new_frame` is a copy of `BetterCam.grab`/`_grab` (`bettercam/bettercam.py:70-94`) that passes
-`NEW_FRAME_TIMEOUT_MS` instead: the call sleeps in the OS (the GIL released) and returns as soon as Windows has a new
+`grab_new_frame_stamped` is a copy of `BetterCam.grab`/`_grab` (`bettercam/bettercam.py:70-94`) that passes
+`NEW_FRAME_TIMEOUT_MS` instead (and returns the picture with the time Windows handed it over; `grab_new_frame` is the
+same without the stamp): the call sleeps in the OS (the GIL released) and returns as soon as Windows has a new
 desktop image, or None after the time-out on a screen where nothing changed. The time-out is finite because the wait
 cannot be cancelled. Same API, same monitor, same pixels as before (H58).
 
@@ -37,6 +38,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 import ctypes
+import time
 
 import comtypes
 import numpy as np
@@ -50,6 +52,8 @@ from bettercam._libs.dxgi import (
 
 NEW_FRAME_TIMEOUT_MS = 100
 
+_clock = time.perf_counter_ns  # a seam, as `input_layer._clock`: the stamp's clock, the one every key time in steps.jsonl uses
+
 # COMError carries the HRESULT as a signed 32-bit int, as bettercam compares it (duplicator.py:31-33).
 _WAIT_TIMEOUT = ctypes.c_int32(DXGI_ERROR_WAIT_TIMEOUT).value
 _ACCESS_LOST = ctypes.c_int32(DXGI_ERROR_ACCESS_LOST).value
@@ -61,6 +65,20 @@ def _query_texture(resource):
 
 def grab_new_frame(camera, region: tuple[int, int, int, int] | None = None) -> np.ndarray | None:
     """The next new desktop image of `camera` (a `bettercam.BetterCam`) cropped to `region`, or None.
+
+    The picture of `grab_new_frame_stamped` without its stamp: same waits, same None cases, same errors.
+    """
+    got = grab_new_frame_stamped(camera, region)
+    return None if got is None else got[0]
+
+
+def grab_new_frame_stamped(camera, region: tuple[int, int, int, int] | None = None) -> tuple[np.ndarray, int] | None:
+    """The next new desktop image of `camera` (a `bettercam.BetterCam`) cropped to `region`, with its stamp, or None.
+
+    The stamp is `_clock()` (`time.perf_counter_ns`, the clock of `RealClock.now_ns`, `InputLayer`'s stimulus and the
+    recorder's `t_ns`) read on the line after `AcquireNextFrame` returned: the moment Windows handed the image over
+    (QB283 2d), before the copy, the crop and the colour conversion. It is not `LastPresentTime`, which is when the
+    image was made.
 
     None after `NEW_FRAME_TIMEOUT_MS` with no new image, on a pointer-only update, on a failed texture query, and
     when the display changed (bettercam's `_on_output_change` rebuilds the duplication first). A bad region raises
@@ -75,6 +93,7 @@ def grab_new_frame(camera, region: tuple[int, int, int, int] | None = None) -> n
     resource = ctypes.POINTER(IDXGIResource)()
     try:
         duplication.AcquireNextFrame(NEW_FRAME_TIMEOUT_MS, ctypes.byref(info), ctypes.byref(resource))
+        t_ns = _clock()  # the stamp: Windows has just handed the image over
     except comtypes.COMError as error:
         if error.args[0] == _WAIT_TIMEOUT:
             return None
@@ -95,4 +114,4 @@ def grab_new_frame(camera, region: tuple[int, int, int, int] | None = None) -> n
     rect = camera._stagesurf.map()
     frame = camera._processor.process(rect, camera.width, camera.height, region, camera.rotation_angle)
     camera._stagesurf.unmap()
-    return frame
+    return frame, t_ns

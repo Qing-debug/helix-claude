@@ -10,7 +10,7 @@
 
 ## Speed
 
-- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 68 today (recounted 2026-11-11 after the rope fix, whose two marked tests are the grab runs in `test_sim_rope.py`): 42 in `tests/input`, 19 in `tests/route` (in `test_detection_check.py`, `test_elevation.py`, `test_preview_sim.py`, `test_route_preview.py`, `test_route_tab_sim.py`, `test_session.py`, `test_sim_rope.py`, `test_sim_steps.py`, `test_step_log.py` and `test_step_log_writer.py`) and 7 in `tests/route_view`. `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
+- The `slow` marker (`pytest.ini`, with `--strict-markers`) is for tests of about 0.5 s or more and subprocess tests: 69 today (recounted 2026-11-15 after the walk-fluid build; the rope fix's two marked tests are the grab runs in `test_sim_rope.py`, and the walk-fluid build's one is `test_the_window_runs_as_its_own_process_and_refuses_a_bad_at` in `tests/input/test_key_timing_check.py`): 43 in `tests/input`, 19 in `tests/route` (in `test_detection_check.py`, `test_elevation.py`, `test_preview_sim.py`, `test_route_preview.py`, `test_route_tab_sim.py`, `test_session.py`, `test_sim_rope.py`, `test_sim_steps.py`, `test_step_log.py` and `test_step_log_writer.py`) and 7 in `tests/route_view`. `python -m pytest --collect-only -m slow -q` gives the count. `python -m pytest -m "not slow"` is the fast loop; `tools/check.py` runs it and `tools/check.py --full` runs everything (times in the root CLAUDE.md).
 - Times: the check totals and the `tests/route`, `tests/route_view` and `tests/controller` times are in the root CLAUDE.md (Running); `tests/input` takes about 65 s. Measured 2026-11-01 on the dev PC, each run alone.
 
 ## Traps
@@ -23,6 +23,6 @@
 
 ## basedpyright baseline
 
-- `basedpyright` (a `tools/check.py` step) reports only errors that are not in `.basedpyright/baseline.json` (146 entries when this was written). Its `include` in `pyproject.toml` is `src` plus `tests/input/input_fakes.py`.
+- `basedpyright` (a `tools/check.py` step) reports only errors that are not in `.basedpyright/baseline.json` (144 entries when this was written). Its `include` in `pyproject.toml` is `src`, `tests/input/input_fakes.py` and the two tools `tools/key_timing_check.py` and `tools/capture_load_window.py`.
 - When you fix a baselined error, a plain `basedpyright` run rewrites the baseline smaller: commit the rewritten file with your change (`tools/check.py` warns while it is uncommitted).
 - When code with a baselined error moves to another file, run `basedpyright --writebaseline` (it exits 1 even though it wrote) and check that the entry count did not rise. Don't use `--writebaseline` to hide a new error.

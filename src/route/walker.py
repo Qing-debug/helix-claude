@@ -35,10 +35,18 @@ Where the plan is silent:
   `locate.attach` places it), or a placed read that the move sent from that very read left unchanged (a no-op), inside a
   marked rope's zone (`RopeZones.at`, one dict lookup, asked for those reads only), held `rope_still_s` gets
   `planner.rope_move`'s moves in order: blinks to the nearer platform in reach, then one jump off; a move sent restarts
-  the 0.1 s hold. With the order used up the leg ends `OFF_MAP` with one line. A rope move is not progress (`best` is
+  the 0.1 s hold. With the order used up, a read the map places goes on with the planner's move (the order starts
+  again); a read the map cannot place ends the leg `OFF_MAP` with one line. A rope move is not progress (`best` is
   unchanged) and never counts toward a stall by itself; its order restarts when a placed read has moved since the move
   sent from it, when `attach` places the read, or when the read is on another rope. A read outside every zone follows
   the still rule above, unchanged.
+- Waiting for a picture (WALKFIX Task 7, QB283 2a): the five waits of `walk_leg` and the settle's wait after a failed
+  or stale read end at the next picture, at most `poll_s` later, when the walker has a waiter (`wait_frame`: the session
+  passes its position source's `wait_new`). With none (the simulator, the tests' fakes) each is `clock.sleep(poll_s)`
+  as before. The still and rope timers count the clock (`_Stillness`), not reads, so reading more often moves neither
+  `standing_s` nor `rope_still_s`. In the settle a successful read is still followed by `clock.sleep(poll_s)`
+  (WALKFIX170-D1 A), so the two reads it compares are at least `poll_s` apart however often pictures arrive: two
+  pictures a few milliseconds apart are equal while the character still walks (one px per 80 ms). Item 3 replaces it.
 - The step observer (route view, contract V2) is optional: it is called at the V2 points of `walk_leg` on the walker's
   thread, and after its first exception it is reported once through `log` and not called again this run. With no
   observer nothing else happens: each call site is one `is not None` test.
@@ -88,6 +96,12 @@ class Clock(Protocol):
 
 class PositionSource(Protocol):
     def read(self) -> Result[tuple[int, int], str]: ...  # Failure(STALE) = no new frame; any other Failure = miss
+
+
+class FrameWaiter(Protocol):
+    """Waits until a picture newer than the last one read is there, for at most `timeout_s` (`MinimapPositionSource.wait_new`)."""
+
+    def __call__(self, timeout_s: float) -> object: ...
 
 
 class StepObserver(Protocol):
@@ -172,6 +186,7 @@ class RouteWalker:
         observer: StepObserver | None = None,
         log: Callable[[str], None] = _print_error,
         ropes: RopeZones = RopeZones.EMPTY,
+        wait_frame: FrameWaiter | None = None,
     ) -> None:
         self._rg = rg
         self._rotation = tuple(rotation)
@@ -189,6 +204,7 @@ class RouteWalker:
         self._observer = observer
         self._log_line = log  # the app run's log goes to the console box (route tab H71); `_log` is the sink check
         self._ropes = ropes  # the map's rope zones (H88); `RopeZones.EMPTY` for a map with no rope file
+        self._wait_frame = wait_frame  # wakes the walker's idle waits on a new picture (QB283 2a); None: sleep `poll_s`
 
     def walk_leg(self, lap: int, leg: int, src: Node | None, dst: Node) -> LegRecord:
         """Walk from the character's current position to `dst`; the record says how the leg ended."""
@@ -231,7 +247,7 @@ class RouteWalker:
                     still.reset()
                 if self._observer is not None:
                     self._emit(self._observer.read_failed, read_ns, read.failure())
-                clock.sleep(params.poll_s)
+                self._wait(params.poll_s)
                 continue
             pos = read_pos = read.unwrap()
 
@@ -251,12 +267,12 @@ class RouteWalker:
                 if is_successful(attach(self._rg, pos)):  # placed by A1-A3, but no path: waiting is as today
                     still.reset()
                     rope_at, rope_tries = None, 0
-                    clock.sleep(params.poll_s)
+                    self._wait(params.poll_s)
                     continue
                 rope = self._ropes.at(pos)  # a read the map cannot place always asks the zones (a placed read asks only after a no-op, above)
             if rope is not None:  # on a marked rope (H88), or a placed read there that a move left unchanged (C10)
                 if still.see(pos, read_ns) < params.rope_still_s:
-                    clock.sleep(params.poll_s)
+                    self._wait(params.poll_s)
                     continue
                 if rope != rope_at:
                     rope_at, rope_tries = rope, 0
@@ -277,7 +293,7 @@ class RouteWalker:
                     on_rope = True
             elif not is_successful(planned):
                 if still.see(pos, read_ns) < params.standing_s:
-                    clock.sleep(params.poll_s)
+                    self._wait(params.poll_s)
                     continue
                 snapped = attach_standing(self._rg, pos)  # standing where the map cannot place it
                 if not is_successful(snapped):
@@ -288,7 +304,7 @@ class RouteWalker:
                 rope_at, rope_tries = None, 0  # standing on a platform line: off the rope, so its order starts again
                 planned = next_move(self._rg, pos, dst, self._rng)
                 if not is_successful(planned):
-                    clock.sleep(params.poll_s)
+                    self._wait(params.poll_s)
                     continue
             decision = planned.unwrap()
             move = decision.move
@@ -441,12 +457,21 @@ class RouteWalker:
             self._observer = None
             self._log_line(f"route view observer failed, not called again this run: {type(exc).__name__}: {exc}")
 
+    def _wait(self, seconds: float) -> None:
+        """The walker's idle wait: until the next picture, for at most `seconds`, when it has a waiter; else a sleep."""
+        if self._wait_frame is not None:
+            self._wait_frame(seconds)
+        else:
+            self._clock.sleep(seconds)
+
     def _settle(self) -> tuple[tuple[int, int] | None, bool]:
         """Wait for the character to stop moving after a move.
 
-        Sleeps `min_settle_s`, then polls every `poll_s` until two consecutive successful reads are equal (that
-        position is the result) or `settle_timeout_s` has passed since the settle began (the last successful read, or
-        None). Returns `(settled, stopped)`; `stopped` is True when the stop flag was set before a poll.
+        Sleeps `min_settle_s`, then reads until two consecutive successful reads are equal (that position is the
+        result) or `settle_timeout_s` has passed since the settle began (the last successful read, or None). After a
+        successful read it sleeps `poll_s`, so the two reads it compares are at least `poll_s` apart however often
+        pictures arrive (WALKFIX170-D1 A); after a failed or stale read it waits for the next picture (`_wait`).
+        Returns `(settled, stopped)`; `stopped` is True when the stop flag was set before a poll.
         """
         params = self._rg.params
         clock = self._clock
@@ -463,7 +488,9 @@ class RouteWalker:
                 if current == last:
                     return current, False
                 last = current
-            clock.sleep(params.poll_s)
+                clock.sleep(params.poll_s)  # WALKFIX170-D1 A: the two reads compared stay poll_s apart (item 3 replaces this)
+            else:
+                self._wait(params.poll_s)  # no new picture yet, or a miss: wake on the next picture (QB283 2a)
         return last, False
 
 

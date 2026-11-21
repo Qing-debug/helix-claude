@@ -343,7 +343,7 @@ UP, DOWN = ("teleport", "UP"), ("teleport", "DOWN")
 
 # (read, target, the planner's move from the read, the rope rule's blink, the jump off's direction)
 C10_CASES = [
-    pytest.param(TOP_107, (58, 46), ("walk", "LEFT"), UP, "LEFT", id="rope107-top"),
+    pytest.param(TOP_107, (101, 24), ("walk", "LEFT"), UP, "LEFT", id="rope107-top"),
     pytest.param(TOP_107_B, (101, 24), ("walk", "LEFT"), UP, "LEFT", id="rope107-top-second-row"),
     pytest.param(FOOT_107, FLOOR_RIGHT, ("walk", "RIGHT"), DOWN, "RIGHT", id="rope107-foot"),
     pytest.param(FOOT_107_EDGE, (101, 24), ("walk", "LEFT"), DOWN, "LEFT", id="rope107-foot-outer-column"),
@@ -413,7 +413,7 @@ def test_an_unplaced_read_with_the_order_used_up_still_ends_off_map(ff2):
                leg_timeout_s=30.0)
     holder.append(rig)
 
-    record = _leg(ff2, rig, (58, 46))
+    record = _leg(ff2, rig, (101, 24))
 
     assert record.outcome == LegOutcome.OFF_MAP
     assert _kinds(rig) == ["walk", "teleport", "teleport", "jump_off"]
@@ -427,7 +427,7 @@ def test_the_order_starts_again_when_the_placed_read_moves(ff2):
     across the move would jump off after one."""
     rig = _rig(ff2, steps((0, Success(TOP_107)), (0.32, Success(TOP_107_B))), leg_timeout_s=10.0)
 
-    record = _leg(ff2, rig, (58, 46))
+    record = _leg(ff2, rig, (101, 24))
 
     assert record.outcome == LegOutcome.TIMED_OUT   # the order used up on a placed read resets (ROPE158-C10B-p2-D1)
     assert _kinds(rig)[:6] == ["walk", "teleport", "walk", "teleport", "teleport", "jump_off"]
@@ -471,7 +471,7 @@ def test_a_map_with_no_rope_file_ignores_a_placed_no_op(ff2):
     """The same read as the top of rope 107, with no zones: the walk is repeated, as before the rope fix."""
     rig = _rig(ff2, steps((0, Success(TOP_107))), ropes=None, leg_timeout_s=2.0)
 
-    record = _leg(ff2, rig, (58, 46))
+    record = _leg(ff2, rig, (101, 24))
 
     assert record.outcome == LegOutcome.TIMED_OUT
     assert set(_kinds(rig)) == {"walk"} and len(rig.layer.plays) > 3 and _rope_moves(rig) == []
@@ -481,7 +481,7 @@ def test_stop_wins_during_the_hold_after_a_placed_no_op(ff2):
     """The flag set while the rope rule waits its 0.1 s (after the settle): no blink is sent."""
     rig = _rig(ff2, steps((0, Success(TOP_107))), stop_at_s=0.25)
 
-    record = _leg(ff2, rig, (58, 46))
+    record = _leg(ff2, rig, (101, 24))
 
     assert record.outcome == LegOutcome.STOPPED and _kinds(rig) == ["walk"] and rig.lines == []
 
@@ -505,10 +505,10 @@ def test_a_move_that_was_not_sent_is_not_a_no_op(ff2, error):
     """ROPE159-C10B-F1 M3: a send that failed (not link down) did not press the key, so the read that stays the same
     afterwards is not a move that did nothing, and the rope rule does not start from it. The planner's move is sent
     again first, and only the second walk, which was sent and did nothing, starts the rule (blink up from the top)."""
-    rig = _rig(ff2, steps((0, Success(TOP_107)), (1.0, Success((58, 46)))), leg_timeout_s=3.0,
+    rig = _rig(ff2, steps((0, Success(TOP_107)), (1.0, Success((101, 24)))), leg_timeout_s=3.0,
                layer_of=lambda clock: FailingFirstWalk(clock, error))
 
-    record = _leg(ff2, rig, (58, 46))
+    record = _leg(ff2, rig, (101, 24))
 
     assert record.outcome == LegOutcome.REACHED and rig.lines == []
     assert _kinds(rig)[:3] == ["walk", "walk", "teleport"]

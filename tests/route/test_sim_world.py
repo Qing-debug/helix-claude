@@ -122,12 +122,14 @@ def test_teleport_up_with_nothing_in_reach_stays(terrain):
     assert world.teleport(Key.UP, T_NS).end == pytest.approx((86, 60))
 
 
-def test_teleport_left_off_platform_falls_to_floor(terrain):
+def test_teleport_left_stops_at_the_platform_end(terrain):
+    """Re-pinned by walk-fluid Task 4 (QB282): the full reach (x 39) used to leave mid-left's end at x 44 and fall to the
+    floor (39, 60.18, settle 0.35 + 14.18 / 60); now the end stops it. The same start and key; the fall of a teleport that
+    does leave a platform is pinned in `test_sim_side_teleport.py` (carry-over) and for the air (the old rule)."""
     world = _world(terrain, (58, 46))
     effect = world.teleport(Key.LEFT, T_NS)
-    y_floor = 60 + 2 / 11
-    assert effect.end == pytest.approx((39, y_floor))
-    assert effect.settle_s == pytest.approx(0.35 + (y_floor - 46) / 60)
+    assert effect.end == pytest.approx((44, 45))
+    assert effect.settle_s == pytest.approx(0.35)
 
 
 def test_walk_right_up_slope(terrain):

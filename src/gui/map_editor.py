@@ -18,13 +18,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image, ImageTk
-from src.gui.minimap_lost import clear_lost, show_lost
+from src.gui.minimap_lost import clear_lost, read_minimap, show_lost
 from src.controller.map_csv import EditorNode, read_editor_nodes, write_editor_nodes
 from src.controller.map_format import ordered_local_ids
 from src.controller.node import Node
 from src.controller.rope_file import (KEEP_OUT_X_PX, KEEP_OUT_Y_PX, RopeFile, RopeMark, free_x, near_rope_end, read_ropes,
                                       rope_file_for, write_ropes)
 from src.controller.rope_finder import SAME_ROPE_PX, find_ropes, median_frame
+from src.route.params import MovementParams
+from src.route.route_graph import RouteGraph
 from returns.pipeline import is_successful
 
 
@@ -57,6 +59,7 @@ CANVAS_TAG_SELECTED = "editor_selected"
 CANVAS_TAG_EDGE = "editor_edge"
 CANVAS_TAG_BAND = "editor_band"
 CANVAS_TAG_ORPHAN = "editor_orphan"
+CANVAS_TAG_TELEPORT_LINK = "editor_teleport_link"  # the walker's teleport links; tagged CANVAS_TAG_EDGE too
 CANVAS_TAG_ROPE = "editor_rope"
 CANVAS_TAG_KEEPOUT = "rope_keepout"
 
@@ -1202,13 +1205,14 @@ class MapEditor:
             # off-bounds) still apply, so save-with-no-character stays usable.
             pass
         else:
-            connected_nodes = {n for edge in path_graph.graph.edges() for n in edge}
+            # a node reached only by a teleport link of the walker's (anymap182-1) is no orphan
+            connected_nodes = self._previewConnectedNodes(path_graph, self._buildPreviewRoute(path_graph))
             orphan_nodes = [
                 self.state.nodes[lid] for lid, n in id_to_node.items()
                 if n not in connected_nodes
             ]
             if orphan_nodes:
-                issues.append("Orphan nodes (no edges):")
+                issues.append("Orphan nodes (no link the walker can use):")  # Task 4b: a dropped gap is still drawn
                 for n in orphan_nodes:
                     issues.append(f"  • #{n.local_id} at {n.pos}")
 
@@ -1531,6 +1535,62 @@ class MapEditor:
         path_graph.buildGraph()
         return path_graph, id_to_node
 
+    def _buildPreviewRoute(self, path_graph) -> Optional[RouteGraph]:
+        """The walker's route graph on the preview PathGraph, built as the walk builds it (`RouteGraph.build(path_graph,
+        MovementParams())`, src/route/session.py). The editor reads its teleport links (Hong's anymap182-1, H111): links
+        the walker adds from a platform end that stops a teleport, which are not PathGraph edges.
+
+        None when there is no PathGraph (no character selected) or the build fails; the callers then draw no link and
+        count the PathGraph edges alone, and say nothing (ANYMAP194-D1). `RouteGraph.build` makes no Node, so the
+        counter bump of `_buildPreviewGraph` stays the only one."""
+        if path_graph is None:
+            return None
+        built = RouteGraph.build(path_graph, MovementParams())
+        return built.unwrap() if is_successful(built) else None
+
+    @staticmethod
+    def _previewTeleportLinks(route: Optional[RouteGraph]) -> List[Tuple[Node, Node]]:
+        """The teleport links the walker offers: the (end node, near node) pairs of `route.teleport_links` that have an
+        edge in `route.graph` (a link the gap cap, H112, leaves with no edge is not offered). Sorted by position, so the
+        drawing order is the same every time. Empty when there is no route graph."""
+        if route is None:
+            return []
+        offered = [(u, v) for u, v in route.teleport_links if route.graph.has_edge(u, v)]
+        return sorted(offered, key=lambda pair: (pair[0].minimap_position, pair[1].minimap_position))
+
+    @staticmethod
+    def _droppedPreviewEdges(path_graph, route: Optional[RouteGraph]) -> set:
+        """The PathGraph side edges u -> v the walker drops (ANYMAP194-D2): u and v are on different platforms, the
+        platform end u leaves from toward v stops a teleport (`route.split_ends`: a marked gap, or an end of one), and the
+        walker's graph has no u -> v. That is a gap wider than the cap (H112), or one whose teleport lands on a nearer
+        platform (H103's nearest rule).
+
+        Empty when there is no route graph: the editor cannot tell what the walker drops, so it shows and counts the
+        PathGraph edges as they are, silently, as ANYMAP194-D1 rules for the links (plan minor m-new1)."""
+        if route is None:
+            return set()
+        dropped = set()
+        for u, v in path_graph.graph.edges():
+            (ux, uy), (vx, vy) = u.minimap_position, v.minimap_position
+            if abs(vx - ux) < abs(vy - uy) or route.graph.has_edge(u, v):
+                continue  # a vertical edge is no gap (the test RouteGraph.build types by); the walker has this one
+            start = route.terrain.platform_index(u)
+            if start != route.terrain.platform_index(v) and (start, 1 if vx > ux else -1) in route.split_ends:
+                dropped.add((u, v))
+        return dropped
+
+    def _previewConnectedNodes(self, path_graph, route: Optional[RouteGraph]) -> set:
+        """The preview Nodes that have a link the walker can use, for the orphan check (Highlight orphans and the Save
+        warning): the nodes of the PathGraph edges the walker does not drop (Task 4b, ANYMAP194-D2; a pair with one
+        direction offered still connects both nodes) plus those of the teleport links it offers (anymap182-1). With no
+        route graph, the PathGraph edges alone (ANYMAP194-D1). `_buildPreviewGraph`'s `id_to_node` maps editor ids to
+        these same Nodes."""
+        dropped = self._droppedPreviewEdges(path_graph, route)
+        connected = {n for edge in path_graph.graph.edges() if edge not in dropped for n in edge}
+        for u, v in self._previewTeleportLinks(route):
+            connected.update((u, v))
+        return connected
+
     def _evaluateShowEdgesState(self) -> None:
         """Enable "Show edges" only when a character class is selected — the
         preview graph needs the character's traversal caps to build, so with no
@@ -1569,35 +1629,68 @@ class MapEditor:
             # redraw triggers can still call _renderPreview — guard regardless).
             # Scoped skip rather than early return so band rendering below runs.
             if path_graph is not None and id_to_node:
+                route = self._buildPreviewRoute(path_graph)  # None: no teleport link is drawn (ANYMAP194-D1)
                 # Classify edges horizontal vs vertical by Δy vs Δx; minimap_position is native
                 # coords, multiply by RENDER_SCALE for canvas pixels (same pattern as _renderNodes).
                 # Dedupe by unordered pair so one line renders per pair; arrowheads encode which
                 # directed edges actually exist (asymmetric vertical edges with platform-edge gating
                 # would otherwise look bidirectional to the eye — see _isVerticalEdgeValid).
+                # Arrowheads go only on the directions the walker offers (Task 4b, ANYMAP194-D2, Ruling ANYMAP195-PR-I1):
+                # a direction it drops (_droppedPreviewEdges) gets none, and a pair it drops every way is drawn grey50,
+                # dashed (2, 2), with no arrowhead, as not crossed. With no route graph nothing is dropped (m-new1).
+                dropped = self._droppedPreviewEdges(path_graph, route)
                 drawn = set()
                 for u, v in path_graph.graph.edges():
                     key = frozenset((u, v))
                     if key in drawn:
                         continue
                     drawn.add(key)
-                    has_uv = path_graph.graph.has_edge(u, v)
-                    has_vu = path_graph.graph.has_edge(v, u)
+                    has_uv = path_graph.graph.has_edge(u, v) and (u, v) not in dropped
+                    has_vu = path_graph.graph.has_edge(v, u) and (v, u) not in dropped
                     if has_uv and has_vu:
                         arrow_spec = tk.BOTH
                     elif has_uv:
                         arrow_spec = tk.LAST
-                    else:
+                    elif has_vu:
                         arrow_spec = tk.FIRST
+                    else:
+                        arrow_spec = None  # the walker drops every direction of this pair
                     ux, uy = u.minimap_position
                     vx, vy = v.minimap_position
                     is_vertical = abs(vy - uy) > abs(vx - ux)
                     color = "darkgreen" if is_vertical else "limegreen"
                     sx1, sy1 = ux * RENDER_SCALE, uy * RENDER_SCALE
                     sx2, sy2 = vx * RENDER_SCALE, vy * RENDER_SCALE
+                    if arrow_spec is None:
+                        self.minimap_canvas.create_line(
+                            sx1, sy1, sx2, sy2,
+                            fill="grey50", dash=(2, 2), width=1,  # Tk's default arrow is none
+                            tags=CANVAS_TAG_EDGE,
+                        )
+                    else:
+                        self.minimap_canvas.create_line(
+                            sx1, sy1, sx2, sy2,
+                            fill=color, width=1, arrow=arrow_spec,
+                            tags=CANVAS_TAG_EDGE,
+                        )
+                # The walker's teleport links (Hong's anymap182-1, H111), which are not PathGraph edges: one line per
+                # pair, from the end node to the landing platform's near node, arrowheads on the directions the walker
+                # offers. Style ANYMAP194-D1 (colour per the ANYMAP195-PF ruling): dashed magenta, width 1. Also tagged
+                # CANVAS_TAG_EDGE, so the delete above clears them.
+                links = self._previewTeleportLinks(route)
+                offered = set(links)
+                drawn_links = set()
+                for u, v in links:
+                    key = frozenset((u, v))
+                    if key in drawn_links:
+                        continue
+                    drawn_links.add(key)
+                    ux, uy = u.minimap_position
+                    vx, vy = v.minimap_position
                     self.minimap_canvas.create_line(
-                        sx1, sy1, sx2, sy2,
-                        fill=color, width=1, arrow=arrow_spec,
-                        tags=CANVAS_TAG_EDGE,
+                        ux * RENDER_SCALE, uy * RENDER_SCALE, vx * RENDER_SCALE, vy * RENDER_SCALE,
+                        fill="magenta", dash=(4, 2), width=1, arrow=tk.BOTH if (v, u) in offered else tk.LAST,
+                        tags=(CANVAS_TAG_TELEPORT_LINK, CANVAS_TAG_EDGE),
                     )
         if self._show_bands_var.get() and self.state.selected_id is not None:
             sel = self.state.nodes.get(self.state.selected_id)
@@ -1628,7 +1721,8 @@ class MapEditor:
     def _renderOrphanHighlights(self):
         """Draw a red X within each orphan node's circle when the 'Highlight orphans' toggle is on.
 
-        Orphan = no edges to or from this node in the throwaway preview graph. Helps the
+        Orphan = no link the walker can use to or from this node: no PathGraph edge it keeps (a gap it drops does not
+        count, though its grey line is drawn) and no teleport link it offers (_previewConnectedNodes). Helps the
         user visually identify isolated nodes (especially orange ones, which don't get
         local_id labels on the canvas) when the orphan warning lists ids.
         """
@@ -1642,7 +1736,7 @@ class MapEditor:
             return
         if not id_to_node:
             return
-        connected_nodes = {n for edge in path_graph.graph.edges() for n in edge}
+        connected_nodes = self._previewConnectedNodes(path_graph, self._buildPreviewRoute(path_graph))
         node_r = NODE_DRAW_RADIUS_PX * RENDER_SCALE
         for local_id, node in id_to_node.items():
             if node in connected_nodes:
@@ -1731,17 +1825,17 @@ class MapEditor:
     def _updateCanvas(self):
         """
         Pull the latest minimap frame and draw it. Schedules itself every 10ms
-        via tk.after, matching MapleGUI._updateCanvas's cadence. Stops when the
-        editor window has been destroyed.
+        via tk.after, matching MapleGUI._updateCanvas's cadence, also after a
+        pass that raised. Stops when the editor window has been destroyed.
         """
         if not self.window.winfo_exists():
             return  # window destroyed — stop the loop
-        if self.minimap_canvas is None:
-            self.window.after(10, self._updateCanvas)
-            return
-        with self.sharedInfo.minimap_frame_lock:
-            frame = self.sharedInfo.minimap_frame
-            lost = bool(getattr(self.sharedInfo, "minimap_lost", False))
+        try:
+            if self.minimap_canvas is None:
+                return  # the finally below still schedules the next pass
+            # Read the reference under the lock and draw outside it: the lock is never held across a Tk call (G9-217).
+            # The vision thread stores a new array for every frame (src/vision/vision.py:87), so this one is not mutated.
+            frame, lost = read_minimap(self.sharedInfo)
             if frame is not None and not lost:
                 pil_minimap = Image.fromarray(frame)
                 if RENDER_SCALE != 1:
@@ -1759,8 +1853,10 @@ class MapEditor:
                     self.minimap_canvas.itemconfig(
                         self.minimap_canvas_bg_img_id, image=minimap_img
                     )
-        if frame is not None and lost:  # the capture lost the minimap: the message over the frozen picture (VIS162-FIX)
-            show_lost(self.minimap_canvas, self.minimap_canvas_width, self.minimap_canvas_height)
-        else:
-            clear_lost(self.minimap_canvas)
-        self.window.after(10, self._updateCanvas)
+            if frame is not None and lost:  # the capture lost the minimap: the message over the frozen picture (VIS162-FIX)
+                show_lost(self.minimap_canvas, self.minimap_canvas_width, self.minimap_canvas_height)
+            else:
+                clear_lost(self.minimap_canvas)
+        finally:
+            # Schedule the next frame, also after a body that raised: one bad frame does not end the loop (as gui.py's)
+            self.window.after(10, self._updateCanvas)

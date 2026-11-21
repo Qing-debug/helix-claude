@@ -55,7 +55,9 @@ def _bad_position(node: Node) -> bool:
 def _walk_links(
     nodes: Sequence[Node], align_px: int, reach_h: int, params: MovementParams
 ) -> list[tuple[int, int, LinkKind]]:
-    """R1. Returns (src index, dst index, kind) in emission order."""
+    """R1. Returns (src index, dst index, kind) in emission order. The nearest walkable node on a side is chosen as
+    ever, and then the link is dropped when `a`'s end on that side or `b`'s end facing it carries a platform-end mark
+    (QB282: the platform ends there, so it is not walked across); it never links past the nearest to a farther node."""
     out = []
     for i, a in enumerate(nodes):
         ax, ay = a.minimap_position
@@ -74,7 +76,14 @@ def _walk_links(
                 if walkable and (best is None or abs(dx) < best[0]):
                     best = (abs(dx), j)
             if best is not None:
-                dy = abs(nodes[best[1]].minimap_position[1] - ay)
+                b = nodes[best[1]]
+                if side > 0:
+                    marked = bool(a.is_right_platform_edge) or bool(b.is_left_platform_edge)
+                else:
+                    marked = bool(a.is_left_platform_edge) or bool(b.is_right_platform_edge)
+                if marked:
+                    continue
+                dy = abs(b.minimap_position[1] - ay)
                 out.append((i, best[1], LinkKind.LEVEL if dy <= align_px else LinkKind.SLOPE))
     return out
 

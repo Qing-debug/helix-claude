@@ -375,10 +375,16 @@ def test_link_reads_only_an_arrow_then_alt_as_a_jump_off(steps, kind):
 # --- 5. run_sim -------------------------------------------------------------------------------------------------
 
 
-SMOKE = (371, 17, 0, 47, 235.6265)       # moves, no-ops, drops, teleports down, simulated seconds; (366, 25, 0, 44, 237.9668)
-#                                       # at Task 1, moved by C10 option B (a no-op at the rope-107 foot takes the rope order)
-PRE_C10_SMOKE = (366, 25, 0, 44, 237.9668)   # the same run with no rope file beside the map: the walker has no zones
-REAL = (358, 22, 0, 46, 235.2635)        # the same on the real ground; (352, 22, 0, 42, 237.7692) before C10 option B moved it
+SMOKE = (351, 18, 0, 54, 256.6304)       # moves, no-ops, drops, teleports down, simulated seconds; (366, 25, 0, 44, 237.9668)
+#                                       # at Task 1, moved by C10 option B (a no-op at the rope-107 foot takes the rope order:
+#                                       # (371, 17, 0, 47, 235.6265)) and by QB266 (walk-fluid Task 1: a node closer than 17 px
+#                                       # is walked to, not teleported past)
+PRE_C10_SMOKE = (335, 22, 0, 42, 252.4155)   # the same run with no rope file beside the map: the walker has no zones; was
+#                                       # (366, 25, 0, 44, 237.9668) before QB266
+REAL = (348, 17, 0, 46, 256.9908)        # the same on the real ground; (339, 22, 0, 46, 250.6769) before walk-fluid Task 5 (the
+#                                       # preset's teleport extra went 1.0 -> 0.0, checked: the same run with the extra at 1.0
+#                                       # still gives those), (358, 22, 0, 46, 235.2635) before QB266, (352, 22, 0, 42,
+#                                       # 237.7692) before C10 option B moved it
 
 
 def _figures(report):
@@ -505,15 +511,15 @@ def test_rope_grab_run_recovers():
 
 def test_jump_offs_are_the_walkers_jump_off_moves():
     """Task 7: `SimReport.jump_offs` counts the walker's moves of kind `jump_off`. Half the moves doing nothing makes a
-    blink up from a rope fail twice now and then, so the order reaches its jump off (seed 1: 2 grabs, 7 jump offs, and
-    every leg still reached since C10 option B, ROPE158-C10B-p2-D1: an order used up on a placed read starts again; it was
-    1 grab, 1 jump off, 0 off map before C10); the count equals the observer's `planned` events of that kind, and the quiet
+    blink up from a rope fail twice now and then, so the order reaches its jump off (seed 1: 5 grabs, 9 jump offs since
+    QB266, walk-fluid Task 1; 2 grabs and 7 jump offs before it; and every leg still reached since C10 option B,
+    ROPE158-C10B-p2-D1: an order used up on a placed read starts again; it was 1 grab, 1 jump off, 0 off map before C10); the count equals the observer's `planned` events of that kind, and the quiet
     default run has none."""
     rec = Rec()
     result = run_sim(CSV, DEFAULT_TERRAIN, 5, 1, noise=NoiseConfig(no_op_p=0.5, rope_grab_p=0.5), observer=rec)
     assert is_successful(result), result
     report = result.unwrap()
-    assert (report.rope_grabs, report.jump_offs, report.off_map, report.laps_completed) == (2, 7, 0, 5)
+    assert (report.rope_grabs, report.jump_offs, report.off_map, report.laps_completed) == (5, 9, 0, 5)
     assert report.jump_offs == len([e for e in rec.of("planned") if e[3] == "jump_off"])
     quiet = run_sim(CSV, DEFAULT_TERRAIN, 2, 1).unwrap()
     assert quiet.jump_offs == 0
@@ -529,7 +535,7 @@ def ff2():
 
 def test_a_walk_planned_from_a_placed_rope_read_does_nothing_and_the_rope_rule_gets_off(ff2):
     """Hong's game fact: on a rope, Left or Right alone does nothing. A character that hangs at (106, 44), a row the map
-    places (the platform line at 43 is within 3 px), is planned a `walk LEFT` toward (58, 46); the sim's walk does nothing
+    places (the platform line at 43 is within 3 px), is planned a `walk LEFT` toward (101, 24); the sim's walk does nothing
     on the rope, the read stays, and the walker takes the rope rule: after `rope_still_s` it blinks up onto the mid-right
     platform (1 px away), and the leg goes on and reaches. (The known limit this closes, `src/route/CLAUDE.md`: the walk was
     repeated until the leg timed out.)"""
@@ -546,7 +552,7 @@ def test_a_walk_planned_from_a_placed_rope_read_does_nothing_and_the_rope_rule_g
                          WalkerConfig(use_stimulus=False, leg_timeout_s=60.0), observer=rec,
                          ropes=RopeZones.build(ROPES, ff2.rg.params))
     began_ns = clock.now_ns()
-    leg = walker.walk_leg(1, 0, None, ff2.nodes[(58, 46)])
+    leg = walker.walk_leg(1, 0, None, ff2.nodes[(101, 24)])
     assert leg.outcome == LegOutcome.REACHED
     assert (clock.now_ns() - began_ns) / 1e9 < 30
     planned = [(e[2], e[3], e[4], e[7]) for e in rec.of("planned")]
@@ -559,9 +565,12 @@ def test_a_walk_planned_from_a_placed_rope_read_does_nothing_and_the_rope_rule_g
 
 def test_a_run_that_reaches_a_placed_rope_read_recovers_through_the_rope_rule():
     """The plan's setup for C10: a grab ends 1 or 2 px below the rope's top (y 44 and 45, rows the map places) every time.
-    Seed 4 over 6 laps: the teleport down from (106, 45) does nothing (the sim's 6% no-op), the read stays placed, and the
-    walker takes the rope rule (a `planned` event with `toward` None at a placed row: a blink up), then the leg reaches.
-    The seed is pinned like the other sim figures; it is not a property of the noise."""
+    Seed 4 over 6 laps: a teleport that does nothing (the sim's 6% no-op) leaves the read placed, and the walker takes the
+    rope rule (a `planned` event with `toward` None at a placed row), then the leg reaches. Since QB266 (walk-fluid Task 1)
+    the four rope-rule moves are a blink down at the foot of rope 46, two blinks down at the foot of rope 107 and the jump
+    off right that ends that order; before it there was one blink up from (106, 47). The seed is pinned like the other sim
+    figures; it is not a property of the noise. It no longer holds a rope-rule move at a grab read near the rope's top (seeds
+    0-41 have none after QB266): that recovery is scripted in `test_sim_rope_top_grab.py` (walk-fluid Task 4)."""
     rec = Rec()
     noise = NoiseConfig(rope_grab_p=1.0, rope_grab_depth_px=(1, 2))
     result = run_sim(CSV, DEFAULT_TERRAIN, 6, 4, noise=noise, observer=rec)
@@ -570,7 +579,8 @@ def test_a_run_that_reaches_a_placed_rope_read_recovers_through_the_rope_rule():
     assert report.rope_grabs >= 1 and report.off_map == 0
     assert report.legs_reached == report.legs and report.laps_completed == 6
     rope_moves = [(e[2], e[3], e[4]) for e in rec.of("planned") if e[7] is None]
-    assert rope_moves == [((READ_X, RIGHT_ROPE.top_y + 2), "teleport", "UP")]
+    assert rope_moves == [((47, 45), "teleport", "DOWN"), ((106, 60), "teleport", "DOWN"), ((106, 60), "teleport", "DOWN"),
+                          ((106, 60), "jump_off", "RIGHT")]
     assert [c for c in judge(report, 0) if not c.ok] == []
 
 
