@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-10-27-route-view-design.md` (5.4 the window, 
 
 ## Run-folder files
 
-- Reads: `steps.jsonl` (or the legs-only fallback, `legs.jsonl` and `session.json`), `map.csv`, `minimap.png`, `frames/index.jsonl` and the frames. The names are constants in `src/route/step_log.py:63-65`; the format is `step_log.py`'s (format V1).
+- Reads: `steps.jsonl` (or the legs-only fallback, `legs.jsonl` and `session.json`), `map.csv`, `minimap.png`, `frames/index.jsonl` and the frames. The names are constants in `src/route/step_log_format.py:15-17`, re-exported by `step_log`; the format is `step_log.py`'s (format V1).
 - Shared with the walk: nothing but those files. The `view.log`, `view.claim` and `view.ready` files went with the viewer spawn (spec 5.13).
 
 ## Rules enforced by tests
