@@ -2968,3 +2968,45 @@ In plain words: the G9 fix stays and merges as built; wave 2's map editor cleanu
 Cost if wrong: none known; the change shows only when a redraw raises an error. Undo: revert p1-g9-fix.
 
 Pointer: Hong in chat, 2026-11-21; branch `p1-g9-fix`; plan section 5 "Fixes found"; H141.
+
+## H143 (2026-11-21): p1b-route-walking goes into master only after the whole code cleanup has been merged into it (Hong, in chat)
+
+Context: Hong's 2026-11-13 yes (question bank QB268) read "Yes, merge after the overshoot fix is built and your walk with it passes"; that condition is now met. The orchestrator asked whether to merge p1b-route-walking into master now: option A, "Merging the work into master now"; option B, "Wait until the code cleanup has also gone in, so master changes once instead of twice." Hong answered the five-question set in chat, verbatim: "1. C 2. B 3. A 4. A 5. A". His pick for this question is "2. B" (the other picks are H144 to H146; his pick for question 1 is not part of these entries).
+
+In plain words: p1b-route-walking goes into master only after the whole cleanup has been merged into p1b-route-walking, so master changes once. This adds a condition to his QB268 yes and does not replace it: the merge into master is still asked of Hong before it runs. The plan gets a last step after the last wave (plan `CLEAN216-plan.md`, section 6).
+
+Cost if wrong: master stays behind p1b-route-walking until the cleanup is finished. Undo: Hong asks for the merge earlier (option A).
+
+Pointer: Hong in chat, 2026-11-21 (orch 220); QB268; plan `CLEAN216-plan.md` section 6; H141.
+
+## H144 (2026-11-21): The map editor's repeating Tk traceback in the terminal stays as G9 built it (Hong, in chat)
+
+Context: follow-up to H142. With the G9 fix (branch `p1-g9-fix`) the map editor keeps redrawing after an error. A side effect: while an editor error keeps recurring, the fix prints the same Tk traceback about every 10 ms to the terminal that started the app. Hong was asked whether that is acceptable. Option A was "That's fine, keep it as is". His pick, from the chat line quoted in H143, is "3. A".
+
+In plain words: no code change. The fix stays as built, and no cleanup piece changes how the editor's redraw loop reports an error (H141).
+
+Cost if wrong: a recurring editor error fills the terminal window with the same traceback. Undo: Hong asks for the print to be limited, as a small separate piece.
+
+Pointer: Hong in chat, 2026-11-21 (orch 220); H142; branch `p1-g9-fix`; plan section 5 "Fixes found"; H141.
+
+## H145 (2026-11-21): Wave 0's `tools/check.py` change stays; a dev tool is not "the app" for H141 (Hong, in chat; CLEAN219-PLAN-D1)
+
+Context: wave 0 changed `tools/check.py` (commit dfd7e8c, CLEAN218-MIN item 6) so that its pytest line shows pytest's own summary line instead of the last line of pytest's output; pass and fail are decided the same way as before. Under H141 it was put to Hong whether to keep it (CLEAN219-PLAN-D1). His pick, from the chat line quoted in H143, is "4. A": keep it.
+
+In plain words: the change stays. `tools/check.py` and the other dev tools are not "the app" in H141's sense; the rule covers what the app does, shows, exits with and writes.
+
+Cost if wrong: none for the app; a different summary line in a dev tool. Undo: revert dfd7e8c.
+
+Pointer: Hong in chat, 2026-11-21 (orch 220); CLEAN219-PLAN-D1; dfd7e8c; H141.
+
+## H146 (2026-11-21): Names that a rename or move changes may change where the app shows them: in a traceback, and in a message that names the renamed or moved thing (Hong, in chat; CLEAN219-PLAN-D2)
+
+Context: the cleanup renames and moves functions, files and modules (wave 4's camelCase rename, the module splits and moves in waves 1 to 3, the dropped `Controller` facade in W2-11). After a crash, Python's traceback shows those function and file names and line numbers; it appears in the terminal and also in the Route tab's console box, because `RouteTab._work` posts `traceback.format_exc()` there (`src/gui/route_tab.py:927-930`, H71). Hong was asked whether a traceback that shows new names breaks H141 (CLEAN219-PLAN-D2). His pick, from the chat line quoted in H143, is "5. A": it does not. He added, verbatim: "for 5, the message the app shows can change so  we it properly  matches  the nnew renamed files, locatiosn, etc."
+
+In plain words:
+1. The function names, file names and line numbers inside a traceback, when a rename or move changes them, are not a behaviour change under H141.
+2. A message the app shows that names a renamed or moved file, function or location may change so that it names the new one. Reading (the orchestrator's, not Hong's words): only the part of the message that names the renamed or moved thing changes; the rest of the message stays word for word, and no other message text changes under H141.
+
+Cost if wrong: a message could show a new name Hong did not expect, or keep an old name he wanted changed. Undo: Hong narrows or widens the reading; the pieces restore or update the part that names the thing.
+
+Pointer: Hong in chat, 2026-11-21 (orch 220); CLEAN219-PLAN-D2; plan `CLEAN216-plan.md` constraints 3, 8 and 13; H134; H141.
