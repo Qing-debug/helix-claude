@@ -2989,7 +2989,7 @@ Affects: `src/route/route_graph.py` (opened by this ruling; frozen otherwise), o
 
 Cost if wrong: if the game does not carry a teleport across a 3 or 4 px step, the walker tries the crossing and stops at the end; the 4 px is a setting.
 
-Undo: Hong says so; the build's commits on `p1-anymap`: 964f9ac (the teleport links in the route step; 4f1e51b, its review fix, only strengthens a test), 36a21af (the preview draws the links and the orphan check counts them) and 934fead (the simulator test on a made-up map). `planner._offered` and the editor read `RouteGraph.teleport_links`, so a revert of 964f9ac takes 36a21af with it.
+Undo: Hong says so; the build's commits on `p1-anymap`: 964f9ac (the teleport links in the route step; 4f1e51b, its review fix, only strengthens a test), 36a21af (the preview draws the links and the orphan check counts them) and 934fead (the simulator test on a made-up map). `planner._offered` and the editor read `RouteGraph.teleport_links`, so a revert of 964f9ac takes 36a21af with it, and d2cc80b (H112's preview change) builds on 36a21af's preview code (`teleport_links`, `_previewTeleportLinks`), so it has to be reverted or reworked too.
 
 Pointer: question bank QB292; H103; `notes/ANYMAP181.md`, `notes/anymap182-qa-set.md`, `notes/anymap182-d1.png` in the phase-1 workspace; set file `C:/Users/Qing_programming/.claude/orchestrator/qa-page/jobs/helix-p1/sets/anymap182.json`.
 
@@ -3024,3 +3024,21 @@ Cost if wrong: one short walk (80 to 160 ms) before each such move; a drop past 
 Undo: revert 5c6aadb (the fix and its tests). To cover only a teleport on the DOWN edge, make the check `kind == UP or (kind == DOWN and _go_down(...).kind == TELEPORT)` and drop the drop test ids. Still open with Hong: option A (move the launch point at least 2 px inside a marked end), which rests on whether his marks sit exactly on the game's platform ends; B's walk onto the marked end's own x leaves no outward slack, so a 1 px landing error costs another short walk (not a stall).
 
 Pointer: `.superpowers/orchestrator/2026-10-21-phase1/notes/ANYMAP198-ADJ.md`, `ANYMAP198-FIX.md`, `ANYMAP199-R5.md`; H17; B14-inv-D1; H103.
+
+## H129 (2026-11-17): The platform-end marks are taken as on the platform's real end pixel, so fix B (H123) stays as built and option A is not built (Hong's ANYMAP198-A, need199-3, QB344)
+
+Context: H123 left one question open with Hong, ANYMAP198-A: are his end marks exactly on the game's real platform ends, and should Helix start a teleport up or down a little further in (option A, move the up or down launch point 2 px inside a marked platform end)? H123 chose B (refuse the move from past a marked end and walk to the launch point first) because A rested on a fact nobody had checked, whether the marks sit exactly on the real ends.
+
+Ruling [Hong, 2026-11-17, Q&A page, need199-3, QB344; option Other; his words, as written]: "yOU CAN ASSUME THE MARKS ARE PLACED SCUH THAT THEY ARE ALWAYS ON A PLATFORM'S REAL PIXEL". His note field was empty.
+
+What it decides: the marks are on a platform's real end pixel, so the fix stays as built (fix B, H123); option A (move the up or down launch point 2 px inside a marked platform end) is not built; his B14-inv-D1 rule (1) ("walk until level with B's x") is unchanged. The id H129 was reserved for this answer (Ruling PC201-H130).
+
+In plain words: nothing changes in the code. The walker still walks to the launch point first when it is past a marked end, and it still launches from the point B14-inv-D1 gives.
+
+Affects: no code. It closes the "Still open with Hong" line of H123's Undo.
+
+Cost if wrong: if a mark sits 1 px off the real end, a teleport from the marked end may still fail and cost another short walk (not a stall), as H123 says.
+
+Undo: Hong says so; to build option A, move `_launch_x`'s result 2 px inside a marked end in `src/route/planner.py` and mirror it in `src/route/route_preview.py`, and re-pin the tests that check the launch point.
+
+Pointer: H123; B14-inv-D1; H103; question bank QB344; `.superpowers/orchestrator/2026-10-21-phase1/notes/ANYMAP199-R6.md`.

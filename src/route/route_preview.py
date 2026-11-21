@@ -6,7 +6,7 @@ the hops: hop 0 is the move `next_move` makes from `pos`, and hop k the move it 
 assumed to land (the landing rule, V4). It draws nothing. Since H87 `next_move` takes no draw (a down move is a teleport when one reaches, a drop only when
 none does), so every hop holds one option; the two-option branch of the old drop-or-teleport coin flip stays, unreached.
 
-`_plan` is this module's copy of `next_move`'s rules P1-P5 (`planner.py:200-264`), statement for statement, and calls
+`_plan` is this module's copy of `next_move`'s rules P1-P5 (`planner.py:246-328`), statement for statement, and calls
 the planner's private helpers (RV1-D4 A, H53; RV-11 notes the seam in `src/route/CLAUDE.md`); `planner.py` is never
 edited. It differs only in what it returns (the options, `toward`, the total, the starts, the path and the move's
 aim) and in the old coin flip, where it calls `_go_down` with two stub generators (RV3-D4 A; one move since H87).
@@ -57,7 +57,7 @@ from src.route.route_graph import EdgeKind, RouteGraph
 @dataclass(frozen=True)
 class StartOption:
     node: Node
-    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (planner.py:224-227)
+    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (planner.py:270-273)
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ class _DrawHigh:
         return 0.99
 
 
-_LOW = cast(np.random.Generator, _DrawLow())  # the old coin flip's low draw (`_go_down` draws nothing since H87, planner.py:170)
+_LOW = cast(np.random.Generator, _DrawLow())  # the old coin flip's low draw (`_go_down` draws nothing since H87, planner.py:216)
 _HIGH = cast(np.random.Generator, _DrawHigh())  # the old coin flip's high draw
 
 
@@ -133,7 +133,7 @@ class _Plan:
 
 
 def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | None, str]:
-    """`next_move` at `pos` (`planner.py:200-264`, statement for statement), or None when arrived (P1)."""
+    """`next_move` at `pos` (`planner.py:246-328`, statement for statement), or None when arrived (P1)."""
     if target not in rg.graph:
         return Failure(f"target {target.minimap_position!r} is not in the route graph")
     px, py = pos
