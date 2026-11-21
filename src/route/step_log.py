@@ -29,6 +29,13 @@ Where the plan is silent (decided here, each local and reversible):
   `stopped` false, `pos` the move's `settled`), then `leg_end`. The `settled` after the last move of a `LINK_DOWN` leg
   is left out when the move's `settled` is null (the move never completed); nothing else is left out. There is no
   `sent` and no `end` event (`ended` is True).
+- `planned` and `settled` lines may end with a `frame_ns` key (`EXTRA_FIELDS`, WALKFIX Task 6): the stamp of the minimap
+  picture the line's position was read from (`time.perf_counter_ns()` when Windows handed it over, the clock of
+  `t_ns`), an int, or null on a `settled` that has no position. `VERSION` stays 1: the key is optional, so a reader
+  of the old format ignores it (as it ignores any key it does not know) and this one reads an old line without it
+  (`data` then has no `frame_ns` key, not a null one). `event_line` takes it as one value more than `FIELDS` has and
+  refuses one that is not an int or None; `parse_line` makes a `frame_ns` that is neither an int nor null a bad line.
+  A `StepLog` given no stamp source writes the old lines byte for byte.
 - `StepLog`: the writer thread itself flushes, fsyncs and closes `steps.jsonl` when it reaches the sentinel, so `close`
   never touches a file that a slow writer is still writing; when `close` gives up waiting, the thread still finishes
   the queue and closes the file. `close` reports the first write or encode failure if there was one, else "writer
@@ -72,6 +79,10 @@ FIELDS: dict[str, tuple[str, ...]] = {
     "end": ("reason", "code"),
 }
 EVENTS = tuple(FIELDS)  # every event name except "run"
+# Optional keys after an event's FIELDS (QB283 2d, WALKFIX Task 6): `frame_ns` is the stamp of the minimap picture the
+# line's position was read from, `time.perf_counter_ns()` when Windows handed that picture over, the clock of `t_ns`
+# and of the keys. The writer adds them only when it was given a stamp source; an old run folder has none.
+EXTRA_FIELDS: dict[str, tuple[str, ...]] = {"planned": ("frame_ns",), "settled": ("frame_ns",)}
 
 _RUN = "run"
 _LEGS_FILE = "legs.jsonl"
@@ -102,7 +113,9 @@ class RunHeader:
 class StepEvent:
     ev: str  # one of EVENTS
     t_ns: int | None  # None only for a legs-only `settled`
-    data: Mapping[str, Any]  # the FIELDS of `ev`; positions as tuple[int, int] | None, "keys" as tuple of int pairs
+    # the FIELDS of `ev` (positions as tuple[int, int] | None, "keys" as tuple of int pairs), and its EXTRA_FIELDS that
+    # the line has (`frame_ns`: int | None)
+    data: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -139,6 +152,8 @@ def _shape_error(name: str, value: object) -> str | None:
         return f"{name} must be [x, y] ints or null, got {reprlib.repr(value)}"
     if name == "keys" and not (isinstance(value, (tuple, list)) and all(_int_pair(pair) for pair in value)):
         return f"keys must be a list of [delta, mask] int pairs, got {reprlib.repr(value)}"
+    if name == "frame_ns" and not (value is None or _is_int(value)):
+        return f"frame_ns must be an int or null, got {reprlib.repr(value)}"
     return None
 
 
@@ -166,25 +181,31 @@ def header_line(header: RunHeader) -> Result[bytes, str]:
 
 
 def event_line(event: tuple) -> Result[bytes, str]:
-    """One JSON line for `(ev, t_ns, *values in FIELDS[ev] order)`; `Failure` for an unknown `ev`, a wrong number of
-    values, a non-int `t_ns` (null only for `settled`), a position or `keys` that is not ints of the shape
-    `parse_line` takes, or a value that is not strict JSON. Never raises."""
+    """One JSON line for `(ev, t_ns, *values in FIELDS[ev] order)`, with the event's `EXTRA_FIELDS` values after them
+    when it has any (`planned` and `settled` take `frame_ns` last: an int or None); `Failure` for an unknown `ev`, a
+    wrong number of values, a non-int `t_ns` (null only for `settled`), a position or `keys` or `frame_ns` that is not
+    of the shape `parse_line` takes, or a value that is not strict JSON. Never raises."""
     if not isinstance(event, (tuple, list)) or len(event) < 2:
         return Failure("an event is a tuple (ev, t_ns, *values)")
     ev, t_ns, *values = event
     fields = FIELDS.get(ev) if isinstance(ev, str) else None
     if fields is None:
         return Failure(f"unknown event {reprlib.repr(ev)}")  # reprlib: a plain repr of a deep value raises
-    if len(values) != len(fields):
-        return Failure(f"event {ev!r} takes {len(fields)} values ({', '.join(fields)}), got {len(values)}")
+    extras = EXTRA_FIELDS.get(ev, ())
+    if len(values) not in (len(fields), len(fields) + len(extras)):
+        takes = f"{len(fields)} values ({', '.join(fields)})"
+        if extras:
+            takes += f" or {len(fields) + len(extras)} with {', '.join(extras)} last"
+        return Failure(f"event {ev!r} takes {takes}, got {len(values)}")
     if not _t_ns_ok(ev, t_ns):
         return Failure(f"event {ev!r}: t_ns must be an int, got {reprlib.repr(t_ns)}")
-    for name, value in zip(fields, values):
+    names = (*fields, *extras)[:len(values)]
+    for name, value in zip(names, values):
         error = _shape_error(name, value)
         if error is not None:
             return Failure(f"event {ev!r}: {error}")
     obj: dict[str, Any] = {"ev": ev, "t_ns": t_ns}
-    obj.update(zip(fields, values))
+    obj.update(zip(names, values))
     return _encode(obj)
 
 
@@ -221,6 +242,8 @@ def _field_value(name: str, value: Any) -> Any:
         return _position(value)
     if name == "keys":
         return _key_pairs(value)
+    if name == "frame_ns" and not (value is None or _is_int(value)):
+        raise ValueError("frame_ns must be an int or null")
     return value
 
 
@@ -290,6 +313,9 @@ def _event_from_json(ev: str, obj: Mapping[str, Any]) -> StepEvent:
         if name not in obj:
             raise ValueError(f"the {ev} line has no {name!r}")
         data[name] = _field_value(name, obj[name])
+    for name in EXTRA_FIELDS.get(ev, ()):  # optional: a line from before Task 6 has none, and gets none in `data`
+        if name in obj:
+            data[name] = _field_value(name, obj[name])
     return StepEvent(ev, t_ns, data)
 
 
@@ -467,10 +493,18 @@ class StepLog:
     """The walk's step observer (contract V3; it satisfies `walker.StepObserver` structurally and imports nothing from
     the walker). Each event method only puts a tuple of plain values on a `queue.SimpleQueue`, whose `put` never
     blocks; the daemon thread `step-log` encodes each one with `event_line` and appends it to `steps.jsonl` with one
-    `write` and a `flush` (no fsync per line, spec 5.2). After `close` every call is dropped (RV3-D2 A2)."""
+    `write` and a `flush` (no fsync per line, spec 5.2). After `close` every call is dropped (RV3-D2 A2).
 
-    def __init__(self, *, log: Callable[[str], None] = _print_error) -> None:
+    `frame_ns` (QB283 2d): a source of the stamp of the picture the walker's last good position read came from (the
+    session passes `lambda: positions.frame_ns` for a `MinimapPositionSource`; the simulator passes none). With one,
+    `planned` and `settled` ask it in their own call, on the walker's thread, where that attribute was just set, and
+    queue its answer as the line's last value (`settled` with no position: None, without asking). Without one the
+    lines are what they were before Task 6."""
+
+    def __init__(self, *, log: Callable[[str], None] = _print_error,
+                 frame_ns: Callable[[], int | None] | None = None) -> None:
         self._log = log  # the app run's log goes to the console box (route tab H71); the CLI's prints on stderr
+        self._frame_ns = frame_ns
         self._queue: queue.SimpleQueue[object] = queue.SimpleQueue()
         self._closed = False
         self._file: BinaryIO | None = None
@@ -547,7 +581,8 @@ class StepLog:
                 cost_to_go_s: float, toward: tuple[int, int] | None) -> None:
         if self._closed:
             return
-        self._queue.put(("planned", t_ns, pos, kind, direction, walk_ms, cost_to_go_s, toward))
+        row = ("planned", t_ns, pos, kind, direction, walk_ms, cost_to_go_s, toward)
+        self._queue.put(row if self._frame_ns is None else (*row, self._frame_ns()))
 
     def sent(self, t_ns: int, input_name: str, reaction_ms: float | None, waited_ms: float | None,
              keys: tuple[tuple[int, int], ...]) -> None:
@@ -558,7 +593,8 @@ class StepLog:
     def settled(self, t_ns: int, pos: tuple[int, int] | None, stopped: bool) -> None:
         if self._closed:
             return
-        self._queue.put(("settled", t_ns, pos, stopped))
+        row = ("settled", t_ns, pos, stopped)
+        self._queue.put(row if self._frame_ns is None else (*row, None if pos is None else self._frame_ns()))
 
     def leg_end(self, t_ns: int, outcome: str, misses: int, off_graph: int, stalls: int) -> None:
         if self._closed:

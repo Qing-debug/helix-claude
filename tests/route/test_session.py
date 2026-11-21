@@ -605,6 +605,7 @@ class NewFrames:
 
     def __init__(self) -> None:
         self.minimap_frame_lock = threading.Lock()
+        self.minimap_frame_ns = None  # a holder with no stamp; `shared_frames` reads it with the frame
 
     @property
     def minimap_frame(self) -> np.ndarray:

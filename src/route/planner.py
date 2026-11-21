@@ -76,7 +76,18 @@ def _starts(rg: RouteGraph, pos: tuple[int, int], anchor: Anchor, on_slope: bool
         if end is None:
             continue
         d = abs(pos[0] - end.minimap_position[0])
-        approach = d / rg.params.walk_px_per_s if on_slope else horizontal_cost_s(d, rg.reach_h, rg.params)
+        if on_slope:
+            approach = d / rg.params.walk_px_per_s
+        else:
+            # QB282: the last hop onto an end that stops a teleport is a teleport, but only when one from `pos` stops
+            # there (review m1: one that carries onto the next platform is not a stop on the end)
+            sign = 1 if end.minimap_position[0] > pos[0] else -1
+            to_end = (
+                rg.is_stop_end(end, sign)
+                and anchor.platform is not None
+                and rg.side_landing(anchor.platform, pos[0], sign)[1] == anchor.platform
+            )
+            approach = horizontal_cost_s(d, rg.reach_h, rg.params, to_end=to_end)
         starts.append((end, approach))
     return starts
 
@@ -90,11 +101,35 @@ def _walk(rg: RouteGraph, px: int, goal_x: int) -> Move:
     return Move(MoveKind.WALK, _direction(px, goal_x), min(1000.0 * d / rg.params.walk_px_per_s, rg.params.max_walk_ms))
 
 
-def _run(rg: RouteGraph, px: int, goal_x: int) -> Move:
-    """P4's off-slope rule: teleport when one teleport plus the walk to the goal beats walking all of it."""
+def _run(rg: RouteGraph, px: int, goal_x: int, platform: int | None) -> Move:
+    """P4's off-slope rule for the character on `platform` (None: on none, so the teleport's landing is the full reach).
+
+    The landing is where `rg.side_landing` says a teleport from `px` stops (Hong, QB282). (1) Teleport when it stops
+    exactly on the platform's end node, an end that stops teleports (a mark, or a gap's split end), within `arrive_px`
+    of the goal, even under `walk_under_px`; it never catches an ordinary 17-21 px move toward an unmarked node, and it
+    fires when the full reach lands exactly on the end node too. (2) Walk when the goal is closer than `walk_under_px`
+    (QB266: a teleport would land past it). (3) Teleport when one teleport plus the walk from its landing to the goal
+    beats walking all of it, if it lands on the platform. (4) Walk. A teleport that carries onto the next platform is
+    no stop on the end, so rules (1) and (3) skip it."""
     d = abs(goal_x - px)
+    sign = 1 if goal_x > px else -1
     p = rg.params
-    if p.teleport_s + abs(d - rg.reach_h) / p.walk_px_per_s < d / p.walk_px_per_s:
+    if platform is None:
+        land_x, land_p = px + sign * rg.reach_h, None
+    else:
+        land_x, land_p = rg.side_landing(platform, px, sign)
+        nodes = rg.terrain.platforms[platform]
+        end = nodes[-1] if sign > 0 else nodes[0]
+        if (
+            land_p == platform
+            and rg.is_stop_end(end, sign)
+            and land_x == end.minimap_position[0]
+            and abs(land_x - goal_x) <= p.arrive_px
+        ):
+            return Move(MoveKind.TELEPORT, _direction(px, goal_x), None)
+    if d < p.walk_under_px:
+        return _walk(rg, px, goal_x)
+    if land_p == platform and p.teleport_s + abs(land_x - goal_x) / p.walk_px_per_s < d / p.walk_px_per_s:
         return Move(MoveKind.TELEPORT, _direction(px, goal_x), None)
     return _walk(rg, px, goal_x)
 
@@ -164,7 +199,7 @@ def _offered(rg: RouteGraph) -> RouteGraph:
     if not blocked:
         return rg
     view = nx.subgraph_view(rg.graph, filter_edge=lambda u, v: (u, v) not in blocked)
-    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params)
+    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params, split_ends=rg.split_ends)
 
 
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:
@@ -237,28 +272,41 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
     # P4: on a slope segment the goal is the start itself, otherwise the end of the WALK run from the start
     gi = 0 if on_slope else _walk_run_end(rg, path, 0)
     g = path[gi]
-    # P4: when g's next edge is UP/DOWN and the character is on g's platform, the goal is that move's launch x
-    # (B14-inv-D1), so the character lines up before it moves; otherwise the goal is g
+    # P4: when g's next edge is UP/DOWN (a launch x, B14-inv-D1) or GAP (`gap_launch`, QB282) and the character is on
+    # g's platform, the goal is that move's launch x, so the character lines up before it moves; otherwise the goal is g
     launch = None
     if gi + 1 < len(path) and anchor.platform == rg.terrain.platform_index(g):
         h = path[gi + 1]
-        if _edge_kind(rg, g, h) in (EdgeKind.UP, EdgeKind.DOWN):
+        edge_kind = _edge_kind(rg, g, h)
+        if edge_kind in (EdgeKind.UP, EdgeKind.DOWN):
             launch = _launch_x(rg, g, h)  # never None here: `_offered` dropped the edges without one
-            if launch is not None and abs(px - launch) > rg.params.arrive_px:
-                move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch)
-                return Success(Decision(move, total, h))
+        elif edge_kind == EdgeKind.GAP:
+            launch = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
+        if launch is not None and abs(px - launch) > rg.params.arrive_px:
+            move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch, anchor.platform)
+            return Success(Decision(move, total, h))
     if launch is None and not _is_at(rg, pos, g, anchor):
-        move = _walk(rg, px, g.minimap_position[0]) if on_slope else _run(rg, px, g.minimap_position[0])
+        goal_x = g.minimap_position[0]
+        move = _walk(rg, px, goal_x) if on_slope else _run(rg, px, goal_x, anchor.platform)
         return Success(Decision(move, total, g))
 
-    # P5: at g, or lined up on the launch x of g's UP/DOWN edge (g is not the target, or P1 would have applied)
+    # P5: at g, or lined up on the launch x of g's UP/DOWN/GAP edge (g is not the target, or P1 would have applied)
     h = path[gi + 1]
     kind = _edge_kind(rg, g, h)
     if kind == EdgeKind.SLOPE:
         return Success(Decision(_walk(rg, px, h.minimap_position[0]), total, h))
     if kind == EdgeKind.WALK:  # only when P4 kept g at the start of a slope segment
         g_next = path[_walk_run_end(rg, path, gi + 1)]
-        return Success(Decision(_run(rg, px, g_next.minimap_position[0]), total, g_next))
+        return Success(Decision(_run(rg, px, g_next.minimap_position[0], anchor.platform), total, g_next))
     if kind == EdgeKind.UP:
         return Success(Decision(Move(MoveKind.TELEPORT, Key.UP, None), total, h))
+    if kind == EdgeKind.GAP:
+        # a sideways teleport across the gap, only when the planner's own landing rule carries it onto h's platform from
+        # here (review I2: P4 counts the character lined up within `arrive_px` of the launch, from 1-2 px short of it
+        # a teleport may stop at the end); otherwise walk to the launch x
+        sign = 1 if h.minimap_position[0] > px else -1
+        if anchor.platform is not None and rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h):
+            return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))
+        launch_x = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
+        return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))
     return Success(Decision(_go_down(rg, g, h, rng), total, h))

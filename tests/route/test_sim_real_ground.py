@@ -7,7 +7,6 @@ freeze, so the run is a plain test now.
 
 import dataclasses
 import json
-import statistics
 from pathlib import Path
 
 import pytest
@@ -15,26 +14,24 @@ from returns.pipeline import is_successful
 from returns.result import Failure
 
 import src.route.sim.run as run_module
-from src.classes.classes import Kanna
 from src.route.sim.run import REAL_GROUND_NOISE, REAL_GROUND_SIM, REAL_GROUND_TERRAIN, judge, main, run_sim
 from src.route.sim.world import NoiseConfig, SimParams
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 CSV = FIXTURES / "fossil_foundry_2.csv"
-LIVE_READS = FIXTURES / "ff2_live_reads.json"
 
 
 # --- 1. the preset -------------------------------------------------------------------------------------------
 
 
 def test_preset_teleport_matches_the_recordings():
-    pairs = json.loads(LIVE_READS.read_text(encoding="utf-8"))["side_teleports"]
-    median = statistics.median(abs(x_to - x_from) for x_from, x_to in pairs)
-    expected = median - Kanna().max_horizontal_traversal_dist
-    assert REAL_GROUND_SIM.side_teleport_extra_px == expected
-    assert REAL_GROUND_SIM.side_teleport_extra_px >= 1, (
-        "with an extra of 0 the teleport from (48, 25) lands at x 67 on the flat part, which attached on the "
-        "unshifted code, so the run would never have shown the freeze on the slope (Task 3)")
+    """The recorded frames show 64 flat sideways jumps of 18-19 px, median 19.0 (workspace
+    `notes/q-20261113-153031-26c9-qa-answer.md`, Q1), which is the character's reach: no extra. The 20 of
+    `ff2_live_reads.json` (`side_teleports`) is the walker's planned-to-planned reads, which the picture delay inflates,
+    so it is no longer the pin (walk-fluid Task 5, WALKFIX Task 5). The slope-freeze guard this test once held (an
+    extra of at least 1 puts the teleport from (49, 28) on the top slope) is `test_sim_real_world.py`
+    `test_side_teleport_extra`, which sets an explicit extra of 2 and lands (70, 26) on the slope."""
+    assert REAL_GROUND_SIM.side_teleport_extra_px == 0.0
     assert REAL_GROUND_SIM.dot_above_foot_px == 3
     assert REAL_GROUND_NOISE.knockback_p == 0.02
     assert REAL_GROUND_NOISE.rope_grab_p == 0.2
@@ -49,18 +46,22 @@ def test_real_ground_run_passes():
     """The run the walker passes on the real ground (seed 2, 20 laps): 6/6 checks, no leg ends `off_map`, and the figures
     Rope fix Task 6 recorded, pinned exactly, so the quick `tools/check.py` sees any drift (ROPE155-R7 m1). Rope fix
     Task 7 (H88, H93): the sim grabs rope 107 (`rope_grab_p` 0.2) and the walker gets off it. The 4 grabs gave 2 rope
-    moves, both blinks up (`teleport up`), so `jump_offs` is 0 here: the other 2 grabs were moved by the planner or
-    placed by `attach` (Task 6's report)."""
+    moves, both blinks up (`teleport up`), so `jump_offs` was 0 here: the other 2 grabs were moved by the planner or
+    placed by `attach` (Task 6's report). Walk-fluid Task 1 (QB266, a node closer than 17 px is walked to) re-pinned the
+    figures: 354 moves, 22 no-ops, 52 teleports down, 5 knockbacks, 2 grabs, 3 jump-offs, 257.3093 s (it was 364, 23,
+    46, 2, 4, 0 and 241.6268 s). Walk-fluid Task 5 (the teleport is 19 px, the character's reach, not 20: the preset's
+    extra went 1.0 -> 0.0) re-pinned them to 351 moves, 20 no-ops, 51 teleports down, 4 knockbacks, 1 grab, 2 jump-offs,
+    262.2129 s (the extra only changes how far a sideways teleport goes: 1 px shorter)."""
     result = run_sim(CSV, REAL_GROUND_TERRAIN, 20, 2, noise=REAL_GROUND_NOISE, sim_params=REAL_GROUND_SIM)
     assert is_successful(result), result
     report = result.unwrap()
     checks = judge(report, 0)
     assert len(checks) == 6 and all(check.ok for check in checks), [check for check in checks if not check.ok]
-    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 2 on seed 2"
+    assert report.knockbacks > 0, "the preset's noise (knockback_p) must reach the report; 4 on seed 2"
     assert report.rope_grabs >= 1 and report.off_map == 0
-    assert report.jump_offs == 0
-    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (364, 23, 0, 46)
-    assert (report.knockbacks, report.rope_grabs, round(report.sim_seconds, 4)) == (2, 4, 241.6268)
+    assert report.jump_offs == 2
+    assert (report.moves, report.no_ops, report.drops, report.teleport_downs) == (351, 20, 0, 51)
+    assert (report.knockbacks, report.rope_grabs, round(report.sim_seconds, 4)) == (4, 1, 262.2129)
 
 
 def test_report_counts_the_knockbacks():

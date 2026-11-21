@@ -499,6 +499,7 @@ def fault_row(kind: str, stamps: faults.FaultStamps, link_faults: list[tuple[int
 # ---- MapleStory question (hard rule 2, decision H60) --------------------------------------------------
 
 PROMPT = "Is MapleStory closed? y/n "
+ANSWERED_Y = "answered y: MapleStory closed"  # what `maple_check` returns for a y; `_check_processes(answered=...)` accepts only this
 
 
 def _read_answer() -> Result[str, str]:
@@ -517,7 +518,7 @@ def maple_check() -> tuple[bool, str]:
         return False, f"refused: MapleStory not confirmed closed (answer: {answer.failure()})"
     shown = answer.unwrap().strip()
     if shown in ("y", "Y"):
-        return True, "answered y: MapleStory closed"
+        return True, ANSWERED_Y
     return False, f"refused: MapleStory not confirmed closed (answer: {shown})"
 
 
@@ -549,8 +550,14 @@ class _SoakSink(Sink, Protocol):
     def stop(self) -> None: ...
 
 
-def _check_processes(writer: RunWriter) -> None:
-    ok, text = maple_check()
+def _check_processes(writer: RunWriter, answered: str | None = None) -> None:
+    """The one question. `answered` is the text of an answer a caller already got from `maple_check` (the key-timing
+    check asks once for all its soaks): nothing is asked, the text is recorded, and only the text `maple_check` gives for
+    a `y` lets the run go on; any other text refuses it, as an `n` would."""
+    if answered is None:
+        ok, text = maple_check()
+    else:
+        ok, text = answered == ANSWERED_Y, answered
     writer.session["process_check"] = text
     if not ok:
         raise _Refused(text)
@@ -584,8 +591,10 @@ def _fault_then_command(writer: RunWriter, sink: Sink, layer: InputLayer, link: 
     return outcome
 
 
-def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakSink]) -> int:
-    """One soak run into `cfg.out`; returns the exit code. `start_sink(run_dir)` starts H1's listener."""
+def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakSink], *,
+             answered: str | None = None) -> int:
+    """One soak run into `cfg.out`; returns the exit code. `start_sink(run_dir)` starts H1's listener. `answered` is
+    `_check_processes`'s: with it the run asks nothing (`main` never passes it, so a soak from the command line asks)."""
     mix_rng, timing_rng, _ = _streams(cfg.seed)
     layer = InputLayer(link, TimingModel(timing_rng))
     fault_at = fault_indexes(cfg.seed, cfg.commands, cfg.faults)
@@ -594,7 +603,7 @@ def run_soak(cfg: SoakConfig, link: BleLink, start_sink: Callable[[Path], _SoakS
     ended = False
     with RunWriter(cfg.out, link, seed=cfg.seed) as writer:  # opened before connect(): link.log gets its WARNINGs
         try:
-            _check_processes(writer)  # the one question, before the listener blocks any key and before connect
+            _check_processes(writer, answered)  # the one question, before the listener blocks any key and before connect
             try:
                 sink = start_sink(writer.run_dir)
             except OSError as e:

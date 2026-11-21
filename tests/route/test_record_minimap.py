@@ -61,7 +61,9 @@ def _read_rgb(path: Path) -> np.ndarray:
 
 
 class Feed:
-    """A `frames` callable that answers from a list (the last answer repeats) and counts its calls."""
+    """A `frames` callable that answers from a list (the last answer repeats) and counts its calls. `record` takes
+    `(frame, frame_ns)` pairs (QB283 2d): an answer that is a pair or None goes out as it is, a bare array goes out as
+    `(array, None)`, a holder with no stamp."""
 
     def __init__(self, answers) -> None:
         self.answers = list(answers)
@@ -70,7 +72,9 @@ class Feed:
     def __call__(self):
         answer = self.answers[min(self.calls, len(self.answers) - 1)]
         self.calls += 1
-        return answer
+        if answer is None or isinstance(answer, tuple):
+            return answer
+        return answer, None
 
 
 # ---- the plan's five -------------------------------------------------------------------------------------------------
@@ -78,14 +82,14 @@ class Feed:
 def test_1_five_new_frames_then_the_same_one_make_five_files_and_five_lines(tmp_path):
     fake = FakeTime()
     frames = [_rgb(i) for i in range(5)]
-    feed = Feed(frames)  # five new arrays, then the fifth again
+    feed = Feed([(frame, 1000 + i) for i, frame in enumerate(frames)])  # five new pairs, then the fifth again
     out = tmp_path / "rec"
     result = record(feed, out, seconds=1.0, fps=10, clock=fake.clock, sleep=fake.sleep)
     assert result == Success(5)
     assert sorted(p.name for p in out.iterdir()) == ["frame_000000.png", "frame_000001.png", "frame_000002.png",
                                                      "frame_000003.png", "frame_000004.png", "index.jsonl"]
-    assert _lines(out) == [{"i": i, "t_ns": START_NS + i * 100_000_000, "file": f"frame_{i:06d}.png",
-                            "w": FRAME_W, "h": FRAME_H} for i in range(5)]
+    assert _lines(out) == [{"i": i, "t_ns": START_NS + i * 100_000_000, "frame_ns": 1000 + i,
+                            "file": f"frame_{i:06d}.png", "w": FRAME_W, "h": FRAME_H} for i in range(5)]
     for i, frame in enumerate(frames):
         assert np.array_equal(_read_rgb(out / f"frame_{i:06d}.png"), frame)
 
@@ -124,7 +128,7 @@ def test_4_stop_event_ends_the_recording(tmp_path):
         calls.append(1)
         if len(calls) == 3:
             stop.set()
-        return _rgb(len(calls))  # a new array on every call
+        return _rgb(len(calls)), None  # a new array on every call
 
     out = tmp_path / "rec"
     assert record(frames, out, seconds=None, fps=10, clock=fake.clock, sleep=fake.sleep, stop=stop) == Success(3)
@@ -173,7 +177,7 @@ def test_7_the_end_test_runs_after_each_poll_and_the_first_of_seconds_and_stop_w
         calls.append(1)
         if len(calls) == 2:
             stop.set()
-        return _rgb(len(calls))
+        return _rgb(len(calls)), None
 
     assert record(frames, tmp_path / "b", seconds=100.0, fps=10, clock=fake.clock, sleep=fake.sleep,
                   stop=stop) == Success(2)
@@ -192,7 +196,7 @@ def test_8_polls_are_scheduled_from_the_start_not_from_the_end_of_the_previous_p
     def frames():
         polled_at.append(fake.now)
         fake.now += 30_000_000  # reading and saving take 30 ms of the 100 ms interval
-        return _rgb(len(polled_at))
+        return _rgb(len(polled_at)), None
 
     assert record(frames, tmp_path / "rec", seconds=0.5, fps=10, clock=fake.clock, sleep=fake.sleep) == Success(6)
     assert [t - START_NS for t in polled_at] == [i * 100_000_000 for i in range(6)]
@@ -207,7 +211,7 @@ def test_9_a_slow_poll_is_not_followed_by_a_burst_to_catch_up(tmp_path):
         polled_at.append(fake.now)
         if len(polled_at) == 1:
             fake.now += 550_000_000  # one very slow poll, 5.5 intervals
-        return _rgb(len(polled_at))
+        return _rgb(len(polled_at)), None
 
     assert record(frames, tmp_path / "rec", seconds=1.0, fps=10, clock=fake.clock, sleep=fake.sleep) == Success(7)
     assert polled_at[1] - START_NS == 550_000_000  # the 2nd poll follows the slow one at once: the schedule is re-anchored
@@ -298,7 +302,7 @@ def test_18_each_index_line_is_flushed_when_written_not_at_close(tmp_path):
     def frames():
         # what a reader (or a crash) would find on disk before this poll: every earlier line, complete
         seen.append(len(index.read_text(encoding="utf-8").splitlines()))
-        return _rgb(len(seen))
+        return _rgb(len(seen)), None
 
     assert record(frames, out, seconds=0.3, fps=10, clock=fake.clock, sleep=fake.sleep) == Success(4)
     assert seen == [0, 1, 2, 3]
@@ -359,11 +363,13 @@ class TrackingLock:
 
 
 class FakeShared:
-    """Duck-types `SharedInfo` (src/main.py); reading `minimap_frame` notes whether the lock was held."""
+    """Duck-types `SharedInfo` (src/main.py); reading `minimap_frame` or `minimap_frame_ns` notes whether the lock was
+    held."""
 
     def __init__(self) -> None:
         self.minimap_frame_lock = TrackingLock()
         self._frame = None
+        self._ns = None
         self.held_at_read: list[bool] = []
 
     @property
@@ -375,18 +381,36 @@ class FakeShared:
     def minimap_frame(self, value) -> None:
         self._frame = value
 
+    @property
+    def minimap_frame_ns(self):
+        self.held_at_read.append(self.minimap_frame_lock.held())
+        return self._ns
+
+    @minimap_frame_ns.setter
+    def minimap_frame_ns(self, value) -> None:
+        self._ns = value
+
 
 def test_22_shared_frames_returns_the_shared_reference_under_the_lock():
     shared = FakeShared()
     read = shared_frames(shared)
-    assert read() is None
+    assert read() is None  # no frame: None, not a pair
     frame = _rgb(1)
     shared.minimap_frame = frame
-    assert read() is frame and read() is frame  # the reference itself, never a copy
+    shared.minimap_frame_ns = 41
+    first, second = read(), read()
+    assert first is not None and second is not None
+    assert first[0] is frame and second[0] is frame  # the reference itself, never a copy
+    assert first[1] == 41 and second[1] == 41  # with the stamp published with it
     other = frame.copy()  # equal content, published as a new object
     shared.minimap_frame = other
-    assert read() is other and read() is not frame
-    assert shared.held_at_read == [True] * 5  # every read of the attribute was under the lock
+    shared.minimap_frame_ns = 42
+    got, again = read(), read()
+    assert got is not None and again is not None
+    assert got[0] is other and again[0] is not frame and (got[1], again[1]) == (42, 42)
+    # every read of either attribute was under the lock: one read of the frame for the None call, then two (frame,
+    # stamp) for each of the four calls that had a frame
+    assert shared.held_at_read == [True] * 9
     assert shared.minimap_frame_lock.acquires == 5  # and one acquire per call
     assert not shared.minimap_frame_lock.held()
 
@@ -403,9 +427,12 @@ def test_23_record_over_shared_frames_saves_a_frame_once_per_publication(tmp_pat
         sleeps += 1
         if sleeps % 2 == 0 and sleeps // 2 < len(published):
             shared.minimap_frame = published[sleeps // 2]
+            shared.minimap_frame_ns = 500 + sleeps // 2
 
     shared.minimap_frame = published[0]
+    shared.minimap_frame_ns = 500
     out = tmp_path / "rec"
     assert record(shared_frames(shared), out, seconds=0.5, fps=10, clock=fake.clock, sleep=sleep) == Success(3)
     for i, frame in enumerate(published):
         assert np.array_equal(_read_rgb(out / f"frame_{i:06d}.png"), frame)
+    assert [line["frame_ns"] for line in _lines(out)] == [500, 501, 502]  # each saved picture has its own stamp

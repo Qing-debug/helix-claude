@@ -523,7 +523,7 @@ file lag. The step lines lag the walk by up to about 0.1-0.3 s (the poll), as be
 | Route tab | `src/gui/route_tab.py` (new; camelCase methods, as `src/gui`) | settings, Start/Stop, countdown text, saved-run list, event queue, hosts `RouteViewWindow`, the idle live minimap and the "Back to live minimap" button; writes the console box (5.5) |
 | Idle live minimap | `src/gui/live_minimap.py` (new; camelCase methods, as `src/gui`) | the light canvas of 5.2 (H70) |
 | Notebook | `src/gui/gui.py` | `ttk.Notebook` with Setup and Route; close handler (5.5); the focus binding of section 9 |
-| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) goes (H67, 5.12); each grab waits inside Windows for the next new desktop image (`src/vision/frame_wait.py`, 100 ms time-out) and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H77, H80) |
+| Capture loop | `src/vision/vision.py` | the `cv2.imshow("Minimap", ...)` / `cv2.waitKey(FRAME_DELAY_MS)` pair (:83-84) goes (H67, 5.12); each grab waits inside Windows for the next new desktop image (`src/vision/frame_wait.py`, 100 ms time-out) and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H77, H80; amended by H104: the floor is lifted, `src/vision/CLAUDE.md` says what the loop does now) |
 | Standalone replay | `src/route_view/__main__.py` | `python -m src.route_view --follow <folder>` always opens a replay; `--ready` and the live path removed |
 
 Contracts (`pyproject.toml`):
@@ -546,7 +546,7 @@ Contracts (`pyproject.toml`):
 
 Each why line starts with the local time of day, `HH:MM:SS.mmm`, computed as the header's `wall_ns` plus
 `t_ns - perf_ns` (`step_log.py:96-97`). Runs whose header has no `wall_ns` (simulator runs, legs-only folders) keep
-today's elapsed form (`_stamp`'s fallback, `model.py:415-419`). No format change to `steps.jsonl`.
+today's elapsed form (`_stamp`'s fallback, `model.py:425-429`). No format change to `steps.jsonl`.
 
 ### 5.11 Saved runs, recordings and replay
 
@@ -617,7 +617,7 @@ today's elapsed form (`_stamp`'s fallback, `model.py:415-419`). No format change
    removed. Its key wait first became `time.sleep(FRAME_DELAY_MS / 1000)` (RT-11), which did not keep the same pause
    (about 21 ms a frame instead of about 32 ms, RT-11-R I1). Then, by Hong's QA116-1 answer (H77), the grab waits
    inside Windows for the next new desktop image (`src/vision/frame_wait.py`, a 100 ms time-out), so that sleep and
-   `FRAME_DELAY_MS` are gone and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H80). The capture itself
+   `FRAME_DELAY_MS` are gone and the loop keeps only its 20 ms `THREAD_SLEEP_DURATION_S` floor (H80; amended by H104, 2026-11-13: the floor is lifted, see `src/vision/CLAUDE.md`). The capture itself
    (H58: same API, same monitor, same pixels) is otherwise unchanged and the minimap stays visible on the Setup tab.
    The name scan of rule 4 also bans `imshow`, `namedWindow` and `waitKey`, with the same scope; since RT-11
    they appear nowhere in `src` or `tools`, and `tests/test_anti_cheat_names.py` keeps them out.
@@ -740,7 +740,7 @@ MapleStory check" with "answer the tools' 'Is MapleStory closed?' question `y` o
 that MapleStory is closed, otherwise ask him first (root CLAUDE.md H15 bullet, decision H66)". `tests/CLAUDE.md:15`:
 "patches `soak._process_names`" becomes "patches `soak._read_answer`". `src/vision/CLAUDE.md:9-10`: the
 `cv2.imshow("Minimap", ...)` debug-window line goes and the pacing line says each grab waits inside Windows for a new
-desktop image (`frame_wait.py`) with the 20 ms `THREAD_SLEEP_DURATION_S` floor, in place of `cv2.waitKey` (H67, H77,
+desktop image (`frame_wait.py`) with the 20 ms `THREAD_SLEEP_DURATION_S` floor (lifted later by H104, which amends H80), in place of `cv2.waitKey` (H67, H77,
 5.12-5); a bullet names `frame_wait.py`'s copy of bettercam 1.0.0's grab and its pin test.
 
 `src/route/CLAUDE.md`: drop the N1 tool lines (:36, :49-55) with the tool; add `session.py` to the seams and the
@@ -975,7 +975,7 @@ plan's own message. Hashes are in build order within a task. The commit that las
 | RT-delta-m1 | `5db01f8` | a close posted while the "Close anyway?" box is open opens no second box (RDO110-5-R m1; 5.5, 5.12) |
 | route-view marker | `43782f4` | the route-view plan's RV3-D6 marker cites Hong's answer (QB117, H55) |
 | RT-13 part B | `914c179` | the free-space numbers from H-1's recording: 0.6 GB per hour, Start refuses below 2.5 GB, the recorder stops below 1.5 GB (12.3) |
-| H35-ANA-D1 | `120ef31` | the capture's floor between frames is 20 ms, Hong's pick (H80; 12.3) |
+| H35-ANA-D1 | `120ef31` | the capture's floor between frames is 20 ms, Hong's pick (H80; 12.3; lifted later by H104) |
 | RT-13B minors | `02adf2d` | doc minors N2-N4 and P2-m4: the stale RV3-D6 markers, two line cites (route-view plan, spec 5.10), the `extend` cite |
 | RT-FIX-2 | `f91e21f` | Hong's three live-check items (H83): the saved-run list reads again when a run ends (5.11), the stop and not-started texts also go to the console box (5.5), Laps starts at 1 (5.2, 5.3) |
 
@@ -1044,7 +1044,8 @@ added by RT-14b, addition g, `NOT_COVERED` in `tools/route_tab_sim.py`); this is
   of a core against 70.3% for the old loop, no busy asks, and an image reaches Python about 2.6 ms after Windows
   presents it. With the game drawing, a later measurement on Hong's 240 Hz screen (H80, `120ef31`; `notes/MD2-RUN.md` in
   the workspace): the old loop ran 45.0 frames a second at 13.3% of one core, the 10 ms floor 82.0 at 23.8% and the 20
-  ms floor 45.7 at 12.5%; Hong chose 20 ms.
+  ms floor 45.7 at 12.5%; Hong chose 20 ms. Amended by H104 (2026-11-13): the floor is lifted; the figures above
+  are the history and stay as they were.
 - **RT-FIX-2 (`f91e21f`, H83).** Three changes from Hong's live checks, which 5.2, 5.3, 5.5 and 5.11 now say: the Laps
   field starts at 1 (empty still means until stopped); `_showEvent` also writes the status text of a clean stop or of a
   stop before the walk (`stopText`) to the console box (not "all laps done", not the failures); and `drainEvents` calls
@@ -1065,6 +1066,7 @@ commit, the same code as `f91e21f`) it has 2421 tests, 10 skipped, 2411 passed. 
   measurement MD2-RUN (`notes/MD2-RUN.md` in the workspace) met the pass line: the 20 ms floor's CPU, 12.5% of a
   core, is at or below the old loop's 13.3%, and the median image gap is 21.70 ms (the floor sets the pace, which
   is fine). Hong chose the 20 ms floor on those numbers (H80, 12.3), and the orchestrator ruled the check closed.
+  The floor was lifted later, by H104 (2026-11-13); this closed item is unchanged.
 - Hong's hands: H-3, an in-app 1-lap walk with the game and the board. No agent runs it. Hong ran three on `8290b04`
   (2026-11-03): Stop and a click on the app stopped the walk, F12 with the game in front did not (H82: Helix now runs
   as administrator), the Saved runs list needed Refresh (H83: it reads itself again), and the walk overshot nodes

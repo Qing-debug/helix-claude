@@ -171,30 +171,44 @@ def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | 
     # P4: on a slope segment the goal is the start itself, otherwise the end of the WALK run from the start
     gi = 0 if on_slope else _walk_run_end(rg, path, 0)
     g = path[gi]
-    # P4: when g's next edge is UP/DOWN and the character is on g's platform, the goal is that move's launch x
-    # (B14-inv-D1), so the character lines up before it moves; otherwise the goal is g
+    # P4: when g's next edge is UP/DOWN (a launch x, B14-inv-D1) or GAP (`gap_launch`, QB282) and the character is on
+    # g's platform, the goal is that move's launch x, so the character lines up before it moves; otherwise the goal is g
     launch = None
     if gi + 1 < len(path) and anchor.platform == rg.terrain.platform_index(g):
         h = path[gi + 1]
-        if _edge_kind(rg, g, h) in (EdgeKind.UP, EdgeKind.DOWN):
+        edge_kind = _edge_kind(rg, g, h)
+        if edge_kind in (EdgeKind.UP, EdgeKind.DOWN):
             launch = _launch_x(rg, g, h)  # never None here: `_offered` dropped the edges without one
-            if launch is not None and abs(px - launch) > rg.params.arrive_px:
-                move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch)
-                return planned((move,), h, _Across(launch, g))
+        elif edge_kind == EdgeKind.GAP:
+            launch = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
+        if launch is not None and abs(px - launch) > rg.params.arrive_px:
+            move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch, anchor.platform)
+            return planned((move,), h, _Across(launch, g))
     if launch is None and not _is_at(rg, pos, g, anchor):
-        move = _walk(rg, px, g.minimap_position[0]) if on_slope else _run(rg, px, g.minimap_position[0])
+        goal_x = g.minimap_position[0]
+        move = _walk(rg, px, goal_x) if on_slope else _run(rg, px, goal_x, anchor.platform)
         return planned((move,), g, _Across(g.minimap_position[0], g))
 
-    # P5: at g, or lined up on the launch x of g's UP/DOWN edge (g is not the target, or P1 would have applied)
+    # P5: at g, or lined up on the launch x of g's UP/DOWN/GAP edge (g is not the target, or P1 would have applied)
     h = path[gi + 1]
     kind = _edge_kind(rg, g, h)
     if kind == EdgeKind.SLOPE:
         return planned((_walk(rg, px, h.minimap_position[0]),), h, _Across(h.minimap_position[0], h))
     if kind == EdgeKind.WALK:  # only when P4 kept g at the start of a slope segment
         g_next = path[_walk_run_end(rg, path, gi + 1)]
-        return planned((_run(rg, px, g_next.minimap_position[0]),), g_next, _Across(g_next.minimap_position[0], g_next))
+        move = _run(rg, px, g_next.minimap_position[0], anchor.platform)
+        return planned((move,), g_next, _Across(g_next.minimap_position[0], g_next))
     if kind == EdgeKind.UP:
         return planned((Move(MoveKind.TELEPORT, Key.UP, None),), h, _Edge(g, h))
+    if kind == EdgeKind.GAP:
+        # the aims are `_Across`, never `_Edge`: `_landing_vertical` would call the UP/DOWN-only `_launch_x` on a side edge
+        sign = 1 if h.minimap_position[0] > px else -1
+        if anchor.platform is not None and rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h):
+            teleport = Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None)
+            return planned((teleport,), h, _Across(h.minimap_position[0], h))
+        launch_x = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
+        launch_x = g.minimap_position[0] if launch_x is None else launch_x
+        return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))
     # `_go_down` takes no draw since H87, so low == high and the hop has one option; two (DROP, TELEPORT DOWN) is the old flip
     low, high = _go_down(rg, g, h, _LOW), _go_down(rg, g, h, _HIGH)
     return planned((low,) if low == high else (low, high), h, _Edge(g, h))
@@ -216,8 +230,9 @@ def _landing_horizontal(
     px, py = from_pos
     p = rg.params
     sign = 1 if move.direction == Key.RIGHT else -1
+    lp: int | None = None  # the platform a teleport lands on, by the planner's own rule (`side_landing`, QB282)
     if move.kind == MoveKind.TELEPORT:
-        lx = px + sign * rg.reach_h
+        lx, lp = (px + sign * rg.reach_h, None) if platform is None else rg.side_landing(platform, px, sign)
     elif 1000 * abs(aim.x - px) / p.walk_px_per_s <= p.max_walk_ms:
         lx = aim.x
     else:
@@ -230,6 +245,8 @@ def _landing_horizontal(
     order = [terrain.platform_index(an), *(terrain.platform_index(node) for node in reversed(path[:ai]))]
     if platform is not None:
         order.append(platform)
+    if lp is not None:
+        order.insert(0, lp)
     for index in order:
         y = _surface_y(rg, index, lx, py)
         if y is not None:

@@ -11,6 +11,11 @@ move, OFFP141) replaces the move's settle curve: the character shows at the move
 there, so one effect is live at a time and `position_at` (it reads only `effects[-1]`) and `SimWorld.pos` never
 disagree. Its curve moves x as well as y over the whole settle, so a shove along level ground is airborne.
 
+A sideways teleport from a platform lands by the planner's rule (`_side_target`, Hong QB282, walk-fluid Task 4): the end
+of the platform stops it, or it carries onto a platform that starts within its length and within
+`side_teleport_land_dy_px` of the end's height; the landing offset is clamped into the platform it lands on. From the air
+or a rope it lands as before (the first surface at or below y minus the side teleport's rise).
+
 Ropes (the rope fix, H88; the marks are the map's rope file, `src.controller.rope_file`). A character on a rope is at
 x `mark.x + ON_ROPE_DX` (where it reads) and `on_rope` is the mark's index; off every rope it is None. A rope grab needs
 the character on a platform whose surface at the rope's read x is within `rope_top_px` of the mark's `top_y`, launched
@@ -40,6 +45,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from returns.pipeline import is_successful
@@ -84,6 +90,12 @@ class SimTerrain:
             if y is not None and y >= y_from and (best is None or y < best[1]):
                 best = (i, y)
         return best
+
+
+def _point_on(platform: SimPlatform, x: float) -> tuple[float, float]:
+    """The point of `platform` at x, with x first clamped into its span (a landing never ends in the air)."""
+    x = min(max(x, platform.points[0][0]), platform.points[-1][0])
+    return x, cast(float, platform.surface_y(x))
 
 
 def _is_number(v: object) -> bool:
@@ -148,6 +160,7 @@ class SimParams:
     link_latency_s: float = 0.03
     dot_above_foot_px: int = 3           # the dot's centre sits this many px above the foot (= position.DOT_TO_FOOT_PX)
     side_teleport_extra_px: float = 0.0  # a sideways teleport goes this much farther than the character's reach
+    side_teleport_land_dy_px: float = 4.0  # copy of MovementParams.side_teleport_land_dy_px (QB282, 2026-11-13)
     knockback_air_s: float = 0.3         # how long a mob's shove keeps the character in the air
     rope_grab_px: float = 2.0            # a drop launched within this of a rope's read x grabs it
     rope_climb_px: float = 2.0           # a drop on a rope climbs down this far (live: 44, 46, 48, 49)
@@ -305,6 +318,36 @@ class SimWorld:
         settle_s = self.params.drop_settle_s + (landing[1] - y) / self.params.fall_px_per_s
         return self._shoved(self._record("drop", (x, landing[1]), now_ns, settle_s, ()))
 
+    def _side_target(self, x: float, y: float, sign: int, length: float) -> tuple[float, float] | None:
+        """Where a sideways teleport of `length` px toward `sign` (+1 right, -1 left) from (x, y) lands, before any
+        landing offset: the world's copy of the planner's `RouteGraph.side_landing` (Hong, QB282). From a platform it goes
+        the full length, unless that passes the platform's end: then it stops at the end, or, when another platform starts
+        within `length` of x in that direction and within `side_teleport_land_dy_px` of the end's height, it lands on that
+        platform (clamped into its span); with several the nearest wins, a tie goes to the first. The world has no marks, so
+        every platform end stops it. Off every platform (in the air, on a rope) it is today's landing: the first surface
+        at or below y minus the side teleport's rise at x + length, None with no surface."""
+        current = None if self.on_rope is not None else self._platform_at((x, y))   # a rope is not a platform
+        x_new = x + sign * length
+        if current is None:
+            landing = self.terrain.surface_below(x_new, y - _SIDE_TELEPORT_RISE_PX)
+            return None if landing is None else (x_new, landing[1])
+        platforms = self.terrain.platforms
+        points = platforms[current].points
+        end_x, end_y = points[-1] if sign > 0 else points[0]
+        if sign * (x_new - end_x) <= 0:
+            return _point_on(platforms[current], x_new)
+        best: tuple[float, int] | None = None   # (distance from x, platform index)
+        for index, other in enumerate(platforms):
+            if index == current:
+                continue
+            near_x, near_y = other.points[0] if sign > 0 else other.points[-1]
+            distance = sign * (near_x - x)
+            if (sign * (near_x - end_x) > 0 and 0 < distance <= length
+                    and abs(near_y - end_y) <= self.params.side_teleport_land_dy_px
+                    and (best is None or distance < best[0])):
+                best = (distance, index)
+        return (end_x, end_y) if best is None else _point_on(platforms[best[1]], x_new)
+
     # --- moves ----------------------------------------------------------------------------------------------
 
     def knockback(self, dx_px: float, now_ns: int) -> MoveEffect:
@@ -336,19 +379,23 @@ class SimWorld:
         fall_px = self.params.fall_px_per_s
         if sideways:
             sign = 1 if direction == Key.RIGHT else -1
-            x_new = x + sign * (self.reach_h + self.params.side_teleport_extra_px + draw.overshoot_px) + draw.landing_px
-            y_from = y - _SIDE_TELEPORT_RISE_PX
-        elif direction == Key.UP:
-            x_new = x + draw.landing_px
-            y_from = y - self.reach_v
+            length = self.reach_h + self.params.side_teleport_extra_px + draw.overshoot_px
+            if self.on_rope is not None or self._platform_at(self.pos) is None:
+                # In the air or on a rope: no platform end stops it. Today's landing, the offset moves it first.
+                end = self._side_target(x, y, sign, length + sign * draw.landing_px)
+            else:
+                end = self._side_target(x, y, sign, length)
+                landed = None if end is None else self._platform_at(end)
+                if end is not None and landed is not None:   # the offset stays on the platform it lands on
+                    end = _point_on(self.terrain.platforms[landed], end[0] + draw.landing_px)
         else:
             x_new = x + draw.landing_px
-            y_from = y + 1
-        landing = self.terrain.surface_below(x_new, y_from)
-        if landing is None:
+            landing = self.terrain.surface_below(x_new, y - self.reach_v if direction == Key.UP else y + 1)
+            end = None if landing is None else (x_new, landing[1])
+        if end is None:
             return self._shoved(self._record("teleport", self.pos, now_ns, self.params.teleport_settle_s, injected))
         self.on_rope = None
-        y_land = landing[1]
+        x_new, y_land = end
         if direction == Key.DOWN:
             fall = max(0.0, (y_land - y) - self.reach_v)
         else:

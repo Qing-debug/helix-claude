@@ -14,6 +14,12 @@ class MovementParams:
     near_x_px: int = 5             # DC3
     attach_y_px: int = 3           # DC5
     walk_px_per_s: float = 12.5    # measured 2026-11-03: 12.6 px/s, 0.2 px coast, 25 live walks (H81; was an 8.0 estimate)
+    walk_under_px: int = 17        # QB266 (2026-11-13): a node closer than this is walked to, not teleported past
+    side_teleport_land_dy_px: int = 4  # QB282 (2026-11-13): a sideways teleport carries onto a platform this close in height
+    # Only `RouteGraph.gap_launch` reads the next field. It must be more than `arrive_px` and at most the class's horizontal
+    # reach plus `arrive_px`. At or below `arrive_px` every gap falls back to the old launch rule and the margin is lost;
+    # above reach plus `arrive_px` the GAP edge disappears with no error. A second class needs its own measurement.
+    shortest_side_teleport_px: int = 18  # H103: the shortest of 64 recorded flat sideways teleports; A2's gap margin
     teleport_s: float = 0.55       # ESTIMATE: keys + animation of one teleport
     drop_base_s: float = 0.35      # ESTIMATE: keys + start of a drop
     fall_px_per_s: float = 60.0    # ESTIMATE

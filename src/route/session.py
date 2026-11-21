@@ -74,6 +74,7 @@ from src.route import runtime
 from src.route.harness.record_minimap import INDEX_NAME, record, shared_frames
 from src.route.leg_log import LAPS_FILE, LEGS_FILE, JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink
 from src.route.params import MovementParams
+from src.route.position import MinimapPositionSource
 from src.route.ropes import RopeZones
 from src.route.route_graph import RouteGraph
 from src.route.step_log import MAP_COPY, SNAPSHOT, STEPS_FILE, RunHeader, StepLog
@@ -115,6 +116,9 @@ class FrameHolder(Protocol):
 
     @property
     def minimap_frame(self) -> object: ...
+
+    @property
+    def minimap_frame_ns(self) -> int | None: ...
 
 
 class MakeStop(Protocol):
@@ -278,13 +282,15 @@ def _record_guarded(shared: FrameHolder, out_dir: Path, stop: threading.Event,
     """The recorder thread's target (spec 5.6, H62): `record` the shared frames into `out_dir` until `stop` is set.
     An exception or a `Failure` from `record` ends the recording with one `warning` event, and so does free space
     below `RECORD_FLOOR_BYTES` on the run folder's drive, checked every `DISK_CHECK_FRAMES` polls: that check sets
-    `stop`, so `record` saves that poll's frame and returns. The walk goes on. `record` is not edited; the constants
-    and `free_bytes` are read from this module when called (the tests patch them). Its one line goes to `log`."""
+    `stop`, so `record` saves that poll's frame and returns. The walk goes on. `frames()` passes the `(frame, stamp)`
+    pair of `shared_frames` through to `record`, which writes the stamp as `frame_ns` in each index line (QB283 2d); the
+    constants and `free_bytes` are read from this module when called (the tests patch them). Its one line goes to
+    `log`."""
     read = shared_frames(shared)
     polls = 0
     low_on: str | None = None  # the drive, once its free space fell below the floor
 
-    def frames() -> np.ndarray | None:
+    def frames() -> tuple[np.ndarray, int | None] | None:
         nonlocal polls, low_on
         polls += 1
         if polls % DISK_CHECK_FRAMES == 0 and free_bytes(out_dir) < RECORD_FLOOR_BYTES:
@@ -462,7 +468,8 @@ class RunSession:
             if self._flagged():
                 stop_payload = {"reason": "cancelled"}
                 return 0
-            first_frame = shared_frames(shared)()  # the frame just waited for, held for minimap.png (spec 5.2)
+            got_frame = shared_frames(shared)()  # (frame, stamp) or None
+            first_frame = None if got_frame is None else got_frame[0]  # the frame just waited for, held for minimap.png (spec 5.2)
             found = positions.read()
             if not is_successful(found):
                 self._log(f"error: character not found on the minimap: {found.failure()}", True)
@@ -493,9 +500,15 @@ class RunSession:
             sink = _LostLegSink(log, self._log)
             config = WalkerConfig(use_stimulus=True, leg_timeout_s=LEG_TIMEOUT_S, max_laps=s.laps)
             clock = self._make_clock()
-            step_log = StepLog(log=self._error_line)  # no I/O; every walk passes it (V7 step 3)
+            # no I/O; every walk passes it (V7 step 3). A minimap position source has the stamp of its last good read
+            # (QB283 2d): the log asks it live, on the walker's thread. Another source (the simulator's) has none.
+            stamp = (lambda: positions.frame_ns) if isinstance(positions, MinimapPositionSource) else None
+            step_log = StepLog(log=self._error_line, frame_ns=stamp)
+            # the walker wakes on a new picture when its source can wait for one (QB283 2a); another source (the
+            # simulator's) has no pictures to wait for, so its walker sleeps `poll_s` as before
+            wait_frame = positions.wait_new if isinstance(positions, MinimapPositionSource) else None
             walker = RouteWalker(rg, rotation, layer, positions, clock, sink, rng_planner, config, observer=step_log,
-                                 log=self._error_line, ropes=ropes)
+                                 log=self._error_line, ropes=ropes, wait_frame=wait_frame)
             stop = self._make_stop(self._on_stop, log=self._error_line)
             sink.arm(stop.trigger, walker.stop_now)
             if self._flagged():
