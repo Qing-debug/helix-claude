@@ -110,6 +110,7 @@ class RouteGraph:
     reach_v: int
     params: MovementParams
     split_ends: frozenset[tuple[int, int]]
+    teleport_links: frozenset[tuple[Node, Node]]
 
     def __init__(
         self,
@@ -120,6 +121,7 @@ class RouteGraph:
         reach_v: int,
         params: MovementParams,
         split_ends: frozenset[tuple[int, int]] = frozenset(),
+        teleport_links: frozenset[tuple[Node, Node]] = frozenset(),
     ) -> None:
         self.graph = graph
         self.terrain = terrain
@@ -130,6 +132,9 @@ class RouteGraph:
         # (platform index, sign) for both ends of every gap a mark types GAP (re-review N1), collected before pricing,
         # so also the ends of a GAP edge that `_edge_cost` then drops for having no launch (T2R m2)
         self.split_ends = split_ends
+        # (end node, near node of the landing platform) for every teleport link `build` added (H111), collected before
+        # pricing, so also a link the gap cap (H112) leaves with no edge; the map editor draws only the ones with an edge
+        self.teleport_links = teleport_links
 
     @classmethod
     def build(cls, path_graph: PathGraph, params: MovementParams) -> Result["RouteGraph", str]:
@@ -148,8 +153,9 @@ class RouteGraph:
         terrain = terrain_result.unwrap()
 
         # a first pass types the PathGraph edges and collects both platform ends of every gap typed GAP (an edge that
-        # pricing later drops for having no launch point still counts: the ends stay stops, T2R m2); the graph is
-        # built with them, and only then are the edges priced, because the GAP and WALK costs call `side_landing`
+        # pricing later drops for having no launch point still counts: the ends stay stops, T2R m2); the teleport links
+        # of Hong's anymap182-1 (H111, `_teleport_links`) are added to them; the graph is built with them, and only then
+        # are the edges priced, because the GAP and WALK costs call `side_landing`
         typed: list[tuple[Node, Node, EdgeKind]] = []
         seen: set[tuple[Node, Node]] = set()
         split: set[tuple[int, int]] = set()
@@ -168,16 +174,59 @@ class RouteGraph:
             else:
                 kind = EdgeKind.UP if dy < 0 else EdgeKind.DOWN
             typed.append((u, v, kind))
+        links, split_ends = cls._teleport_links(terrain, typed, split, align_px, reach_h, reach_v, params)
+        typed += [(u, v, EdgeKind.GAP) for u, v in links]
 
         graph = nx.DiGraph()
         graph.add_nodes_from(nodes)
-        rg = cls(graph, terrain, align_px, reach_h, reach_v, params, frozenset(split))
+        rg = cls(graph, terrain, align_px, reach_h, reach_v, params, split_ends, frozenset(links))
         for u, v, kind in typed:
             rg._add_edge(u, v, kind)
         for link in terrain.links:
             if not graph.has_edge(link.src, link.dst):
                 rg._add_edge(link.src, link.dst, _TERRAIN_KIND[link.kind])
         return Success(rg)
+
+    @classmethod
+    def _teleport_links(
+        cls,
+        terrain: Terrain,
+        typed: list[tuple[Node, Node, EdgeKind]],
+        split: set[tuple[int, int]],
+        align_px: int,
+        reach_h: int,
+        reach_v: int,
+        params: MovementParams,
+    ) -> tuple[list[tuple[Node, Node]], frozenset[tuple[int, int]]]:
+        """The teleport links (Hong's anymap182-1, H111: "Add teleport links in the walker's own route step, using your
+        4 px rule") and the split ends with theirs added: `(links in the order found, split_ends)`.
+
+        From every platform end that stops a sideways teleport (`is_stop_end`: marked, or an end of a gap), the teleport
+        from that end lands where `side_landing` says; when that is another platform and no edge in `typed` goes from
+        the end node to a node of it, the link is `(end node, that platform's near node)`, a GAP edge to the caller, and
+        both its ends become split ends. Passes repeat until one adds nothing, so the far platform's facing end, a stop
+        now, gets the link back by the same rule (ANYMAP194-D3, as re-review N1 does for a gap with one marked side).
+        Nothing is priced here: a link the gap cap (H112) leaves with no launch is still returned."""
+        links: list[tuple[Node, Node]] = []
+        split_ends = set(split)
+        linked = {(u, terrain.platform_index(v)) for u, v, _ in typed}
+        added = True
+        while added:
+            added = False
+            ends = cls(nx.DiGraph(), terrain, align_px, reach_h, reach_v, params, frozenset(split_ends))
+            for p, platform in enumerate(terrain.platforms):
+                for sign in (+1, -1):
+                    end = platform[-1] if sign > 0 else platform[0]
+                    if not ends.is_stop_end(end, sign):
+                        continue
+                    q = ends.side_landing(p, end.minimap_position[0], sign)[1]
+                    if q == p or (end, q) in linked:
+                        continue
+                    links.append((end, terrain.platforms[q][0 if sign > 0 else -1]))
+                    linked.add((end, q))
+                    split_ends.update({(p, sign), (q, -sign)})
+                    added = True
+        return links, frozenset(split_ends)
 
     def is_stop_end(self, node: Node, sign: int) -> bool:
         """`node` is the end of its terrain platform toward `sign` and that end stops a sideways teleport: it is marked
@@ -229,19 +278,26 @@ class RouteGraph:
         (walkfix170-1, "A with a margin: line up 3 px nearer the gap, so the teleport lands on the node or up to 5 px
         past it"). The launch is `v.x - sign * (reach_h - margin)`, with margin = `arrive_px` (the planner counts the
         character lined up within it) + `reach_h` - `shortest_side_teleport_px` (the shortest recorded teleport),
-        3 px for Kanna (WALKFIX172-D1). When that x lies past the end of `u`'s platform toward `v` (`v` more than
-        `reach_h - margin` px past that end), the margin cannot be had and the launch is exact A's, `v.x - sign *
-        reach_h`, as before A2 (gaps that wide wait on Hong, ANYMAP181-D2). The target is clamped into `u`'s platform
-        and checked with `side_landing`."""
+        3 px for Kanna (WALKFIX172-D1). The target is clamped into `u`'s platform.
+
+        The gap cap (Hong's anymap182-2, H112: "Offer a gap only when an 18 px teleport crosses it from anywhere counted
+        as lined up"): None when, from the far edge of the lined-up range (`arrive_px` short of the target), the
+        shortest recorded teleport would not reach the start of `v`'s platform (its near node, not `v`, which may lie
+        deeper in that platform). For an unclamped target that always reaches, so only a gap of more than
+        `shortest_side_teleport_px - arrive_px` (16 px for Kanna) between the end of `u`'s platform and the start of
+        `v`'s loses its launch, and with it its GAP edge (`_edge_cost`). Otherwise the target is checked with
+        `side_landing`."""
         sign = _sign(v.minimap_position[0] - u.minimap_position[0])
         platform = self.terrain.platform_index(u)
         nodes = self.terrain.platforms[platform]
         first_x, last_x = nodes[0].minimap_position[0], nodes[-1].minimap_position[0]
         margin = self.params.arrive_px + self.reach_h - self.params.shortest_side_teleport_px
         target = v.minimap_position[0] - sign * (self.reach_h - margin)  # A2
-        if sign * (target - (last_x if sign > 0 else first_x)) > 0:
-            target = v.minimap_position[0] - sign * self.reach_h  # exact A, past the end
         target = min(max(target, first_x), last_x)
+        far = self.terrain.platforms[self.terrain.platform_index(v)]
+        near_x = (far[0] if sign > 0 else far[-1]).minimap_position[0]
+        if sign * (near_x - (target - sign * self.params.arrive_px)) > self.params.shortest_side_teleport_px:
+            return None  # the gap cap (H112)
         if self.side_landing(platform, target, sign)[1] == self.terrain.platform_index(v):
             return target
         return None

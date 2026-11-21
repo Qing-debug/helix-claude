@@ -17,7 +17,7 @@ from src.controller.node import Node
 from src.controller.rope_file import RopeMark
 from src.input.protocol import Key
 from src.route.locate import Anchor, attach
-from src.route.route_graph import EdgeKind, RouteGraph, down_options, horizontal_cost_s
+from src.route.route_graph import EdgeKind, RouteGraph, down_options, horizontal_cost_s, is_marked_end
 
 
 class MoveKind(StrEnum):
@@ -189,6 +189,17 @@ def _launch_x(rg: RouteGraph, g: Node, h: Node) -> int | None:
     return None
 
 
+def _past_marked_end(rg: RouteGraph, px: int, h: Node) -> bool:
+    """`px` lies past an end of h's platform that the map marks, so an up or down move toward h from `px` finds no
+    platform there (H17: the teleport fails). Keyed on the marks only (`is_marked_end`, ISS6-B-D1): past an unmarked
+    end the platform is taken to go on (ANYMAP198-R3-D1, option B)."""
+    platform = rg.terrain.platforms[rg.terrain.platform_index(h)]
+    first, last = platform[0], platform[-1]
+    return (px < first.minimap_position[0] and is_marked_end(first, -1)) or (
+        px > last.minimap_position[0] and is_marked_end(last, 1)
+    )
+
+
 def _offered(rg: RouteGraph) -> RouteGraph:
     """`rg` without the UP/DOWN edges that have no launch point, so no path takes them."""
     blocked = {
@@ -199,7 +210,7 @@ def _offered(rg: RouteGraph) -> RouteGraph:
     if not blocked:
         return rg
     view = nx.subgraph_view(rg.graph, filter_edge=lambda u, v: (u, v) not in blocked)
-    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params, split_ends=rg.split_ends)
+    return RouteGraph(view, rg.terrain, rg.align_px, rg.reach_h, rg.reach_v, rg.params, split_ends=rg.split_ends, teleport_links=rg.teleport_links)
 
 
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:
@@ -298,6 +309,11 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
     if kind == EdgeKind.WALK:  # only when P4 kept g at the start of a slope segment
         g_next = path[_walk_run_end(rg, path, gi + 1)]
         return Success(Decision(_run(rg, px, g_next.minimap_position[0], anchor.platform), total, g_next))
+    if kind in (EdgeKind.UP, EdgeKind.DOWN) and _past_marked_end(rg, px, h):
+        # P4 counts the character lined up within `arrive_px` of the launch, so the read may lie 1-2 px past a marked end
+        # of h's platform, with nothing above or below to land on: walk to the launch x first, as the GAP branch does
+        launch_x = _launch_x(rg, g, h)  # never None: `_offered` dropped the edges without one
+        return Success(Decision(_walk(rg, px, h.minimap_position[0] if launch_x is None else launch_x), total, h))
     if kind == EdgeKind.UP:
         return Success(Decision(Move(MoveKind.TELEPORT, Key.UP, None), total, h))
     if kind == EdgeKind.GAP:
