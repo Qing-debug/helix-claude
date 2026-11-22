@@ -33,12 +33,12 @@ def test_the_tables_are_one_object_under_every_name():
     assert analyze.BOT_VKS is vk_codes.BOT_VKS
 
 
-@pytest.mark.parametrize("module", ["analyze", "realism", "vk_codes"])
+@pytest.mark.parametrize("module", ["analyze", "realism", "vk_codes", "constants"])
 def test_the_offline_checkers_do_not_load_the_listener(module):
     assert LISTENER not in _loaded_after_importing(module)
 
 
-@pytest.mark.parametrize("module", ["analyze", "vk_codes"])
+@pytest.mark.parametrize("module", ["analyze", "vk_codes", "constants"])
 def test_these_load_no_windows_api(module):
     # realism is left out: it imports numpy, which loads ctypes
     assert "ctypes" not in _loaded_after_importing(module)

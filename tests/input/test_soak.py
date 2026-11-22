@@ -1052,7 +1052,10 @@ def test_read_answer_y_and_closed_input(monkeypatch):
 # ---- constants shared by soak, analyze and realism (W1-4) -----------------------------------------
 
 def test_the_shared_constants_keep_their_values_under_every_module():
-    from src.input.harness import analyze
+    from src.input.harness import analyze, constants
     assert soak.CI_UNIT_MS == realism.CI_UNIT_MS == 1.25
     assert soak.NS_PER_H == analyze.NS_PER_H == 3_600_000_000_000
     assert soak.FOCUS_LOST == analyze.FOCUS_LOST == "FOCUS_LOST"
+    assert soak.CI_UNIT_MS is realism.CI_UNIT_MS is constants.CI_UNIT_MS  # one object, one source
+    assert soak.NS_PER_H is analyze.NS_PER_H is constants.NS_PER_H
+    assert soak.FOCUS_LOST is analyze.FOCUS_LOST is constants.FOCUS_LOST

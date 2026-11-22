@@ -55,6 +55,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.input.harness import faults, listener
+from src.input.harness.constants import CI_UNIT_MS, FOCUS_LOST, NS_PER_H
 from src.input.harness.realism import KS_MIN_N, KS_TYPES
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import BleLink, InputError, SessionInfo
@@ -74,7 +75,6 @@ LINK_LOG_FILE = "link.log"
 LINK_LOGGER = "src.input.link"
 LINK_LOG_FORMAT = "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
 
-FOCUS_LOST = "FOCUS_LOST"  # a harness status, not an InputError (C5)
 LINK_LOSS = (InputError.NOT_CONNECTED, InputError.LINK_LOST)  # a command Failure that aborts the run (D2)
 MAX_CONSECUTIVE_FAILURES = 10  # past N, a --min-hours run that fails this many commands in a row aborts (D1-B)
 FOCUS_RECHECKS = 10
@@ -83,7 +83,6 @@ FOCUS_RECHECK_PERIOD_S = 1.0
 # the operator's click. 120 s bounds the time the listener blocks the bot keys if nobody clicks.
 START_WAIT_S = 120.0
 START_POLL_S = 0.25
-CI_UNIT_MS = 1.25  # PONG itvl is in 1.25 ms units (C1)
 
 COMMAND_FIELDS = ("seq", "action", "intended_ms", "stimulus_ns", "steps", "samples", "reaction_ms", "reaction_index",
                   "waited_ms", "sent_ns", "written_ns", "accepted_ns", "done_ns", "t0_us", "late_us", "status",
@@ -175,6 +174,16 @@ def _stamp_perf_ns(record: logging.LogRecord) -> bool:
     return True
 
 
+def link_log_handler(path: Path, level: int) -> logging.FileHandler:
+    """A `src.input.link` log file handler: overwritten per run, utf-8, `level` and up, every record stamped with
+    perf_ns in `LINK_LOG_FORMAT`. Attaching it, and the logger's level, stay with the caller."""
+    handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    handler.setLevel(level)
+    handler.addFilter(_stamp_perf_ns)
+    handler.setFormatter(logging.Formatter(LINK_LOG_FORMAT))
+    return handler
+
+
 class RunWriter:
     """Writes one run's C5 files into `run_dir`. Use as a context manager (or call `open()` / `close()`).
 
@@ -218,10 +227,7 @@ class RunWriter:
         self.session["start_ns"] = _clock()
 
     def _attach_link_log(self) -> None:
-        handler = logging.FileHandler(self.run_dir / LINK_LOG_FILE, mode="w", encoding="utf-8")  # one run per file
-        handler.setLevel(logging.WARNING)
-        handler.addFilter(_stamp_perf_ns)
-        handler.setFormatter(logging.Formatter(LINK_LOG_FORMAT))
+        handler = link_log_handler(self.run_dir / LINK_LOG_FILE, logging.WARNING)  # one run per file
         logger = logging.getLogger(LINK_LOGGER)
         if logger.getEffectiveLevel() > logging.WARNING:  # let WARNING records reach the handler
             self._logger_level = logger.level
@@ -525,7 +531,6 @@ def maple_check() -> tuple[bool, str]:
 # ---- the driver --------------------------------------------------------------------------------------
 
 EXIT_OK, EXIT_ABORT, EXIT_REFUSED, EXIT_INTERRUPTED = 0, 1, 2, 130
-NS_PER_H = 3600 * 1_000_000_000
 
 
 @dataclass(frozen=True)
