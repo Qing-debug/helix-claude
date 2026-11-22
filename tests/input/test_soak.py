@@ -299,6 +299,33 @@ def test_keys_jsonl_is_truncated_when_the_run_dir_is_reused(tmp_path, driver_clo
     assert (run / "keys.jsonl").read_bytes() == b'{"qpc_ns": 2, "vk": 39}\n'
 
 
+def test_link_log_handler_settings(tmp_path):
+    # W1-4 pin: link.log's handler keeps these settings when its builder is shared (H141)
+    with _writer(tmp_path) as w:
+        handler = w._handler
+        assert isinstance(handler, logging.FileHandler)
+        assert handler.baseFilename == str((w.run_dir / "link.log").resolve())
+        assert handler.mode == "w" and handler.encoding == "utf-8"
+        assert handler.level == logging.WARNING
+        assert handler.filters == [soak._stamp_perf_ns]
+        assert handler.formatter is not None
+        assert handler.formatter._fmt == "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
+
+
+@pytest.mark.parametrize("start, during", [(logging.ERROR, logging.WARNING), (logging.WARNING, logging.WARNING),
+                                           (logging.INFO, logging.INFO), (logging.DEBUG, logging.DEBUG)])
+def test_link_log_lowers_the_logger_to_warning_only_if_higher_and_restores_it(tmp_path, start, during):
+    logger = logging.getLogger("src.input.link")
+    before = logger.level
+    logger.setLevel(start)
+    try:
+        with _writer(tmp_path):
+            assert logger.level == during
+        assert logger.level == start
+    finally:
+        logger.setLevel(before)
+
+
 def test_link_log_handler_removed_on_ctrl_c(tmp_path):
     logger = logging.getLogger("src.input.link")
     before_handlers = list(logger.handlers)
@@ -1020,3 +1047,12 @@ def test_read_answer_y_and_closed_input(monkeypatch):
 
     monkeypatch.setattr("builtins.input", unreadable)
     assert soak._read_answer() == Failure("none")
+
+
+# ---- constants shared by soak, analyze and realism (W1-4) -----------------------------------------
+
+def test_the_shared_constants_keep_their_values_under_every_module():
+    from src.input.harness import analyze
+    assert soak.CI_UNIT_MS == realism.CI_UNIT_MS == 1.25
+    assert soak.NS_PER_H == analyze.NS_PER_H == 3_600_000_000_000
+    assert soak.FOCUS_LOST == analyze.FOCUS_LOST == "FOCUS_LOST"
