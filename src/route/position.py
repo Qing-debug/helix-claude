@@ -25,7 +25,7 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result
 
 from src.route.character import CharacterLocator
-from src.route.walker import STALE
+from src.route.ports import STALE
 
 # The dot's centre is 6 px above the ground, and the map editor's node circle (radius 3) rests on the ground, so a
 # node sits 3 px below the dot's centre. Every position source reports that point, the reference the map's nodes use
@@ -39,7 +39,7 @@ def foot_from_dot(dot: tuple[int, int]) -> tuple[int, int]:
     return x, y + DOT_TO_FOOT_PX
 
 
-class MinimapPositionSource:  # implements walker.PositionSource
+class MinimapPositionSource:  # implements ports.PositionSource
     def __init__(self, shared, locator: CharacterLocator) -> None:
         """`shared` has `minimap_frame_lock` (a lock), `minimap_frame` (an RGB uint8 H x W x 3 array, or None) and
         `minimap_frame_ns` (the stamp of that frame, an int, or None before the first); `wait_new` also needs

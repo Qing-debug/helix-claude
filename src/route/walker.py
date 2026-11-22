@@ -71,10 +71,10 @@ from src.route.leg_log import LapRecord, LegOutcome, LegRecord, LegSink, MoveEnt
 from src.route.locate import attach, attach_standing
 from src.route.moves import execute
 from src.route.planner import Decision, next_move, rope_move
+from src.route.ports import STALE, Clock, PositionSource, StepObserver
+from src.route.ports import RealClock as RealClock  # re-exported, so `walker.RealClock` is `ports.RealClock`
 from src.route.ropes import RopeZones
 from src.route.route_graph import RouteGraph
-
-STALE = "stale"  # the PositionSource Failure that means "no new frame yet"; any other Failure is a miss
 
 _NS_PER_S = 1_000_000_000
 _LINK_DOWN = frozenset({InputError.LINK_LOST, InputError.NOT_CONNECTED})
@@ -88,44 +88,10 @@ def _print_error(text: str) -> None:
     print(text, file=sys.stderr)
 
 
-class Clock(Protocol):
-    def now_ns(self) -> int: ...
-
-    def sleep(self, seconds: float) -> None: ...
-
-
-class PositionSource(Protocol):
-    def read(self) -> Result[tuple[int, int], str]: ...  # Failure(STALE) = no new frame; any other Failure = miss
-
-
 class FrameWaiter(Protocol):
     """Waits until a picture newer than the last one read is there, for at most `timeout_s` (`MinimapPositionSource.wait_new`)."""
 
     def __call__(self, timeout_s: float) -> object: ...
-
-
-class StepObserver(Protocol):
-    """What `walk_leg` reports as it goes (route view, contract V2): plain values, called on the walker's thread."""
-
-    def leg(self, t_ns: int, lap: int, leg: int, src: tuple[int, int] | None, dst: tuple[int, int]) -> None: ...
-
-    def read_failed(self, t_ns: int, why: str) -> None: ...
-
-    def no_plan(self, t_ns: int, pos: tuple[int, int], why: str) -> None: ...
-
-    def reached(self, t_ns: int, pos: tuple[int, int]) -> None: ...
-
-    def stall(self, t_ns: int, best_cost_s: float) -> None: ...  # math.inf before the leg's first plan
-
-    def planned(self, t_ns: int, pos: tuple[int, int], kind: str, direction: str | None, walk_ms: float | None,
-                cost_to_go_s: float, toward: tuple[int, int] | None) -> None: ...
-
-    def sent(self, t_ns: int, input_name: str, reaction_ms: float | None, waited_ms: float | None,
-             keys: tuple[tuple[int, int], ...]) -> None: ...
-
-    def settled(self, t_ns: int, pos: tuple[int, int] | None, stopped: bool) -> None: ...
-
-    def leg_end(self, t_ns: int, outcome: str, misses: int, off_graph: int, stalls: int) -> None: ...
 
 
 class _Stillness:
@@ -145,16 +111,6 @@ class _Stillness:
 
     def reset(self) -> None:
         self._pos = None
-
-
-class RealClock:
-    """`now_ns` is `time.perf_counter_ns`, the clock `InputLayer` measures a stimulus on; `sleep` is `time.sleep`."""
-
-    def now_ns(self) -> int:
-        return time.perf_counter_ns()
-
-    def sleep(self, seconds: float) -> None:
-        time.sleep(seconds)
 
 
 @dataclass(frozen=True)

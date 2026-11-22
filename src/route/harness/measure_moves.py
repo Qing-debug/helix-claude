@@ -79,7 +79,7 @@ from src.input.protocol import Key
 from src.input.timing import TimingModel, TimingType
 from src.route import runtime
 from src.route.planner import MoveKind
-from src.route.walker import Clock, PositionSource, RealClock
+from src.route.ports import Clock, PositionSource, RealClock
 
 _REPO = Path(__file__).resolve().parents[3]
 MEASURE_FILE = "measure.jsonl"
