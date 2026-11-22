@@ -375,8 +375,9 @@ class RunSession:
 
     def _on_stop(self) -> None:
         """The stop control's `on_stop`. It stops the walker only once `_hand_over` has handed it over:
-        `walker.stop_now()` starts a guard thread that ends only when `walker.run()` has finished (walker.py:286-301),
-        and a run cancelled before the walk, or left by an exception before `walker.run()`, never calls it."""
+        `walker.stop_now()` starts a guard thread that ends only when `walker.run()` has finished
+        (`RouteWalker.stop_now` and `_guard_loop` in walker.py), and a run cancelled before the walk, or left by an
+        exception before `walker.run()`, never calls it."""
         with self._stop_lock:
             self._stop_asked = True
             walker = self._walking
