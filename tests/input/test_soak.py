@@ -3,6 +3,7 @@
 No board, no radio, no window: the link, the sink and the clock are fakes. The clock and sleep are the module's
 seams (`soak._clock`, `soak._sleep`), monkeypatched as in test_input_layer.py.
 """
+import hashlib
 import json
 import logging
 import time
@@ -427,6 +428,55 @@ def test_mix_is_seeded():
     assert plan_mix(5, 300) == plan_mix(5, 300)
     assert plan_mix(5, 300) != plan_mix(6, 300)
     assert plan_mix(5, 300)[:100] == plan_mix(5, 100)  # a longer run starts with the same commands
+
+
+GOLDEN_MIX = {  # the planned command list, written down before the mix moved into harness/command_mix.py (W1-5)
+    1: ("aab91e471ea08b01e8bcd414678128d1ab7a2375f6a3e3bb1cd1cc375f8123e5",
+        ["teleport 8 None", "teleport 1 None", "walk 1 2493.9613795011915", "tap 1 None", "jump  None",
+         "teleport 2 None", "walk 1 579.1051087366861", "drop  None", "tap 32 None", "tap 4 None", "jump  None",
+         "teleport 4 None", "walk 2 2554.464010565179", "tap 1 None", "tap 32 None", "teleport 1 None",
+         "walk 2 2049.430982628831", "jump  None", "walk 1 627.8484918583725", "drop  None",
+         "sequence 2,16,64,8,1 None", "drop  None", "sequence 8,4,2,8 None", "drop  None",
+         "walk 2 2788.7845739698714", "drop  None", "sequence 4,16 None", "sequence 64,8,4,2 None", "drop  None",
+         "teleport 8 None", "sequence 2,8,1,1 None", "tap 8 None", "walk 1 2278.9171313883826", "tap 8 None",
+         "teleport 2 None", "teleport 1 None", "walk 2 2252.4847587778877", "teleport 1 None", "teleport 1 None",
+         "walk 2 1246.3702861752586"]),
+    123: ("8ac8e98e608d521fc39e769744d224aaf2f0c9344ec07de1bb2523e2e9d30948",
+          ["tap 1 None", "walk 2 720.8170851784561", "tap 2 None", "tap 64 None", "walk 2 2002.7562766486983",
+           "tap 32 None", "walk 1 1323.9076200389113", "drop  None", "sequence 64,4 None", "teleport 8 None",
+           "teleport 1 None", "tap 64 None", "tap 32 None", "teleport 1 None", "tap 8 None", "teleport 4 None",
+           "teleport 1 None", "teleport 1 None", "sequence 16,1,8,4 None", "jump  None", "jump  None", "drop  None",
+           "teleport 2 None", "jump  None", "teleport 4 None", "teleport 1 None", "sequence 16,64,2 None",
+           "teleport 4 None", "walk 1 595.7630190859866", "teleport 1 None", "sequence 4,4,8,64 None",
+           "teleport 4 None", "sequence 4,4,2,1 None", "walk 2 556.8066538676585", "tap 4 None",
+           "sequence 16,4,2,64,64 None", "jump  None", "tap 64 None", "teleport 8 None",
+           "walk 1 1332.2235971369987"]),
+}
+GOLDEN_STREAMS = {1: [3223727848812172239, 2194076578445297086, 1075299005653396644],  # first integers(1 << 62) of each
+                  123: [893056844781106894, 2550219403540390218, 3557464098168876856]}
+GOLDEN_FAULTS = {1: {40: "reset_board", 7: "reset_board", 16: "reset_board",
+                     2: "bluetooth_off_on", 25: "bluetooth_off_on", 14: "bluetooth_off_on"},
+                 123: {29: "reset_board", 14: "reset_board", 11: "reset_board",
+                       8: "bluetooth_off_on", 15: "bluetooth_off_on", 46: "bluetooth_off_on"}}
+GOLDEN_COUNTS = {1: {TimingType.REACTION: 200, TimingType.CHORD_OFFSET: 64, TimingType.HOLD: 226,
+                     TimingType.RELEASE_LAG: 64, TimingType.WALK: 45, TimingType.GAP: 71},
+                 123: {TimingType.REACTION: 200, TimingType.HOLD: 227, TimingType.WALK: 38,
+                       TimingType.CHORD_OFFSET: 80, TimingType.RELEASE_LAG: 80, TimingType.GAP: 65}}
+
+
+def _golden_line(c) -> str:
+    return f"{c.action} {','.join(str(int(k)) for k in c.keys)} {c.intended_ms!r}"
+
+
+@pytest.mark.parametrize("seed", [1, 123])
+def test_golden_mix_for_two_fixed_seeds_pins_the_rng_draw_order(seed):
+    digest, first = GOLDEN_MIX[seed]
+    lines = [_golden_line(c) for c in plan_mix(seed, 2000)]
+    assert lines[:40] == first
+    assert hashlib.sha256("\n".join(lines).encode()).hexdigest() == digest  # all 2000 commands
+    assert [int(g.integers(1 << 62)) for g in soak._streams(seed)] == GOLDEN_STREAMS[seed]
+    assert fault_indexes(seed, 50, {"reset_board": 3, "bluetooth_off_on": 3}) == GOLDEN_FAULTS[seed]
+    assert dict(sample_counts(plan_mix(seed, 200))) == GOLDEN_COUNTS[seed]
 
 
 def test_10000_commands_give_1000_chosen_samples_per_judged_type_gap_included():
