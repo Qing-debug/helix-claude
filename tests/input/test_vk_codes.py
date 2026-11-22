@@ -33,7 +33,7 @@ def test_the_tables_are_one_object_under_every_name():
     assert analyze.BOT_VKS is vk_codes.BOT_VKS
 
 
-@pytest.mark.parametrize("module", ["analyze", "realism", "vk_codes", "constants"])
+@pytest.mark.parametrize("module", ["analyze", "realism", "vk_codes", "constants", "command_mix"])
 def test_the_offline_checkers_do_not_load_the_listener(module):
     assert LISTENER not in _loaded_after_importing(module)
 

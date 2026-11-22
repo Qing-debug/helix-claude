@@ -71,8 +71,8 @@ def conditions(plan: tuple[tuple[str, int], ...] = PLAN) -> list[str]:
 def start_row(attempt: int, condition: str, error: str | None, seconds: float | None, start_ns: int,
               end_ns: int) -> dict:
     """A C5 `session_starts.jsonl` row; `result` is Success exactly when nothing failed."""
-    return {"attempt": attempt, "condition": condition, "result": "Success" if error is None else "Failure",
-            "error": error, "seconds": seconds, "start_ns": start_ns, "end_ns": end_ns}
+    values = (attempt, condition, "Success" if error is None else "Failure", error, seconds, start_ns, end_ns)
+    return dict(zip(STARTS_FIELDS, values))
 
 
 # ---- tap seen by the listener --------------------------------------------------------------------

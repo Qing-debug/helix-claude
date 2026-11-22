@@ -479,6 +479,13 @@ def test_golden_mix_for_two_fixed_seeds_pins_the_rng_draw_order(seed):
     assert dict(sample_counts(plan_mix(seed, 200))) == GOLDEN_COUNTS[seed]
 
 
+def test_the_mix_names_are_defined_once_in_command_mix_and_reachable_through_soak():
+    from src.input.harness import command_mix
+    for name in ("Command", "ARROWS", "TAP_KEYS", "WALK_KEYS", "SEQUENCE_KEYS", "MIX", "WALK_T_MS", "SEQUENCE_LEN",
+                 "_streams", "command_mix", "plan_mix", "sample_counts"):
+        assert getattr(soak, name) is getattr(command_mix, name), name
+
+
 def test_10000_commands_give_1000_chosen_samples_per_judged_type_gap_included():
     mix = plan_mix(1, 10_000)
     counts = sample_counts(mix)
