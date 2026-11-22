@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 from returns.pipeline import is_successful
 
+import src.route.sim.recovery as recovery_module
+import src.route.sim.report as report_module
 import src.route.sim.run as run_module
 from src.classes.classes import Kanna
 from src.controller.controller import MapleAgent
@@ -191,8 +193,8 @@ def test_drop_only_edges_counts_the_ones_a_rotation_leg_uses():
              1: Node("blue_node", (10, 40), False, False, False, False)}  # 30 px down: beyond a teleport, a drop reaches
     rg = _route_graph(nodes)
     assert rg.graph.edges[nodes[0], nodes[1]]["kind"] == EdgeKind.DOWN and 30 > rg.reach_v
-    assert run_module._drop_only_edges_used(rg, (nodes[0], nodes[1])) == 1  # leg 0 -> 1 drops; leg 1 -> 0 has no path
-    assert run_module._drop_only_edges_used(rg, (nodes[1],)) == 0           # a rotation that never leaves the floor
+    assert report_module._drop_only_edges_used(rg, (nodes[0], nodes[1])) == 1  # leg 0 -> 1 drops; leg 1 -> 0 has no path
+    assert report_module._drop_only_edges_used(rg, (nodes[1],)) == 0           # a rotation that never leaves the floor
 
 
 def test_drop_only_edges_ignores_an_edge_no_rotation_leg_uses():
@@ -202,7 +204,7 @@ def test_drop_only_edges_ignores_an_edge_no_rotation_leg_uses():
     rg = RouteGraph.build(agent.pathGraph, MovementParams()).unwrap()
     assert any(kind == EdgeKind.DOWN and abs(v.minimap_position[1] - u.minimap_position[1]) > rg.reach_v
                for u, v, kind in rg.graph.edges(data="kind"))
-    assert run_module._drop_only_edges_used(rg, tuple(agent.map_rotation_order)) == 0
+    assert report_module._drop_only_edges_used(rg, tuple(agent.map_rotation_order)) == 0
 
 
 def test_out_dir_gets_one_jsonl_line_per_leg_and_lap(tmp_path):
@@ -233,8 +235,10 @@ def test_run_counts_are_consistent_with_the_lap_structure():
     assert report.multi_error_within_bound <= report.multi_error_legs
 
 
-def test_run_module_writes_no_teleport_reach_and_no_map_position():
-    source = Path(run_module.__file__).read_text(encoding="utf-8")
+@pytest.mark.parametrize("module", [run_module, recovery_module, report_module], ids=lambda m: m.__name__)
+def test_run_module_writes_no_teleport_reach_and_no_map_position(module):
+    """The sim/run modules (run, and since the split recovery and report) write no teleport reach and no map position."""
+    source = Path(module.__file__).read_text(encoding="utf-8")
     assert re.search(r"(?<![\w.])(19|23)(?![\w.])", source) is None
     assert re.search(r"\(\s*\d+\s*,\s*\d+\s*\)", source) is None
 
