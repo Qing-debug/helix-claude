@@ -3,17 +3,18 @@ plan contract V4).
 
 `preview(rg, pos, target)` gives the candidate starts with their costs, the chosen start, the minimum-cost path and
 the hops: hop 0 is the move `next_move` makes from `pos`, and hop k the move it makes from the point where hop k-1 is
-assumed to land (the landing rule, V4). It draws nothing. Since H87 `next_move` takes no draw (a down move is a teleport when one reaches, a drop only when
-none does), so every hop holds one option (a tuple still: two were the old drop-or-teleport coin flip).
+assumed to land (the landing rule, V4). It draws nothing. Since H87 `next_move` takes no draw (a down move is a
+teleport when one reaches, a drop only when none does), so every hop holds one option (a tuple still: two were the old
+drop-or-teleport coin flip).
 
 `_plan` runs `planner.plan_move`, the one routine for `next_move`'s rules P1-P5 that `next_move` runs too (cleanup
 piece W1-8, R13, Hong's H140; until then `_plan` was a statement-for-statement copy, RV1-D4 A, H53), asking it for
 the decision's `PlanDetail`, and turns the two into this module's `_Plan`: the move as a one-option tuple, `toward`,
 the total, the starts, the chosen start, the path, the move's aim (`_Across` or `_Edge`) and the platform. It passes
-`plan_move` a stub generator, since the
-preview takes none (`_go_down` draws nothing since H87). Its landing rule still calls two private helpers of the
-planner, `_surface_ys` and `_launch_x`. `tests/route/test_route_preview.py` pins it against `next_move` (checks S3 and
-S3b) and `tests/route/test_plan_pin.py` pins both, and the whole preview, as they were before the change.
+`plan_move` a stub generator, since the preview takes none (`_go_down` draws nothing since H87). Its landing rule
+still calls two private helpers of the planner, `_surface_ys` and `_launch_x`. `tests/route/test_route_preview.py` pins
+it against `next_move` (checks S3 and S3b) and `tests/route/test_plan_pin.py` pins both, and the whole preview, as they
+were before the change.
 
 Where the plan is silent (each decided here):
 - An arrived preview is `complete=True`: its only position, `pos`, is arrived.
@@ -99,8 +100,8 @@ class _Edge:
 @dataclass(frozen=True)
 class _Plan:
     """A `plan_move` decision and its `PlanDetail` as the preview uses them: the move as a one-option tuple; `toward`
-    and `total` as the Decision's;
-    the starts, the chosen start, the path; the move's aim; and the platform `attach` gave the position."""
+    and `total` as the Decision's; the starts, the chosen start, the path; the move's aim; and the platform `attach`
+    gave the position."""
 
     options: tuple[Move, ...]
     toward: Node

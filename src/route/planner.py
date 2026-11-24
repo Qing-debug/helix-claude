@@ -368,6 +368,6 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
 
     `Failure` when `target` is not in the route graph, `pos` is off the graph (`attach`'s message, unchanged), or no
     path leads to `target`. `rng` is no longer drawn from (H87: a down move teleports when a teleport reaches, else
-    drops); the parameter stays for the walker, the simulator and the route preview. The rules are `plan_move`'s.
+    drops); the parameter stays for the walker and the simulator. The rules are `plan_move`'s.
     """
     return plan_move(rg, pos, target, rng)

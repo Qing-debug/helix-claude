@@ -25,7 +25,8 @@ sends nothing and pauses: once a second, at most 10 times, it repeats the bring-
 pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not back: the command's row is the
 `FOCUS_LOST` row and the caller takes the abort path (`release_all()`, close the writer, non-zero exit).
 
-Soak driver (second half). `plan_mix` (in `command_mix.py`, re-exported here) is the seeded command mix, `run_soak` the driver (the one "Is MapleStory closed?
+Soak driver (second half). `plan_mix` (in `command_mix.py`, re-exported here) is the seeded command mix, `run_soak` the
+driver (the one "Is MapleStory closed?
 y/n" question at the start, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a
 clean abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
 command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C; a command that
