@@ -3177,10 +3177,20 @@ Pointer: Hong in chat, 2026-11-21 (orch 220); CLEAN219-PLAN-D2; plan `CLEAN216-p
 
 ## H147 (2026-11-22): Standing yes covers merging each cleanup wave into p1b-route-walking and pushing it (Hong, in chat; CLEAN221-W0MERGE)
 
-Context: at the end of orch 222's session the orchestrator asked Hong in chat: "Does your standing yes for merging fixes also cover merging each finished cleanup wave into `p1b-route-walking` and pushing it? My recommendation is yes." That standing yes is qbr171-1 (Hong's pick A: agents may merge an approved, fully tested fix into its own feature branch and push it, never before a walk of his that is pending; merges into master are still asked). Hong answered in chat on 2026-11-22, verbatim: "2.  yes". The question is page question orch223-2 (bank QB396).
+Context: at the end of orch 222's session the orchestrator asked Hong in chat: "Does your standing yes for merging fixes also cover merging each finished cleanup wave into `p1b-route-walking` and pushing it? My recommendation is yes." That standing yes is qbr171-1 (H148). Hong answered in chat on 2026-11-22, verbatim: "2.  yes". The question is page question orch223-2 (bank QB396).
 
 In plain words: the standing yes qbr171-1 also covers merging each reviewed, fully tested cleanup wave from `p1-cleanup` into `p1b-route-walking` and pushing it. Never before a walk of Hong's that is pending; never into master (H143 still holds); never to upstream; never a force push.
 
 Cost if wrong: a cleanup wave lands on `p1b-route-walking` and on GitHub without Hong seeing it first. Undo: revert that wave's merge commit on `p1b-route-walking` with a new commit and push it (no force).
 
 Pointer: Hong in chat, 2026-11-22 (orch 222's session); page question orch223-2; bank QB396; CLEAN221-W0MERGE; qbr171-1; H141; H143.
+
+## H148 (2026-11-15): Standing yes: agents may merge an approved, fully tested fix into its own feature branch and push it (Hong, in chat; qbr171-1)
+
+Context: on the Q&A page, set qbr171 asked Hong whether agents may merge a fix that has been reviewed and fully tested into the feature branch it belongs to (`p1b-route-walking`, `p1-route-tab`) and push that branch, instead of asking him each time. He picked option A, answered on 2026-11-15, verbatim: "Yes, standing yes: agents may merge an approved, fully tested fix into its own feature branch (p1b-route-walking, p1-route-tab) and push it, never before a walk of yours that is pending; merges into master are still asked".
+
+In plain words: an agent may merge a reviewed, fully tested fix into its own feature branch and push that branch (to `origin`), without asking. Never before a walk of Hong's that is pending. Merges into master are still asked. H147 extends this yes to each cleanup wave merged from `p1-cleanup` into `p1b-route-walking`.
+
+Cost if wrong: a fix lands on a feature branch and on GitHub without Hong seeing it first. Undo: revert the merge commit on the feature branch with a new commit and push it (no force).
+
+Pointer: Hong in chat, 2026-11-15, page set qbr171 (ledger-ROPE.md:626, orch 180); H147.
