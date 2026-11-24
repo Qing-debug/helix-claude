@@ -219,6 +219,25 @@ def test_placed_read_with_a_path_asks_the_zones_only_after_a_no_op(ff2, rule, po
     assert min(zones.plays_when_asked) >= 1, rule   # not once before the first move was sent
 
 
+def test_a_move_sent_after_the_h85_snap_is_a_no_op_only_against_the_read_it_was_sent_from(ff2):
+    """CLEAN224-W1-7R m1: after the H85 snap the walker plans and sends from the snapped point, but `sent_from` is the
+    read (82, 55), not the snapped (82, 60). The character then reads exactly the snapped point: that is a read the move
+    changed, not a no-op, so the zones are not asked for it (a `sent_from` kept as the snapped point would ask)."""
+    snap_read, snapped = (82, 55), (82, 60)
+    assert not is_successful(attach(ff2.rg, snap_read)) and is_successful(attach(ff2.rg, snapped))
+    zones = CountingZones()
+    rig = _rig(ff2, lambda _elapsed: Success(snap_read if not rig.layer.plays else
+                                             snapped if len(rig.layer.plays) == 1 else FLOOR_RIGHT),
+               ropes=zones, leg_timeout_s=30.0)
+    zones.layer = rig.layer
+
+    record = _leg(ff2, rig, FLOOR_RIGHT)
+
+    assert record.outcome == LegOutcome.REACHED
+    assert len(rig.layer.plays) == 2       # the move from the snapped point, then the one from the placed read
+    assert set(zones.asked) == {snap_read}
+
+
 TWO_COLUMNS = [(40, 60), (80, 60), (40, 10), (80, 10)]
 A2_COLUMNS = [(40, 60), (60, 60), (40, 10), (80, 10)]   # a floor segment between two close nodes, nothing above it
 
