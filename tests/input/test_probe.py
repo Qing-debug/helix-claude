@@ -24,7 +24,9 @@ from src.input import input_layer
 from src.input.harness import analyze, listener, probe, soak
 from src.input.harness.listener import VK_BY_KEY
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Key, Pong, Step, transitions
+from src.input.protocol import Accepted, Done, Key, Step, transitions
+
+from input_fakes import FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 MS = 1_000_000
 ONE_PORT = json.dumps({"detected_ports": [
@@ -34,25 +36,6 @@ ONE_PORT = json.dumps({"detected_ports": [
 
 
 # ---- fakes ---------------------------------------------------------------------------------------
-
-class FakeClock:
-    """perf_counter_ns stand-in; every read moves 1 us; sleep() advances it."""
-
-    def __init__(self, start_ns=1_000_000_000):
-        self.now = start_ns
-
-    def clock(self):
-        self.now += 1_000
-        return self.now
-
-    def sleep(self, s):
-        self.now += int(s * 1e9)
-
-
-def _pong(itvl=12, board_us=123_456):
-    return Pong(seq=1, itvl_units=itvl, latency=0, timeout_units=100, mtu=247, bonded=True, encrypted=True,
-                authenticated=False, subscribed=True, board_us=board_us)
-
 
 class ProbeLink:
     """A BleLink stand-in. play() takes the schedule's duration + 20 ms of fake time and logs the listener
@@ -101,7 +84,7 @@ class ProbeLink:
         return (ns - self.board_offset_ns) // 1_000 % (1 << 32)
 
     def _pong_at(self, ns):
-        return _pong(self.itvl, 123_456 if self.board_offset_ns is None else self.board_us(ns))
+        return pong(itvl=self.itvl, board_us=123_456 if self.board_offset_ns is None else self.board_us(ns))
 
     def connect(self, timeout_s=30.0):
         self.events.append("connect")
@@ -221,9 +204,7 @@ class Rig:
 @pytest.fixture
 def clock(monkeypatch):
     fc = FakeClock()
-    for mod in (soak, input_layer, probe):
-        monkeypatch.setattr(mod, "_clock", fc.clock)
-        monkeypatch.setattr(mod, "_sleep", fc.sleep)
+    patch_clock(monkeypatch, fc, soak, input_layer, probe)
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     monkeypatch.setattr(probe, "_board_list_json", lambda cli: Success(ONE_PORT))
     return fc

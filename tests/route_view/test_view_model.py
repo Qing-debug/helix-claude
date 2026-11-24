@@ -589,8 +589,8 @@ def test_9_a_sim_folder(tmp_path):
             logged = Move(MoveKind(d["kind"]), None if d["dir"] is None else Key[d["dir"]], d["walk_ms"])
             if d["toward"] is None:
                 # not the planner's move: the walker's rope rule logs its own moves as `planned` with no `toward`
-                # (walker.py:242 and :264, C10 option B, H93), and the preview offers only the planner's. A seeded
-                # no-op inside a rope's zone makes one (WALKFIX DBG9).
+                # (`RouteWalker._rope_rule` in walker.py, C10 option B, H93), and the preview offers only the
+                # planner's. A seeded no-op inside a rope's zone makes one (WALKFIX DBG9).
                 assert logged.kind in (MoveKind.TELEPORT, MoveKind.JUMP_OFF)
             else:
                 pv = preview(model.rg, d["pos"], _node(model, rotation[index])).unwrap()

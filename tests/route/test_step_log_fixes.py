@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from returns.pipeline import is_successful
 
-from src.route import step_log
+from src.route import step_log, step_log_format, step_log_reader, step_log_writer
 from src.route.step_log import event_line, parse_line, read_run
 
 _DEEP = 100_000  # deep enough that json.loads (and a plain repr) runs out of recursion
@@ -37,7 +37,7 @@ def test_read_run_with_a_deeply_nested_session_json_is_a_failure_not_a_raise(tmp
 
 
 def test_step_tail_poll_checks_parse_results_with_is_successful():
-    tree = ast.parse(Path(step_log.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(Path(step_log_reader.__file__).read_text(encoding="utf-8"))
     tail = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "StepTail")
     poll = next(n for n in tail.body if isinstance(n, ast.FunctionDef) and n.name == "poll")
     called = set()
@@ -106,3 +106,19 @@ def test_event_line_still_takes_int_positions_and_keys_as_tuples_or_lists(event)
 ], ids=["deep pos", "deep keys", "deep ev", "deep t_ns"])
 def test_event_line_with_a_deeply_nested_value_is_a_failure_not_a_raise(make):
     assert not is_successful(event_line(make(_deep_list())))
+
+
+# ---- CLEAN221-W1-1: step_log re-exports the split modules' names, the same objects ------------------------------
+
+
+def test_step_log_re_exports_the_same_objects_as_the_split_modules():
+    homes = {
+        step_log_format: ("STEPS_FILE", "MAP_COPY", "SNAPSHOT", "VERSION", "FIELDS", "EVENTS", "EXTRA_FIELDS",
+                          "RunHeader", "StepEvent", "RunSteps", "header_line", "event_line", "parse_line"),
+        step_log_reader: ("StepTail", "read_run"),
+        step_log_writer: ("StepLog",),
+    }
+    for module, names in homes.items():
+        for name in names:
+            assert getattr(step_log, name) is getattr(module, name), name
+    assert sorted(step_log.__all__) == sorted(name for names in homes.values() for name in names)

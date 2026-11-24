@@ -17,23 +17,12 @@ With `out_dir` (`--out`) the run writes `legs.jsonl` and `laps.jsonl` (the leg l
 step log of the route view, plan task RV-3): `steps.jsonl` is the run header, the walker's events and a last `end`
 event. `observer` gives the same events to a caller that wants them without a folder.
 
-Recovery metric: every leg whose world effects carry an injected error is replayed in a fresh noise-off world from
-the position the leg began at (same terrain, same route graph, offsets included), and `extra = moves - nominal`,
-where nominal is the replay's move count. A leg may take 3 extra moves per error, and for each error that is a no-op
-sent from a read inside a rope zone the whole rope order too, `rope_blink_tries` blinks and the one jump off: the
-walker takes that order after such a no-op, also on a read the map places (H93, ROPE158-C10B-D1), so the no-op costs
-the move that did nothing plus the order, and the leg's bound is 3 + `rope_blink_tries` + 1 for it (`_extra_allowed`).
+The code is in three modules (CLEAN222-W1-2): this one keeps the map loading, the node-offset copy, the out folder,
+`run_sim` and the CLI; `sim/recovery.py` holds the recovery metric (the noise-off replays, `_recovery`) and the seeding
+`_rngs`; `sim/report.py` holds `SimReport`, `Check` and `judge`. `SimReport` and `judge` are imported here, so
+`src.route.sim.run.SimReport` and `.judge` still work.
 
-Where the plan is silent:
-- A leg's injected errors are counted one per error, not one per move: a move with both an overshoot and a landing
-  offset carries two.
-- "Seeded from the leg's number": a replay's rngs are `SeedSequence(i).spawn(4)` (timing, planner, world, positions,
-  as the run's), where i is the leg's index in the run's leg log (0 is the approach leg). Every leg is replayed
-  whatever its outcome, the approach leg included.
-- `moves`, `drops`, `jump_offs` and `teleport_downs` count the walker's moves (its `MoveEntry`s, one world effect
-  each); `no_ops` counts the world effects with a NO_OP. `sim_seconds` is the virtual time from the run's start to
-  its end and `mean_lap_s` the mean lap duration (0.0 with no lap).
-- `noise` fails when no move was made (0/0).
+Where the plan is silent (the recovery and report rules are in those modules' docstrings):
 - The marks of the map's rope file (`read_ropes(rope_file_for(map_csv))`, none when there is no file; a bad file is the
   run's `Failure`) go to the world and to the recovery replays' worlds, read from the `--map` file itself: the node-offset
   copy shifts nodes only, so the marks stay where they were measured. `rope_grabs` counts the world's grabs. The run's
@@ -59,7 +48,6 @@ Where the plan is silent:
 """
 
 import argparse
-import ast
 import contextlib
 import csv
 import hashlib
@@ -67,7 +55,7 @@ import io
 import sys
 import tempfile
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, fields
 from pathlib import Path
 
 import numpy as np
@@ -76,28 +64,25 @@ from returns.result import Failure, Result, Success
 
 from src.classes.classes import CharacterClass, Kanna
 from src.controller.controller import BuildOutcome, MapleAgent
-from src.controller.csv_parser import CSVParser
+from src.controller.map_format import HEADER, is_comment, pos_from_cell
 from src.controller.node import Node
-from src.controller.rope_file import RopeMark, read_ropes, rope_file_for
+from src.controller.rope_file import read_ropes, rope_file_for
 from src.input.input_layer import InputLayer
 from src.input.protocol import Key
 from src.input.timing import TimingModel
-from src.route.leg_log import JsonlLegLog, LapRecord, LegOutcome, LegRecord, LegSink, MemorySink
-from src.route.locate import attach
+from src.route.leg_log import JsonlLegLog, LegOutcome, MemorySink
 from src.route.params import MovementParams, validate
-from src.route.planner import MoveKind, _offered
+from src.route.planner import MoveKind
 from src.route.ropes import RopeZones
-from src.route.route_graph import EdgeKind, RouteGraph
-from src.route.sim.link import SimClock, SimLink, SimPositionSource, read_of
-from src.route.sim.world import InjectedError, MoveEffect, NoiseConfig, SimParams, SimTerrain, SimWorld, load_terrain
+from src.route.route_graph import RouteGraph
+from src.route.sim.link import SimClock, SimLink, SimPositionSource
+from src.route.sim.recovery import _LEG_TIMEOUT_S, _MarkingSink, _recovery, _rngs
+from src.route.sim.report import SimReport, _drop_only_edges_used, _known_cases, judge
+from src.route.sim.world import InjectedError, NoiseConfig, SimParams, SimWorld, load_terrain
 from src.route.step_log import MAP_COPY, STEPS_FILE, RunHeader, StepLog
 from src.route.walker import RouteWalker, RunSummary, StepObserver, WalkerConfig
 
-_LEG_TIMEOUT_S = 60.0
 _START_RISE_PX = 3            # the world starts on the surface at or below the first node's y minus this
-_EXTRA_PER_ERROR = 3          # each injected error is allowed this many extra moves (a no-op that starts the rope order: and its moves)
-_MIN_RECOVERED_SHARE = 0.99
-_MIN_NO_OP_SHARE = 0.05
 _REPO = Path(__file__).resolve().parents[3]
 _CLASSES: dict[str, type[CharacterClass]] = {"kanna": Kanna}
 
@@ -115,69 +100,6 @@ REAL_GROUND_SIM = SimParams(dot_above_foot_px=3, side_teleport_extra_px=0.0)
 REAL_GROUND_NOISE = NoiseConfig(knockback_p=0.02, rope_grab_p=0.2)
 
 
-@dataclass(frozen=True)
-class SimReport:
-    laps_requested: int
-    laps_completed: int
-    legs: int
-    legs_reached: int
-    stalls: int
-    timeouts: int
-    link_down: int
-    known_cases: dict[str, tuple[int, int]]  # "(x1, y1)->(x2, y2)" -> (reached, attempted), laps >= 1 only
-    single_error_legs: int
-    single_error_within_bound: int           # extra <= `_extra_allowed`, as for the multi-error legs below
-    multi_error_legs: int
-    multi_error_within_bound: int            # extra <= `_extra_allowed` (3 x the errors, a no-op that starts the rope order adds its moves)
-    moves: int
-    no_ops: int
-    drops: int
-    teleport_downs: int
-    sim_seconds: float
-    mean_lap_s: float
-    knockbacks: int = 0                      # world effects with a mob knockback (`--real-ground` turns them on)
-    off_map: int = 0                         # legs that ended `off_map`: stood 0.5 s more than 6 px from every platform
-    drop_only_edges: int = 0                 # drop-only DOWN edges (dy > reach_v) on a rotation leg's cheapest path (H87)
-    rope_grabs: int = 0                      # times the character grabbed a rope (the map's rope file; H88)
-    jump_offs: int = 0                       # the walker's moves of kind `jump_off` (Alt+Left/Right off a rope; H88)
-
-
-@dataclass(frozen=True)
-class Check:
-    name: str
-    ok: bool
-    detail: str
-
-
-class _MarkingSink:
-    """Passes every record on to `inner`. At each `write_leg` it also keeps the record, `len(world.effects)` and
-    `world.pos`: the effects between two consecutive leg writes belong to that leg, and the walker starts the next
-    leg right after the write, so the position kept is where the next leg begins."""
-
-    def __init__(self, inner: LegSink, world: SimWorld) -> None:
-        self._inner = inner
-        self._world = world
-        self.legs: list[LegRecord] = []
-        self.laps: list[LapRecord] = []
-        self.marks: list[int] = []
-        self.ends: list[tuple[float, float]] = []
-
-    def write_leg(self, rec: LegRecord) -> Result[None, str]:
-        self.legs.append(rec)
-        self.marks.append(len(self._world.effects))
-        self.ends.append(self._world.pos)
-        return self._inner.write_leg(rec)
-
-    def write_lap(self, rec: LapRecord) -> Result[None, str]:
-        self.laps.append(rec)
-        return self._inner.write_lap(rec)
-
-
-def _rngs(seed: int) -> tuple[np.random.Generator, ...]:
-    """Four independent generators: timing, planner, world, positions."""
-    return tuple(np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(4))
-
-
 def _load_agent(csv_path: Path, character: CharacterClass) -> Result[MapleAgent, str]:
     agent = MapleAgent(characterClass=character)
     with contextlib.redirect_stdout(io.StringIO()):
@@ -193,11 +115,11 @@ def _write_offset_csv(src: Path, dst: Path, k: int, rng: np.random.Generator) ->
     """Copy `src` to `dst` with each node's y shifted by `rng.integers(-k, k + 1)`, in file order. The `#` lines
     (metadata such as `# minimap_size=...`) are copied unchanged, ahead of the header. `src` has already passed
     `loadMap`, so every position parses."""
-    pos_field = CSVParser().CSV_fields["pos_in_minimap"]
+    pos_field = HEADER[1]   # "pos_in_minimap"
     with open(src, newline="") as f:
         lines = f.read().splitlines()
-    comments = [line for line in lines if line.lstrip().startswith("#")]
-    reader = csv.DictReader(line for line in lines if not line.lstrip().startswith("#"))
+    comments = [line for line in lines if is_comment(line)]
+    reader = csv.DictReader(line for line in lines if not is_comment(line))
     fieldnames = reader.fieldnames
     rows = list(reader)
     with open(dst, "w", newline="") as f:
@@ -206,7 +128,7 @@ def _write_offset_csv(src: Path, dst: Path, k: int, rng: np.random.Generator) ->
         writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in rows:
-            x, y = ast.literal_eval(row[pos_field])
+            x, y = pos_from_cell(row[pos_field])
             row[pos_field] = str((x, y + int(rng.integers(-k, k + 1))))
             writer.writerow(row)
 
@@ -226,131 +148,6 @@ def _load_shifted_agent(map_csv: Path, character: CharacterClass, k: int,
     if not is_successful(loaded):
         return Failure(f"with node offsets: {loaded.failure()}")
     return Success((loaded.unwrap(), csv_bytes))
-
-
-def _leg_nodes(rotation: Sequence[Node], rec: LegRecord) -> tuple[Node | None, Node]:
-    """The (src, dst) nodes of a leg record: lap 0 is the approach to rotation[0], leg i of a lap is rotation[i] ->
-    rotation[(i + 1) mod n]."""
-    if rec.lap == 0:
-        return None, rotation[0]
-    n = len(rotation)
-    return rotation[rec.leg], rotation[(rec.leg + 1) % n]
-
-
-def _replay_moves(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim_params: SimParams,
-                  rec: LegRecord, number: int, start: tuple[float, float], ropes: Sequence[RopeMark]) -> int | None:
-    """The moves the leg takes in a fresh noise-off world from `start` (the nominal count); None when `start` is on no
-    platform surface, which is where the previous leg left the character hanging on a rope: a world cannot start there,
-    so the leg has no replay (ROPE R6 m2)."""
-    rng_timing, rng_planner, rng_world, rng_positions = _rngs(number)
-    off = NoiseConfig.off()
-    try:
-        world = SimWorld(terrain, rg.reach_h, rg.reach_v, sim_params, off, rng_world, start, ropes)
-    except ValueError:    # the only one the constructor raises: start is not on a platform surface
-        return None
-    clock = SimClock()
-    layer = InputLayer(SimLink(world, clock, sim_params), TimingModel(rng_timing))
-    positions = SimPositionSource(world, clock, off.miss_p, rng_positions)
-    config = WalkerConfig(use_stimulus=False, leg_timeout_s=_LEG_TIMEOUT_S)
-    walker = RouteWalker(rg, rotation, layer, positions, clock, MemorySink(), rng_planner, config,
-                         ropes=RopeZones.build(ropes, rg.params))
-    src, dst = _leg_nodes(rotation, rec)
-    return len(walker.walk_leg(rec.lap, rec.leg, src, dst).moves)
-
-
-def _rope_order_moves(effects: Sequence[MoveEffect], zones: RopeZones, rg: RouteGraph, sim_params: SimParams) -> int:
-    """The most moves the walker's rope order can take after the no-ops in `effects` that start it (H93, ROPE158-C10B,
-    ROPE159-C10B-F1 M1). A no-op starts the order when the read before the move, `read_of` the effect's start, is in a rope
-    zone and the map places it (`attach`): the planner sent the move and the read stayed the same. A read the map does not
-    place is the character on the rope, where the order runs anyway and the no-op was one of its own moves: it starts
-    nothing. The order from a read is `rope_blink_tries` blinks and the jump off when the nearer end of the mark is within
-    `reach_v` of it, the jump off alone when it is not (`planner.rope_move`'s rule; Hong: with no platform close up or down
-    a blink does not move the character). The effect does not say which move it was, so a no-op on a rope move at a placed
-    read counts as a start too, and the first blink that works is not credited: an upper bound."""
-    total = 0
-    for e in effects:
-        if InjectedError.NO_OP not in e.injected:
-            continue
-        read = read_of(e.start, sim_params)
-        zone = zones.at(read)
-        if zone is None or not is_successful(attach(rg, read)):
-            continue
-        mark = zones.mark(zone)
-        gap = min(read[1] - mark.top_y, mark.bottom_y - read[1])
-        total += rg.params.rope_blink_tries + 1 if gap <= rg.reach_v else 1
-    return total
-
-
-def _extra_allowed(errors: int, order_moves: int) -> int:
-    """The extra moves a leg with `errors` injected errors may take and still count as recovered: `_EXTRA_PER_ERROR` for
-    each, and `order_moves` more for the rope order that the no-ops among them start (`_rope_order_moves`; ROPE158-C10B-D1,
-    option B, tightened by ROPE159-C10B-F1 M1). A leg whose one error is a no-op that starts the full order (a platform end
-    in reach) may take 3 + `blink_tries` + 1; with no platform in reach 3 + 1; a no-op that starts none is held to 3."""
-    return _EXTRA_PER_ERROR * errors + order_moves
-
-
-@dataclass(frozen=True)
-class _Recovery:
-    single: int = 0
-    single_within: int = 0
-    multi: int = 0
-    multi_within: int = 0
-
-
-def _recovery(rg: RouteGraph, rotation: Sequence[Node], terrain: SimTerrain, sim_params: SimParams,
-              sink: _MarkingSink, effects: Sequence[MoveEffect], start: tuple[float, float],
-              ropes: Sequence[RopeMark]) -> _Recovery:
-    single = single_within = multi = multi_within = 0
-    zones = RopeZones.build(ropes, rg.params)
-    for i, rec in enumerate(sink.legs):
-        first = sink.marks[i - 1] if i else 0
-        errors = sum(len(e.injected) for e in effects[first:sink.marks[i]])
-        if errors == 0:
-            continue
-        allowed = _extra_allowed(errors, _rope_order_moves(effects[first:sink.marks[i]], zones, rg, sim_params))
-        began = sink.ends[i - 1] if i else start
-        nominal = _replay_moves(rg, rotation, terrain, sim_params, rec, i, began, ropes)
-        # a leg with no replay counts as a leg with errors that did not recover
-        extra = None if nominal is None else len(rec.moves) - nominal
-        if errors == 1:
-            single += 1
-            single_within += extra is not None and extra <= allowed
-        else:
-            multi += 1
-            multi_within += extra is not None and extra <= allowed
-    return _Recovery(single, single_within, multi, multi_within)
-
-
-def _drop_only_edges_used(rg: RouteGraph, rotation: Sequence[Node]) -> int:
-    """How many distinct DOWN edges with dy > `rg.reach_v` (only a drop makes them, H87) lie on the cheapest path, in the
-    graph the planner uses (`_offered`), of a rotation leg: the drops this run's route needs. Fossil Foundry 2's map has
-    one such edge that no rotation leg uses, so it is not counted (ROPE151-T1-D1, provisional)."""
-    offered = _offered(rg)
-    used: set[tuple[Node, Node]] = set()
-    for src, dst in zip(rotation, (*rotation[1:], rotation[0])):
-        path = offered.path(src, dst)
-        if not is_successful(path):
-            continue
-        hops = path.unwrap()
-        used.update(
-            (u, v) for u, v in zip(hops, hops[1:])
-            if offered.graph[u][v]["kind"] == EdgeKind.DOWN
-            and abs(v.minimap_position[1] - u.minimap_position[1]) > rg.reach_v)
-    return len(used)
-
-
-def _known_cases(legs: Sequence[LegRecord], csv_rotation: Sequence[tuple[int, int]],
-                 known_cases: Sequence[tuple[tuple[int, int], tuple[int, int]]]) -> dict[str, tuple[int, int]]:
-    """(reached, attempted) per named leg, over laps >= 1, matched by rotation index on the unshifted positions."""
-    n = len(csv_rotation)
-    counts: dict[str, tuple[int, int]] = {}
-    for src, dst in known_cases:
-        src, dst = (int(src[0]), int(src[1])), (int(dst[0]), int(dst[1]))
-        indices = {i for i in range(n) if csv_rotation[i] == src and csv_rotation[(i + 1) % n] == dst}
-        matched = [rec for rec in legs if rec.lap >= 1 and rec.leg in indices]
-        reached = sum(rec.outcome == LegOutcome.REACHED for rec in matched)
-        counts[f"{src}->{dst}"] = (reached, len(matched))
-    return counts
 
 
 def _run_header(character: CharacterClass, params: MovementParams, rotation: Sequence[Node],
@@ -520,47 +317,6 @@ def run_sim(map_csv: Path, terrain: Path, laps: int, seed: int, noise: NoiseConf
         rope_grabs=world.rope_grabs,
         jump_offs=sum(m.kind == MoveKind.JUMP_OFF for m in entries),
     ))
-
-
-def judge(report: SimReport, min_single_error_legs: int = 100) -> list[Check]:
-    """The six checks, in order: laps, stalls, known_cases, recovery, noise, abilities."""
-    r = report
-    checks = [
-        Check("laps",
-              r.laps_completed == r.laps_requested and r.legs_reached == r.legs and r.timeouts == 0
-              and r.link_down == 0 and r.off_map == 0,
-              f"{r.laps_completed}/{r.laps_requested} laps, {r.legs_reached}/{r.legs} legs reached, "
-              f"{r.timeouts} timed out, {r.link_down} link down, {r.off_map} off map"),
-        Check("stalls", r.stalls == 0, f"{r.stalls} stalls"),
-    ]
-
-    if r.known_cases:
-        ok = all(reached == attempted == r.laps_completed for reached, attempted in r.known_cases.values())
-        cases = ", ".join(f"{name} {reached}/{attempted}" for name, (reached, attempted) in r.known_cases.items())
-        checks.append(Check("known_cases", ok, f"{cases} reached/attempted (need {r.laps_completed} each)"))
-    else:
-        checks.append(Check("known_cases", True, "none listed"))
-
-    if r.single_error_legs == 0:
-        single_ok = min_single_error_legs == 0
-    else:
-        single_ok = (r.single_error_legs >= min_single_error_legs
-                     and r.single_error_within_bound / r.single_error_legs >= _MIN_RECOVERED_SHARE)
-    multi_ok = r.multi_error_legs == 0 or r.multi_error_within_bound / r.multi_error_legs >= _MIN_RECOVERED_SHARE
-    checks.append(Check(
-        "recovery", single_ok and multi_ok,
-        f"{r.single_error_within_bound}/{r.single_error_legs} single-error legs within {_EXTRA_PER_ERROR} extra moves "
-        f"(need >= {min_single_error_legs} legs and {_MIN_RECOVERED_SHARE:.0%}); {r.multi_error_within_bound}/"
-        f"{r.multi_error_legs} multi-error legs within {_EXTRA_PER_ERROR} extra moves per error; a no-op that starts the "
-        "rope order may also cost the order's moves"))
-
-    no_op_share = r.no_ops / r.moves if r.moves else 0.0
-    checks.append(Check("noise", r.moves > 0 and no_op_share >= _MIN_NO_OP_SHARE,
-                        f"{r.no_ops}/{r.moves} moves were no-ops ({no_op_share:.2%}, need >= {_MIN_NO_OP_SHARE:.0%})"))
-    checks.append(Check("abilities", r.teleport_downs > 0 and (r.drops > 0 or r.drop_only_edges == 0),
-                        f"{r.drops} drops, {r.teleport_downs} teleports down (need teleports > 0, and drops > 0 when "
-                        f"{r.drop_only_edges} drop-only edges > 0)"))
-    return checks
 
 
 def _known_case(text: str) -> tuple[tuple[int, int], tuple[int, int]]:

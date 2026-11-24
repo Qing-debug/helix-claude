@@ -44,7 +44,7 @@ from returns.result import Failure, Result, Success
 
 from src.route.character import CharacterLocator
 from src.route.position import MinimapPositionSource
-from src.route.walker import PositionSource
+from src.route.ports import PositionSource
 
 _REPO = Path(__file__).resolve().parents[2]
 _ICON = _REPO / "assets" / "chr" / "chr.png"

@@ -25,7 +25,8 @@ sends nothing and pauses: once a second, at most 10 times, it repeats the bring-
 pause's ``[start_ns, end_ns]`` goes to `focus_pauses` and the command runs. Not back: the command's row is the
 `FOCUS_LOST` row and the caller takes the abort path (`release_all()`, close the writer, non-zero exit).
 
-Soak driver (second half). `plan_mix` is the seeded command mix, `run_soak` the driver (the one "Is MapleStory closed?
+Soak driver (second half). `plan_mix` (in `command_mix.py`, re-exported here) is the seeded command mix, `run_soak` the
+driver (the one "Is MapleStory closed?
 y/n" question at the start, `wait_for_click` before connect (the operator clicks the sink; up to START_WAIT_S, then a
 clean abort), the focus policy before each command, `--min-hours` on H3's connected span, faults at seeded
 command indexes with their `faults.jsonl` rows, `release_all()` on every abort and on Ctrl-C; a command that
@@ -44,8 +45,6 @@ import logging
 import subprocess
 import sys
 import time
-from collections import Counter
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
@@ -55,11 +54,15 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from src.input.harness import faults, listener
+from src.input.harness.command_mix import (  # noqa: F401  (every name stays reachable as soak.X: probe, tests)
+    ARROWS, MIX, SEQUENCE_KEYS, SEQUENCE_LEN, TAP_KEYS, WALK_KEYS, WALK_T_MS, Command, _streams, command_mix, plan_mix,
+    sample_counts)
+from src.input.harness.constants import CI_UNIT_MS, FOCUS_LOST, NS_PER_H
 from src.input.harness.realism import KS_MIN_N, KS_TYPES
 from src.input.input_layer import ActionRecord, InputLayer
 from src.input.link import BleLink, InputError, SessionInfo
-from src.input.protocol import Key, Pong, encode_play
-from src.input.timing import TimingModel, TimingType
+from src.input.protocol import Pong, encode_play
+from src.input.timing import TimingModel
 
 # Seams the tests monkeypatch (as input_layer.py); _clock is perf_counter_ns, the clock of every C5 file.
 _clock = time.perf_counter_ns
@@ -74,7 +77,6 @@ LINK_LOG_FILE = "link.log"
 LINK_LOGGER = "src.input.link"
 LINK_LOG_FORMAT = "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
 
-FOCUS_LOST = "FOCUS_LOST"  # a harness status, not an InputError (C5)
 LINK_LOSS = (InputError.NOT_CONNECTED, InputError.LINK_LOST)  # a command Failure that aborts the run (D2)
 MAX_CONSECUTIVE_FAILURES = 10  # past N, a --min-hours run that fails this many commands in a row aborts (D1-B)
 FOCUS_RECHECKS = 10
@@ -83,7 +85,6 @@ FOCUS_RECHECK_PERIOD_S = 1.0
 # the operator's click. 120 s bounds the time the listener blocks the bot keys if nobody clicks.
 START_WAIT_S = 120.0
 START_POLL_S = 0.25
-CI_UNIT_MS = 1.25  # PONG itvl is in 1.25 ms units (C1)
 
 COMMAND_FIELDS = ("seq", "action", "intended_ms", "stimulus_ns", "steps", "samples", "reaction_ms", "reaction_index",
                   "waited_ms", "sent_ns", "written_ns", "accepted_ns", "done_ns", "t0_us", "late_us", "status",
@@ -175,6 +176,16 @@ def _stamp_perf_ns(record: logging.LogRecord) -> bool:
     return True
 
 
+def link_log_handler(path: Path, level: int) -> logging.FileHandler:
+    """A `src.input.link` log file handler: overwritten per run, utf-8, `level` and up, every record stamped with
+    perf_ns in `LINK_LOG_FORMAT`. Attaching it, and the logger's level, stay with the caller."""
+    handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    handler.setLevel(level)
+    handler.addFilter(_stamp_perf_ns)
+    handler.setFormatter(logging.Formatter(LINK_LOG_FORMAT))
+    return handler
+
+
 class RunWriter:
     """Writes one run's C5 files into `run_dir`. Use as a context manager (or call `open()` / `close()`).
 
@@ -218,10 +229,7 @@ class RunWriter:
         self.session["start_ns"] = _clock()
 
     def _attach_link_log(self) -> None:
-        handler = logging.FileHandler(self.run_dir / LINK_LOG_FILE, mode="w", encoding="utf-8")  # one run per file
-        handler.setLevel(logging.WARNING)
-        handler.addFilter(_stamp_perf_ns)
-        handler.setFormatter(logging.Formatter(LINK_LOG_FORMAT))
+        handler = link_log_handler(self.run_dir / LINK_LOG_FILE, logging.WARNING)  # one run per file
         logger = logging.getLogger(LINK_LOGGER)
         if logger.getEffectiveLevel() > logging.WARNING:  # let WARNING records reach the handler
             self._logger_level = logger.level
@@ -371,73 +379,11 @@ def run_command(writer: RunWriter, sink: Sink, seq: int, action: str,
     return CommandOutcome(row, result, returned_ns)
 
 
-# ---- command mix (plan H2) -----------------------------------------------------------------------
-
-ARROWS = (Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN)
-TAP_KEYS = ARROWS + (Key.E, Key.SPACE, Key.ALT)  # Alt only alone: a tap (or jump / drop), never in a sequence
-WALK_KEYS = (Key.LEFT, Key.RIGHT)  # walking is horizontal; the plan names no walk direction
-SEQUENCE_KEYS = ARROWS + (Key.E, Key.SPACE)  # no Alt, so never Alt with Space
-MIX = (("tap", 0.25), ("walk", 0.20), ("teleport", 0.25), ("drop", 0.10), ("jump", 0.05), ("sequence", 0.15))
-WALK_T_MS = (300.0, 3000.0)  # T ~ U(300, 3000) ms
-SEQUENCE_LEN = (2, 5)  # inclusive, uniform, keys drawn with repeats
+# ---- command mix (plan H2): the pure part is in command_mix.py ----------------------------------------
 
 # The pre-run sample check asks for the timing kinds `realism` judges (realism.KS_TYPES) at its own minimum
 # (realism.KS_MIN_N), imported above so the two cannot drift apart (H21). RELEASE_LAG and WALK are drawn and logged
 # but not KS-judged, so they are not required.
-
-
-@dataclass(frozen=True)
-class Command:
-    action: str  # the InputLayer method: tap, walk, teleport, drop, jump, sequence
-    keys: tuple[Key, ...] = ()  # tap key, walk / teleport direction, or the sequence
-    intended_ms: float | None = None  # a walk's T
-
-
-def _streams(seed: int) -> list[np.random.Generator]:
-    """Independent generators for the mix, the timing model and the fault indexes, all from one seed."""
-    return [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(3)]
-
-
-def command_mix(rng: np.random.Generator) -> Iterator[Command]:
-    """The plan's mix, one command at a time, without end (a `--min-hours` run can outlast N)."""
-    names = [a for a, _ in MIX]
-    weights = [w for _, w in MIX]
-    while True:
-        action = names[rng.choice(len(names), p=weights)]
-        if action == "tap":
-            yield Command(action, (TAP_KEYS[rng.integers(len(TAP_KEYS))],))
-        elif action == "walk":
-            yield Command(action, (WALK_KEYS[rng.integers(len(WALK_KEYS))],), float(rng.uniform(*WALK_T_MS)))
-        elif action == "teleport":
-            yield Command(action, (ARROWS[rng.integers(len(ARROWS))],))
-        elif action == "sequence":
-            n = int(rng.integers(SEQUENCE_LEN[0], SEQUENCE_LEN[1] + 1))
-            yield Command(action, tuple(SEQUENCE_KEYS[i] for i in rng.integers(len(SEQUENCE_KEYS), size=n)))
-        else:
-            yield Command(action)
-
-
-def plan_mix(seed: int, n: int) -> list[Command]:
-    """The first `n` commands of the mix for `seed` (the ones a run issues first)."""
-    mix = command_mix(_streams(seed)[0])
-    return [next(mix) for _ in range(n)]
-
-
-def sample_counts(commands: list[Command]) -> Counter:
-    """Chosen samples per TimingType that `commands` draw (a clipped sequence hold counts as the HOLD it draws)."""
-    counts: Counter = Counter()
-    for c in commands:
-        counts[TimingType.REACTION] += 1  # every command has a stimulus
-        if c.action in ("tap", "jump"):
-            counts[TimingType.HOLD] += 1
-        elif c.action == "walk":
-            counts[TimingType.WALK] += 1
-        elif c.action in ("teleport", "drop"):
-            counts.update((TimingType.CHORD_OFFSET, TimingType.HOLD, TimingType.RELEASE_LAG))
-        elif c.action == "sequence":
-            counts[TimingType.HOLD] += len(c.keys)
-            counts[TimingType.GAP] += len(c.keys) - 1
-    return counts
 
 
 def dispatch(layer: InputLayer, cmd: Command, stimulus_ns: int) -> Result[ActionRecord, InputError]:
@@ -525,7 +471,6 @@ def maple_check() -> tuple[bool, str]:
 # ---- the driver --------------------------------------------------------------------------------------
 
 EXIT_OK, EXIT_ABORT, EXIT_REFUSED, EXIT_INTERRUPTED = 0, 1, 2, 130
-NS_PER_H = 3600 * 1_000_000_000
 
 
 @dataclass(frozen=True)

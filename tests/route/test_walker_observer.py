@@ -170,7 +170,11 @@ def _is_emit(node):
 def test_1_every_observer_call_is_alone_in_an_observer_branch():
     tree = ast.parse(Path(walker_module.__file__).read_text(encoding="utf-8"))
     walker_class = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "RouteWalker")
-    walk_leg = next(n for n in walker_class.body if isinstance(n, ast.FunctionDef) and n.name == "walk_leg")
+    # walk_leg and the private steps it was split into (cleanup piece W1-7, R20): the loop's code, all of it
+    steps = {"walk_leg", "_pass", "_count_stall", "_read", "_plan", "_rope_rule", "_still_rule", "_progress", "_send"}
+    walk_leg = [n for n in walker_class.body if isinstance(n, ast.FunctionDef) and n.name in steps]
+    assert sorted(n.name for n in walk_leg) == sorted(steps)
+    walk_leg_nodes = [n for f in walk_leg for n in ast.walk(f)]
 
     branches = [n for n in ast.walk(tree) if isinstance(n, ast.If) and _is_observer_test(n.test)]
     emits = [n for n in ast.walk(tree) if _is_emit(n)]
@@ -190,9 +194,9 @@ def test_1_every_observer_call_is_alone_in_an_observer_branch():
     assert sorted(events) == sorted(EVENTS)
     assert all(id(e) in in_branch for e in emits)
     branch_nodes = {id(n) for b in branches for n in ast.walk(b)}
-    assert {id(b) for b in branches} <= {id(n) for n in ast.walk(walk_leg)}  # all nine are in walk_leg
+    assert {id(b) for b in branches} <= {id(n) for n in walk_leg_nodes}  # all nine are in walk_leg's code
 
-    now_ns = [n for n in ast.walk(walk_leg)
+    now_ns = [n for n in walk_leg_nodes
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "now_ns"]
     outside = [n for n in now_ns if id(n) not in branch_nodes]
     assert len(outside) == 4  # start_ns, now, read_ns and the record's end_ns: the walker's own reads

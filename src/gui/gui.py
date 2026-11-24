@@ -321,7 +321,7 @@ class MapleGUI:
                 return None
             self._character_locator = built.unwrap()
         # Read the frame under the lock and match outside it, as _updateCanvas does: the vision thread stores a new
-        # array for every frame (src/vision/vision.py:80), so this array is not mutated while it is searched.
+        # array for every frame (`LostTracker.publish`, src/vision/minimap_follow.py), so this array is not mutated while it is searched.
         shared = self.sharedInfo
         assert shared is not None  # _minimapReady() passed, so a frame came from it (the default None is for tests)
         with shared.minimap_frame_lock:
@@ -519,7 +519,7 @@ class MapleGUI:
             picture_unseen = (self.route_tab is not None and self.route_tab.isRunLive()
                               and not self.isSetupTabShown())
             # Read the reference under the lock and draw outside it: the lock is never held across a Tk call.
-            # The vision thread stores a new array for every frame (src/vision/vision.py:80), so the array read here is not mutated.
+            # The vision thread stores a new array for every frame (`LostTracker.publish`, src/vision/minimap_follow.py), so the array read here is not mutated.
             frame, lost = read_minimap(self.sharedInfo)
             if frame is not None and not picture_unseen:
                 canvas = self.minimap_canvas

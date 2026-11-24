@@ -25,6 +25,7 @@ from src.route.locate import attach
 from src.route.params import MovementParams
 from src.route.planner import rope_move
 from src.route.ropes import RopeZones
+import src.route.sim.recovery as sim_recovery
 import src.route.sim.run as sim_run
 from src.route.sim.link import SimClock, SimLink, SimPositionSource, read_of
 from src.route.sim.run import REAL_GROUND_NOISE, REAL_GROUND_SIM, judge, run_sim
@@ -440,13 +441,13 @@ def test_a_recovery_replay_that_starts_on_a_rope_is_not_recovered_and_not_a_cras
     with a None start): the first replay of an ordinary run is started at (106, 48), the middle of rope 107 (the old
     leftover), through the real `_replay_moves`, so the constructor's refusal is what returns None."""
     replays = []
-    real = sim_run._replay_moves
+    real = sim_recovery._replay_moves
 
     def spy(rg, rotation, terrain, sim_params, rec, number, start, ropes):
         replays.append(real(rg, rotation, terrain, sim_params, rec, number, (106, 48) if not replays else start, ropes))
         return replays[-1]
 
-    monkeypatch.setattr(sim_run, "_replay_moves", spy)
+    monkeypatch.setattr(sim_recovery, "_replay_moves", spy)
     result = run_sim(CSV, DEFAULT_TERRAIN, 3, 2)
     assert is_successful(result), result
     report = result.unwrap()
@@ -466,7 +467,8 @@ def test_every_recovery_replay_walker_gets_the_rope_zones_as_the_run_walker_does
         built.append(kwargs.get("ropes"))
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(sim_run, "RouteWalker", spy)
+    monkeypatch.setattr(sim_run, "RouteWalker", spy)       # the run's walker
+    monkeypatch.setattr(sim_recovery, "RouteWalker", spy)  # the replays' walkers (`_replay_moves`)
     result = run_sim(CSV, DEFAULT_TERRAIN, 2, 2)
     assert is_successful(result), result
     assert len(built) >= 2, "the run's walker and at least one replay's"
@@ -600,12 +602,12 @@ def _no_op_effect(terrain, x, y, *, on_rope=False):
 
 
 def test_the_bound_is_three_per_error_and_the_rope_order_a_no_op_starts():
-    assert sim_run._extra_allowed(1, 0) == 3
-    assert sim_run._extra_allowed(1, 1) == 4
-    assert sim_run._extra_allowed(1, 3) == 6
-    assert sim_run._extra_allowed(2, 0) == 6
-    assert sim_run._extra_allowed(2, 3) == 9      # one error of two is a no-op that starts the order
-    assert sim_run._extra_allowed(2, 6) == 12
+    assert sim_recovery._extra_allowed(1, 0) == 3
+    assert sim_recovery._extra_allowed(1, 1) == 4
+    assert sim_recovery._extra_allowed(1, 3) == 6
+    assert sim_recovery._extra_allowed(2, 0) == 6
+    assert sim_recovery._extra_allowed(2, 3) == 9      # one error of two is a no-op that starts the order
+    assert sim_recovery._extra_allowed(2, 6) == 12
 
 
 def test_only_a_no_op_that_starts_the_rope_order_adds_its_moves(ff2):
@@ -625,7 +627,7 @@ def test_only_a_no_op_that_starts_the_rope_order_adds_its_moves(ff2):
     assert zones.at(read_of(hanging.start, sim)) == 1 and not is_successful(attach(ff2.rg, read_of(hanging.start, sim)))
 
     def moves(effects, zs=zones):
-        return sim_run._rope_order_moves(effects, zs, ff2.rg, sim)
+        return sim_recovery._rope_order_moves(effects, zs, ff2.rg, sim)
 
     assert moves([foot]) == order == 3
     assert moves([foot, foot]) == 2 * order
@@ -649,7 +651,7 @@ def test_the_order_a_no_op_can_start_is_the_jump_off_alone_when_no_blink_reaches
     mark = RopeMark(x=read[0] - ON_ROPE_DX, top_y=read[1] - gap, bottom_y=read[1] + 40)
     zones = RopeZones.build([mark], MovementParams())
     assert zones.at(read) == 0
-    assert sim_run._rope_order_moves([effect], zones, ff2.rg, sim) == order
+    assert sim_recovery._rope_order_moves([effect], zones, ff2.rg, sim) == order
     target, tries = ff2.nodes[(113, 60)], 0
     while rope_move(mark, read, target, tries, ff2.rg.reach_v, MovementParams().rope_blink_tries) is not None:
         tries += 1
@@ -660,12 +662,12 @@ def _recovery_of(rg, effect, extra, ropes=ROPES, *, nominal=4):
     """`_recovery` for one leg with one error, `effect`, that took `extra` moves more than its noise-off replay."""
     leg = SimpleNamespace(moves=[None] * (nominal + extra))
     sink = SimpleNamespace(legs=[leg], marks=[1], ends=[effect.end])
-    return sim_run._recovery(rg, [], _terrain(DEFAULT_TERRAIN), SimParams(), sink, [effect], effect.start, ropes)
+    return sim_recovery._recovery(rg, [], _terrain(DEFAULT_TERRAIN), SimParams(), sink, [effect], effect.start, ropes)
 
 
 @pytest.fixture
 def replay_of_four_moves(monkeypatch):
-    monkeypatch.setattr(sim_run, "_replay_moves", lambda *args: 4)
+    monkeypatch.setattr(sim_recovery, "_replay_moves", lambda *args: 4)
 
 
 def _within(recovery):

@@ -32,17 +32,14 @@ class CharacterClass(ABC):
     def max_vertical_traversal_dist(self) -> int:
         """Maximum vertical pixel distance (on the minimap) covered in a
         single traversal action. Consumed by PathGraph to gate vertical
-        edge creation (_findClosestNodeAbove / _findClosestNodeBelow) —
+        edge creation (the up and down rows of PathGraph._findClosestNode) —
         two nodes farther apart than this on the y-axis will not have a
         vertical edge between them, even if no closer candidate exists."""
         ...
 
 
 class Kanna(CharacterClass):
-    # Source: pre-existing measurement in the prior commented-out
-    # `tp_max_traversal_dist = (19, 23)  # (x, y)`. Split into two
-    # named attributes so PathGraph can consume just the horizontal
-    # axis without tuple-indexing.
+    # Split from one (x, y) tuple so PathGraph reads each axis by name.
     movement_type = "teleport"
     max_horizontal_traversal_dist = 19
     max_vertical_traversal_dist = 23

@@ -9,7 +9,7 @@ through `venvPath = "."` in pyproject.toml. The tools come from the environment 
 (`Path(sys.executable).parent`), so the venv does not have to be activated:
 `.venv\\Scripts\\python.exe tools/check.py` works as it is.
 
-Prints one PASS/FAIL line per step (with the tool's last output line), the output of any failing step, and the total
+Prints one PASS/FAIL line per step (with the tool's last output line; for pytest, its summary line), the output of any failing step, and the total
 wall time. Exits 0 if every step passed, else 1. Needs `pip install -r requirements-dev.txt`.
 
 lint-imports runs with `--no-cache`: its cache went stale once after a module was deleted, and `--no-cache` costs
@@ -19,6 +19,7 @@ baseline when a baselined error disappears, so commit the file with your change.
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +74,20 @@ def _last_line(output: str) -> str:
     return lines[-1] if lines else ""
 
 
+# pytest's closing line, like "797 passed, 10 skipped in 66.05s (0:01:06)" or "no tests ran in 0.01s"
+_PYTEST_SUMMARY = re.compile(r"\b(\d+ (passed|failed|errors?|skipped|deselected|xfailed|xpassed)|no tests ran)\b.* in [\d.]+s")
+
+
+def _summary_line(label: str, output: str) -> str:
+    """The line a step shows: for pytest its own summary line (a warning on stderr can come after it, the OpenCV one
+    does), else the last line of the output."""
+    if label.startswith("pytest"):
+        for line in reversed(output.splitlines()):
+            if _PYTEST_SUMMARY.search(line):
+                return line.strip("= ").strip()
+    return _last_line(output)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run ruff, basedpyright, lint-imports and pytest; exit 1 on any failure.")
     parser.add_argument("--full", action="store_true", help="run the slow tests too (the whole suite)")
@@ -85,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     failed: list[str] = []
     for label, cmd in _steps(args.full):
         ok, output, seconds = _run(cmd)
-        print(f"{'PASS' if ok else 'FAIL'}  {label}  ({seconds:.1f} s)  {_last_line(output)}", flush=True)
+        print(f"{'PASS' if ok else 'FAIL'}  {label}  ({seconds:.1f} s)  {_summary_line(label, output)}", flush=True)
         if not ok:
             failed.append(label)
             print(output.rstrip(), flush=True)

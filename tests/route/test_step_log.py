@@ -351,7 +351,9 @@ def test_importing_step_log_imports_no_other_src_module():
         "print(sorted(after - before))"
     )
     out = subprocess.run([sys.executable, "-I", "-c", code, str(REPO)], capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == str(sorted({"src", "src.route", "src.route.step_log"}))
+    # the step log's own modules (CLEAN221-W1-1 split step_log into format, reader and writer) and nothing else
+    assert out.stdout.strip() == str(sorted({"src", "src.route", "src.route.step_log", "src.route.step_log_format",
+                                             "src.route.step_log_reader", "src.route.step_log_writer"}))
 
 
 # 10 --------------------------------------------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import pytest
 from returns.pipeline import is_successful
 from returns.result import Failure, Success
 
-from src.route import step_log
+from src.route import step_log_writer
 from src.route.step_log import STEPS_FILE, RunHeader, StepLog, event_line, header_line, read_run
 
 HEADER = RunHeader(
@@ -210,7 +210,7 @@ def test_13_the_failure_line_goes_to_log_when_given(tmp_path, capsys, given):
     `log` it is printed on stderr as before."""
     lines: list[str] = []
     log = StepLog(log=lines.append) if given else StepLog()
-    assert inspect.signature(StepLog).parameters["log"].default is step_log._print_error
+    assert inspect.signature(StepLog).parameters["log"].default is step_log_writer._print_error
     assert is_successful(log.start(tmp_path, HEADER))
     _call(log, "reached", (2, (1.5, 2)))  # not ints: event_line refuses it
     _call(log, "reached", (3, (1.5, 2)))  # a second failure: not reported again

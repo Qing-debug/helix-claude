@@ -33,7 +33,7 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import NamedTuple, Protocol, TextIO
 
-from src.input.protocol import Key
+from src.input.harness.vk_codes import BOT_VKS, VK_BY_KEY as VK_BY_KEY  # re-exported for probe, session_starts, tests
 
 # ---- constants -------------------------------------------------------------------
 
@@ -53,19 +53,6 @@ FLASHW_ALL = 0x00000003
 FLASHW_TIMERNOFG = 0x0000000C
 KEYS_FILE = "keys.jsonl"
 _STARTUP_TIMEOUT_S = 5.0
-
-# C2: the Windows VK each bot key arrives as in the LL hook (values confirmed against
-# learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes, 2026-10-22).
-VK_BY_KEY: dict[Key, int] = {
-    Key.LEFT: 0x25,   # VK_LEFT
-    Key.RIGHT: 0x27,  # VK_RIGHT
-    Key.UP: 0x26,     # VK_UP
-    Key.DOWN: 0x28,   # VK_DOWN
-    Key.E: 0x45,      # E key
-    Key.ALT: 0xA4,    # VK_LMENU (left Alt; arrives as WM_SYSKEYDOWN/UP)
-    Key.SPACE: 0x20,  # VK_SPACE
-}
-BOT_VKS: frozenset[int] = frozenset(VK_BY_KEY.values())
 
 
 def sink_rect(screen_w: int, screen_h: int) -> tuple[int, int, int, int]:

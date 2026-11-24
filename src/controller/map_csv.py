@@ -26,13 +26,9 @@ from src.controller.map_format import (
     HEADER,
     bool_to_cell,
     is_comment,
-    no_nodes_message,
-    not_found_message,
+    load_rows,
     ordered_local_ids,
     pos_to_cell,
-    problems_message,
-    read_rows,
-    unreadable_message,
 )
 
 # The header row write_editor_nodes writes, as a list for csv.writer.
@@ -68,32 +64,26 @@ def read_editor_nodes(
     per the strict-metadata design decision (Task 19, Q3 locked 2026-05-22).
     local_id starts at 1 and matches file row order (header excluded).
     """
-    p = Path(path)
-    if not p.exists():
-        return Failure(not_found_message(path))
-    try:
-        with open(p, "r", newline="") as f:
-            all_lines = f.readlines()
-    except (OSError, UnicodeDecodeError) as e:
-        return Failure(unreadable_message(path, e))
+    metadata: Dict[str, Any] = {}
 
-    # Runs before the row check, so a bad metadata line is reported alone (src/controller/CLAUDE.md).
-    metadata_lines = [(number, line) for number, line in enumerate(all_lines, start=1) if is_comment(line)]
-    meta_result = _parse_metadata_lines(metadata_lines)
-    if not is_successful(meta_result):
-        return Failure(problems_message(path, [meta_result.failure()]))
-    metadata = meta_result.unwrap()
+    def check_metadata(lines: List[str]) -> Optional[str]:
+        # Runs before the row check, so a bad metadata line is reported alone (src/controller/CLAUDE.md).
+        metadata_lines = [(number, line) for number, line in enumerate(lines, start=1) if is_comment(line)]
+        meta_result = _parse_metadata_lines(metadata_lines)
+        if not is_successful(meta_result):
+            return meta_result.failure()
+        metadata.update(meta_result.unwrap())
+        return None
 
-    # The same check and messages as the runtime parser (decision H16).
-    rows, problems = read_rows(all_lines)
-    if problems:
-        return Failure(problems_message(path, problems))
-    if not rows:
-        return Failure(no_nodes_message(path))  # a header (and #/blank lines) but no node rows (H19)
+    # The same check and messages as the runtime parser (decision H16). The editor opens the file with newline=""
+    # and reads every line before checking any: load_rows is given that mode and the metadata check.
+    loaded = load_rows(path, check_metadata, "")
+    if not is_successful(loaded):
+        return Failure(loaded.failure())
     nodes = [
         EditorNode(i, row.nodetype, row.pos, row.can_fall, row.fall_dist_exceeds_vertical_tp,
                    row.is_left_platform_edge, row.is_right_platform_edge)
-        for i, row in enumerate(rows, start=1)
+        for i, row in enumerate(loaded.unwrap(), start=1)
     ]
     rotation_order = [node.local_id for node in nodes if node.nodetype == BLUE_NODE]
     return Success((nodes, rotation_order, metadata))

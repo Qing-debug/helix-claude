@@ -37,20 +37,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from src.input.harness.listener import BOT_VKS, VK_BY_KEY
+from src.input.harness.constants import FOCUS_LOST, NS_PER_H
+from src.input.harness.vk_codes import BOT_VKS, VK_BY_KEY
 from src.input.protocol import Key, Step, transitions
 
 Row = dict[str, Any]
 
 NS_PER_MS = 1_000_000
-NS_PER_H = 3_600 * 1_000_000_000
 WINDOW_OFFSET_NS = 110 * NS_PER_MS          # REACTION's lower bound (C4); window start after stimulus (PA-rev m12)
 LISTENER_DEAD_N = 5
 LATENCY_P99_TARGET_NS = 100 * NS_PER_MS
 FAULT_REPORT_LIMIT_NS = 1_000_000_000
 CONNECTED_SPAN_TARGET_NS = 2 * NS_PER_H
 STARTS_EXPECTED = {"plain": 8, "reset_board": 6, "bluetooth_off_on": 6}
-FOCUS_LOST = "FOCUS_LOST"
 KEY_BY_VK: dict[int, Key] = {vk: k for k, vk in VK_BY_KEY.items()}
 
 # spec docs/superpowers/specs/2026-10-21-p1a-input-over-bluetooth-design.md, targets table (L56-L61)

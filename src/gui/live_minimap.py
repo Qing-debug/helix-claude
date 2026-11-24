@@ -72,7 +72,7 @@ class LiveMinimap:
         self.canvas = tk.Canvas(parent, width=NOT_FOUND_PX[0], height=NOT_FOUND_PX[1], bg=DARK, highlightthickness=0,
                                 bd=0)
         self._label_font = tkfont.nametofont("TkDefaultFont", root=parent).copy()
-        self._label_font.configure(size=8)  # as the view's labels (window.py:131-132)
+        self._label_font.configure(size=8)  # as the view's labels (route_view/window.py, RouteViewWindow.__init__)
         self._csv: Path | None = None  # the `CSV_file` object the marks were read from
         self._marks: tuple[_Mark, ...] = ()
         self._locator: CharacterLocator | None = None
@@ -113,7 +113,7 @@ class LiveMinimap:
             return
         controller = self._gui.controller
         csv = controller.agent.CSVParser.CSV_file if controller is not None else None
-        if csv is not self._csv:  # a new object per load (controller.py:121): a reload of the same file reads again
+        if csv is not self._csv:  # a new object per load (MapleAgent.setCSV): a reload of the same file reads again
             self._csv = csv
             self._marks = _readMarks(csv)
         s = DEFAULT_SCALE
@@ -125,7 +125,7 @@ class LiveMinimap:
         canvas.configure(width=w * s, height=h * s)
         canvas.create_image(0, 0, image=photo, anchor="nw", tags="bg")
         self._photo = photo
-        for mark in self._marks:  # the view's look (window.py:610-621)
+        for mark in self._marks:  # the view's look (route_view/window.py, RouteViewWindow._draw_nodes)
             x, y = mark.pos[0] * s, mark.pos[1] * s
             r = (NODE_R if mark.blue else ORANGE_R) * s
             canvas.create_oval(x - r, y - r, x + r, y + r, fill=BLUE_FILL if mark.blue else ORANGE_FILL,
@@ -133,7 +133,7 @@ class LiveMinimap:
             if mark.blue:
                 canvas.create_text(x + r + 2, y, text=mark.label, anchor="w", fill=LABEL_FG, font=self._label_font,
                                    tags="label")
-        if character is not None:  # as the view draws it (window.py:606-608)
+        if character is not None:  # as the view draws it (route_view/window.py, RouteViewWindow._draw)
             x, y, r = character[0] * s, character[1] * s, 2 * s
             canvas.create_oval(x - r, y - r, x + r, y + r, fill=CHARACTER, outline="white", tags="character")
 

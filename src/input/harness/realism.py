@@ -35,6 +35,7 @@ from scipy import stats
 from src.input.harness.analyze import (NS_PER_MS, Check, CommandMatch, DeliveryMatch, Row, commands_of,
                                        expected_transitions, is_ok, load_run, match_delivery, percentile,
                                        read_jsonl)
+from src.input.harness.constants import CI_UNIT_MS
 from src.input.timing import TimingType, truncated_cdf
 
 T = TimingType
@@ -46,7 +47,6 @@ GAP_RUN = 5
 DELIVERED_TOL_MS = 20.0
 DELIVERED_SHARE_PCT = 95
 COLLAPSE_MS = 1.0
-CI_UNIT_MS = 1.25                 # PONG itvl is in 1.25 ms units (C1)
 
 # spec docs/superpowers/specs/2026-10-21-p1a-input-over-bluetooth-design.md, targets table (L59-L60, as amended)
 TARGET_KS = ("fits its model (KS test, α = 0.01, ≥1,000 samples each), tested on the values the timing layer "

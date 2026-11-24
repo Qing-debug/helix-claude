@@ -21,7 +21,7 @@ from returns.result import Failure, Result, Success
 from src.classes.classes import Kanna
 from src.input import input_layer
 from src.input.link import InputError
-from src.route import runtime, session, step_log, walk
+from src.route import runtime, session, step_log_writer, walk
 from src.route.character import CharacterLocator
 from src.route.leg_log import LegOutcome, LegRecord, MemorySink, MoveEntry
 from src.route.runtime import StopControl
@@ -867,7 +867,7 @@ def break_below_the_session(monkeypatch, link) -> None:
         return real_run(self)
 
     monkeypatch.setattr(RouteWalker, "run", run)
-    monkeypatch.setattr(step_log, "event_line", lambda event: Failure("bad event"))
+    monkeypatch.setattr(step_log_writer, "event_line", lambda event: Failure("bad event"))
     link.close_raises = RuntimeError("x")
 
 

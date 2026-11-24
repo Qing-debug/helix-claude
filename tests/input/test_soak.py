@@ -3,6 +3,7 @@
 No board, no radio, no window: the link, the sink and the clock are fakes. The clock and sleep are the module's
 seams (`soak._clock`, `soak._sleep`), monkeypatched as in test_input_layer.py.
 """
+import hashlib
 import json
 import logging
 import time
@@ -19,35 +20,20 @@ from src.input.harness.soak import (COMMAND_FIELDS, FOCUS_LOST, FOCUS_RECHECKS, 
                                     plan_mix, pong_flags, run_command, run_soak, sample_counts)
 from src.input.input_layer import ActionRecord
 from src.input.link import InputError, SendReport, SessionInfo
-from src.input.protocol import Accepted, Done, Key, Pong, encode_play
+from src.input.protocol import Accepted, Done, Key, encode_play
 from src.input.timing import Sample, TimingModel, TimingType
+
+from input_fakes import COMMAND_KEYS, FakeClock, patch_clock, pong  # tests/input/input_fakes.py
 
 JSONL = ("commands.jsonl", "pongs.jsonl", "link_faults.jsonl", "faults.jsonl")
 
 
 # ---- fakes ---------------------------------------------------------------------------------
 
-class FakeClock:
-    """perf_counter_ns stand-in; sleep() advances it."""
-
-    def __init__(self, start_ns=1_000_000_000):
-        self.now = start_ns
-        self.sleeps = []
-
-    def clock(self):
-        self.now += 1_000  # every read moves 1 us, so stamps taken in order are strictly increasing
-        return self.now
-
-    def sleep(self, s):
-        self.sleeps.append(s)
-        self.now += int(s * 1e9)
-
-
 @pytest.fixture
 def fake_clock(monkeypatch):
     fc = FakeClock()
-    monkeypatch.setattr(soak, "_clock", fc.clock)
-    monkeypatch.setattr(soak, "_sleep", fc.sleep)
+    patch_clock(monkeypatch, fc, soak)
     return fc
 
 
@@ -87,11 +73,6 @@ class FakeSink:
         return self.sink_is_foreground()
 
 
-def _pong(bonded=True, encrypted=True, authenticated=False, subscribed=True, itvl=12, mtu=247):
-    return Pong(seq=1, itvl_units=itvl, latency=0, timeout_units=100, mtu=mtu, bonded=bonded,
-                encrypted=encrypted, authenticated=authenticated, subscribed=subscribed, board_us=123_456)
-
-
 def _record(seq=3, reaction=True, walk_ms=None):
     model = TimingModel(np.random.default_rng(0))
     plan = actions.walk(model, Key.LEFT, walk_ms).unwrap() if walk_ms else actions.tap(model, Key.E)
@@ -122,6 +103,7 @@ def test_success_row_has_c5_fields_from_the_record():
     rec = _record()
     row = command_row(4, "tap", 999, Success(rec))
     assert list(row) == list(COMMAND_FIELDS)
+    assert tuple(COMMAND_KEYS) == tuple(COMMAND_FIELDS)  # input_fakes keeps its own copy of the list (W0R2 M-3)
     assert list(COMMAND_FIELDS) == ["seq", "action", "intended_ms", "stimulus_ns", "steps", "samples", "reaction_ms",
                                     "reaction_index", "waited_ms", "sent_ns", "written_ns", "accepted_ns", "done_ns",
                                     "t0_us", "late_us", "status", "error", "bytes"]
@@ -187,7 +169,7 @@ def test_open_creates_every_file_empty_and_lines_end_in_lf(tmp_path, fake_clock)
             assert (run / name).exists(), name
         w.write_command(command_row(0, "tap", 1, Success(_record())))
         w.write_fault({"kind": "reset_board", "injected_ns": None})
-        link.pongs.append((5, _pong()))
+        link.pongs.append((5, pong(board_us=123_456)))
         link.fault_log.append((6, InputError.LINK_LOST))
         w.drain()
     for name in JSONL + ("session.json",):
@@ -198,7 +180,9 @@ def test_open_creates_every_file_empty_and_lines_end_in_lf(tmp_path, fake_clock)
 
 def test_pongs_reach_pongs_jsonl_once_each_in_order_with_flags_rebuilt(tmp_path, fake_clock):
     link = FakeLink()
-    a, b, c = _pong(itvl=12), _pong(itvl=9, authenticated=True), _pong(bonded=False, subscribed=False)
+    a = pong(board_us=123_456, itvl=12)
+    b = pong(board_us=123_456, itvl=9, authenticated=True)
+    c = pong(board_us=123_456, bonded=False, subscribed=False)
     with _writer(tmp_path, link) as w:
         link.pongs += [(100, a), (200, b)]
         w.drain()
@@ -210,7 +194,7 @@ def test_pongs_reach_pongs_jsonl_once_each_in_order_with_flags_rebuilt(tmp_path,
     assert rows[0] == {"qpc_ns": 100, "itvl_units": 12, "latency": 0, "timeout_units": 100, "mtu": 247,
                        "flags": 11, "board_us": 123_456}  # bonded + encrypted + subscribed
     assert [r["flags"] for r in rows] == [11, 15, 2]
-    assert pong_flags(_pong(bonded=False, encrypted=False, authenticated=True, subscribed=False)) == 4
+    assert pong_flags(pong(board_us=123_456, bonded=False, encrypted=False, authenticated=True, subscribed=False)) == 4
 
 
 def test_link_faults_logged_in_order_including_one_just_before_ctrl_c(tmp_path, fake_clock):
@@ -252,8 +236,8 @@ def test_ctrl_c_still_writes_session_json(tmp_path, fake_clock):
 
 def test_session_json_fields(tmp_path, fake_clock):
     with RunWriter(tmp_path / "r1", FakeLink(), seed=42, git_sha="deadbeef") as w:
-        w.record_connect(SessionInfo("AA:BB", 247, _pong(itvl=12)))
-        w.record_connect(SessionInfo("AA:BB", 185, _pong(itvl=24)))  # a reconnect does not overwrite
+        w.record_connect(SessionInfo("AA:BB", 247, pong(board_us=123_456, itvl=12)))
+        w.record_connect(SessionInfo("AA:BB", 185, pong(board_us=123_456, itvl=24)))  # a reconnect does not overwrite
         w.session["process_check"] = "answered y: MapleStory closed"
     s = _session(w.run_dir)
     assert s["run_id"] == "r1" and s["seed"] == 42 and s["git_sha"] == "deadbeef"
@@ -314,6 +298,33 @@ def test_keys_jsonl_is_truncated_when_the_run_dir_is_reused(tmp_path, driver_clo
 
     assert run_soak(_cfg(tmp_path, 2), DriverLink(driver_clock), start) == 0
     assert (run / "keys.jsonl").read_bytes() == b'{"qpc_ns": 2, "vk": 39}\n'
+
+
+def test_link_log_handler_settings(tmp_path):
+    # W1-4 pin: link.log's handler keeps these settings when its builder is shared (H141)
+    with _writer(tmp_path) as w:
+        handler = w._handler
+        assert isinstance(handler, logging.FileHandler)
+        assert handler.baseFilename == str((w.run_dir / "link.log").resolve())
+        assert handler.mode == "w" and handler.encoding == "utf-8"
+        assert handler.level == logging.WARNING
+        assert handler.filters == [soak._stamp_perf_ns]
+        assert handler.formatter is not None
+        assert handler.formatter._fmt == "%(created).6f %(perf_ns)d %(levelname)s %(message)s"
+
+
+@pytest.mark.parametrize("start, during", [(logging.ERROR, logging.WARNING), (logging.WARNING, logging.WARNING),
+                                           (logging.INFO, logging.INFO), (logging.DEBUG, logging.DEBUG)])
+def test_link_log_lowers_the_logger_to_warning_only_if_higher_and_restores_it(tmp_path, start, during):
+    logger = logging.getLogger("src.input.link")
+    before = logger.level
+    logger.setLevel(start)
+    try:
+        with _writer(tmp_path):
+            assert logger.level == during
+        assert logger.level == start
+    finally:
+        logger.setLevel(before)
 
 
 def test_link_log_handler_removed_on_ctrl_c(tmp_path):
@@ -419,6 +430,62 @@ def test_mix_is_seeded():
     assert plan_mix(5, 300)[:100] == plan_mix(5, 100)  # a longer run starts with the same commands
 
 
+GOLDEN_MIX = {  # the planned command list, written down before the mix moved into harness/command_mix.py (W1-5)
+    1: ("aab91e471ea08b01e8bcd414678128d1ab7a2375f6a3e3bb1cd1cc375f8123e5",
+        ["teleport 8 None", "teleport 1 None", "walk 1 2493.9613795011915", "tap 1 None", "jump  None",
+         "teleport 2 None", "walk 1 579.1051087366861", "drop  None", "tap 32 None", "tap 4 None", "jump  None",
+         "teleport 4 None", "walk 2 2554.464010565179", "tap 1 None", "tap 32 None", "teleport 1 None",
+         "walk 2 2049.430982628831", "jump  None", "walk 1 627.8484918583725", "drop  None",
+         "sequence 2,16,64,8,1 None", "drop  None", "sequence 8,4,2,8 None", "drop  None",
+         "walk 2 2788.7845739698714", "drop  None", "sequence 4,16 None", "sequence 64,8,4,2 None", "drop  None",
+         "teleport 8 None", "sequence 2,8,1,1 None", "tap 8 None", "walk 1 2278.9171313883826", "tap 8 None",
+         "teleport 2 None", "teleport 1 None", "walk 2 2252.4847587778877", "teleport 1 None", "teleport 1 None",
+         "walk 2 1246.3702861752586"]),
+    123: ("8ac8e98e608d521fc39e769744d224aaf2f0c9344ec07de1bb2523e2e9d30948",
+          ["tap 1 None", "walk 2 720.8170851784561", "tap 2 None", "tap 64 None", "walk 2 2002.7562766486983",
+           "tap 32 None", "walk 1 1323.9076200389113", "drop  None", "sequence 64,4 None", "teleport 8 None",
+           "teleport 1 None", "tap 64 None", "tap 32 None", "teleport 1 None", "tap 8 None", "teleport 4 None",
+           "teleport 1 None", "teleport 1 None", "sequence 16,1,8,4 None", "jump  None", "jump  None", "drop  None",
+           "teleport 2 None", "jump  None", "teleport 4 None", "teleport 1 None", "sequence 16,64,2 None",
+           "teleport 4 None", "walk 1 595.7630190859866", "teleport 1 None", "sequence 4,4,8,64 None",
+           "teleport 4 None", "sequence 4,4,2,1 None", "walk 2 556.8066538676585", "tap 4 None",
+           "sequence 16,4,2,64,64 None", "jump  None", "tap 64 None", "teleport 8 None",
+           "walk 1 1332.2235971369987"]),
+}
+GOLDEN_STREAMS = {1: [3223727848812172239, 2194076578445297086, 1075299005653396644],  # first integers(1 << 62) of each
+                  123: [893056844781106894, 2550219403540390218, 3557464098168876856]}
+GOLDEN_FAULTS = {1: {40: "reset_board", 7: "reset_board", 16: "reset_board",
+                     2: "bluetooth_off_on", 25: "bluetooth_off_on", 14: "bluetooth_off_on"},
+                 123: {29: "reset_board", 14: "reset_board", 11: "reset_board",
+                       8: "bluetooth_off_on", 15: "bluetooth_off_on", 46: "bluetooth_off_on"}}
+GOLDEN_COUNTS = {1: {TimingType.REACTION: 200, TimingType.CHORD_OFFSET: 64, TimingType.HOLD: 226,
+                     TimingType.RELEASE_LAG: 64, TimingType.WALK: 45, TimingType.GAP: 71},
+                 123: {TimingType.REACTION: 200, TimingType.HOLD: 227, TimingType.WALK: 38,
+                       TimingType.CHORD_OFFSET: 80, TimingType.RELEASE_LAG: 80, TimingType.GAP: 65}}
+
+
+def _golden_line(c) -> str:
+    return f"{c.action} {','.join(str(int(k)) for k in c.keys)} {c.intended_ms!r}"
+
+
+@pytest.mark.parametrize("seed", [1, 123])
+def test_golden_mix_for_two_fixed_seeds_pins_the_rng_draw_order(seed):
+    digest, first = GOLDEN_MIX[seed]
+    lines = [_golden_line(c) for c in plan_mix(seed, 2000)]
+    assert lines[:40] == first
+    assert hashlib.sha256("\n".join(lines).encode()).hexdigest() == digest  # all 2000 commands
+    assert [int(g.integers(1 << 62)) for g in soak._streams(seed)] == GOLDEN_STREAMS[seed]
+    assert fault_indexes(seed, 50, {"reset_board": 3, "bluetooth_off_on": 3}) == GOLDEN_FAULTS[seed]
+    assert dict(sample_counts(plan_mix(seed, 200))) == GOLDEN_COUNTS[seed]
+
+
+def test_the_mix_names_are_defined_once_in_command_mix_and_reachable_through_soak():
+    from src.input.harness import command_mix
+    for name in ("Command", "ARROWS", "TAP_KEYS", "WALK_KEYS", "SEQUENCE_KEYS", "MIX", "WALK_T_MS", "SEQUENCE_LEN",
+                 "_streams", "command_mix", "plan_mix", "sample_counts"):
+        assert getattr(soak, name) is getattr(command_mix, name), name
+
+
 def test_10000_commands_give_1000_chosen_samples_per_judged_type_gap_included():
     mix = plan_mix(1, 10_000)
     counts = sample_counts(mix)
@@ -503,8 +570,8 @@ class DriverLink(FakeLink):
         if not self.connect_ok or (self.connect_fails_after is not None and self.connects > self.connect_fails_after):
             return Failure("no device named 'Guiness' found")
         self.connected = True
-        self.pongs.append((self.clock.clock(), _pong()))
-        return Success(SessionInfo("AA:BB", 247, _pong()))
+        self.pongs.append((self.clock.clock(), pong(board_us=123_456)))
+        return Success(SessionInfo("AA:BB", 247, pong(board_us=123_456)))
 
     def close(self):
         self.events.append("close")
@@ -541,8 +608,7 @@ class DriverSink(FakeSink):
 
 @pytest.fixture
 def driver_clock(monkeypatch, fake_clock):
-    monkeypatch.setattr(input_layer, "_clock", fake_clock.clock)
-    monkeypatch.setattr(input_layer, "_sleep", fake_clock.sleep)
+    patch_clock(monkeypatch, fake_clock, input_layer)
     monkeypatch.setattr(soak, "_read_answer", lambda: Success("y"))
     return fake_clock
 
@@ -1038,3 +1104,15 @@ def test_read_answer_y_and_closed_input(monkeypatch):
 
     monkeypatch.setattr("builtins.input", unreadable)
     assert soak._read_answer() == Failure("none")
+
+
+# ---- constants shared by soak, analyze and realism (W1-4) -----------------------------------------
+
+def test_the_shared_constants_keep_their_values_under_every_module():
+    from src.input.harness import analyze, constants
+    assert soak.CI_UNIT_MS == realism.CI_UNIT_MS == 1.25
+    assert soak.NS_PER_H == analyze.NS_PER_H == 3_600_000_000_000
+    assert soak.FOCUS_LOST == analyze.FOCUS_LOST == "FOCUS_LOST"
+    assert soak.CI_UNIT_MS is realism.CI_UNIT_MS is constants.CI_UNIT_MS  # one object, one source
+    assert soak.NS_PER_H is analyze.NS_PER_H is constants.NS_PER_H
+    assert soak.FOCUS_LOST is analyze.FOCUS_LOST is constants.FOCUS_LOST
