@@ -215,7 +215,7 @@ def _offered(rg: RouteGraph) -> RouteGraph:
 
 def _go_down(rg: RouteGraph, g: Node, h: Node, rng: np.random.Generator) -> Move:
     """P5's DOWN edge (H87): teleport down whenever a teleport reaches the target platform; drop only when it cannot.
-    Nothing is drawn from `rng`, which stays in the signature for `route_preview`'s call. `_offered` and the graph
+    Nothing is drawn from `rng`, which stays in the signature for `plan_move`'s callers. `_offered` and the graph
     cost have already left out an edge with no option, so a move that is not a teleport here is a drop."""
     options = down_options(abs(h.minimap_position[1] - g.minimap_position[1]), bool(g.can_fall), rg.reach_v, rg.params)
     if "teleport" in options:
@@ -243,13 +243,28 @@ def rope_move(mark: RopeMark, pos: tuple[int, int], target: Node, tries: int, re
     return None
 
 
-def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random.Generator) -> Result[Decision, str]:
-    """The next move from `pos` toward `target`, or `Decision(None, 0.0, None)` when the character is at `target`.
+@dataclass(frozen=True)
+class PlanDetail:
+    """What the route preview shows of one `plan_move` decision with a move, besides its `Decision`: the candidate
+    starts as (cost, node), left before right; the chosen start; the path; the move's aim; and the platform `attach`
+    gave the position. The aim is the goal x `aim_x` of a move left or right, on `aim_node`'s platform, or for an up or
+    down move (`aim_x` None) the edge `aim_node` -> the Decision's `toward`."""
 
-    `Failure` when `target` is not in the route graph, `pos` is off the graph (`attach`'s message, unchanged), or no
-    path leads to `target`. `rng` is no longer drawn from (H87: a down move teleports when a teleport reaches, else
-    drops); the parameter stays for the walker, the simulator and the route preview.
-    """
+    candidates: list[tuple[float, Node]]
+    start: Node
+    path: tuple[Node, ...]
+    aim_x: int | None
+    aim_node: Node
+    platform: int | None
+
+
+def plan_move(
+    rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random.Generator, detail: list[PlanDetail] | None = None
+) -> Result[Decision, str]:
+    """`next_move`'s rules P1-P5: the one routine `next_move` and the route preview share (cleanup piece W1-8, R13,
+    Hong's H140), so the preview cannot drift from the planner. Given a `detail` list, a decision with a move also
+    appends its `PlanDetail`, which the preview asks for; `next_move` passes none, so the walker's path builds nothing
+    for the preview. `rng` only reaches `_go_down`, which draws nothing (H87)."""
     if target not in rg.graph:
         return Failure(f"target {target.minimap_position!r} is not in the route graph")
     px, py = pos
@@ -295,26 +310,39 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
             launch = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
         if launch is not None and abs(px - launch) > rg.params.arrive_px:
             move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch, anchor.platform)
+            if detail is not None:
+                detail.append(PlanDetail(candidates, start, path, launch, g, anchor.platform))
             return Success(Decision(move, total, h))
     if launch is None and not _is_at(rg, pos, g, anchor):
         goal_x = g.minimap_position[0]
         move = _walk(rg, px, goal_x) if on_slope else _run(rg, px, goal_x, anchor.platform)
+        if detail is not None:
+            detail.append(PlanDetail(candidates, start, path, goal_x, g, anchor.platform))
         return Success(Decision(move, total, g))
 
     # P5: at g, or lined up on the launch x of g's UP/DOWN/GAP edge (g is not the target, or P1 would have applied)
     h = path[gi + 1]
     kind = _edge_kind(rg, g, h)
     if kind == EdgeKind.SLOPE:
+        if detail is not None:
+            detail.append(PlanDetail(candidates, start, path, h.minimap_position[0], h, anchor.platform))
         return Success(Decision(_walk(rg, px, h.minimap_position[0]), total, h))
     if kind == EdgeKind.WALK:  # only when P4 kept g at the start of a slope segment
         g_next = path[_walk_run_end(rg, path, gi + 1)]
+        if detail is not None:
+            detail.append(PlanDetail(candidates, start, path, g_next.minimap_position[0], g_next, anchor.platform))
         return Success(Decision(_run(rg, px, g_next.minimap_position[0], anchor.platform), total, g_next))
     if kind in (EdgeKind.UP, EdgeKind.DOWN) and _past_marked_end(rg, px, h):
         # P4 counts the character lined up within `arrive_px` of the launch, so the read may lie 1-2 px past a marked end
         # of h's platform, with nothing above or below to land on: walk to the launch x first, as the GAP branch does
         launch_x = _launch_x(rg, g, h)  # never None: `_offered` dropped the edges without one
+        if detail is not None:
+            aim_x = h.minimap_position[0] if launch_x is None else launch_x
+            detail.append(PlanDetail(candidates, start, path, aim_x, g, anchor.platform))
         return Success(Decision(_walk(rg, px, h.minimap_position[0] if launch_x is None else launch_x), total, h))
     if kind == EdgeKind.UP:
+        if detail is not None:
+            detail.append(PlanDetail(candidates, start, path, None, g, anchor.platform))
         return Success(Decision(Move(MoveKind.TELEPORT, Key.UP, None), total, h))
     if kind == EdgeKind.GAP:
         # a sideways teleport across the gap, only when the planner's own landing rule carries it onto h's platform from
@@ -322,7 +350,24 @@ def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random
         # a teleport may stop at the end); otherwise walk to the launch x
         sign = 1 if h.minimap_position[0] > px else -1
         if anchor.platform is not None and rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h):
+            if detail is not None:
+                detail.append(PlanDetail(candidates, start, path, h.minimap_position[0], h, anchor.platform))
             return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))
         launch_x = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
+        if detail is not None:
+            aim_x = g.minimap_position[0] if launch_x is None else launch_x
+            detail.append(PlanDetail(candidates, start, path, aim_x, g, anchor.platform))
         return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))
+    if detail is not None:
+        detail.append(PlanDetail(candidates, start, path, None, g, anchor.platform))
     return Success(Decision(_go_down(rg, g, h, rng), total, h))
+
+
+def next_move(rg: RouteGraph, pos: tuple[int, int], target: Node, rng: np.random.Generator) -> Result[Decision, str]:
+    """The next move from `pos` toward `target`, or `Decision(None, 0.0, None)` when the character is at `target`.
+
+    `Failure` when `target` is not in the route graph, `pos` is off the graph (`attach`'s message, unchanged), or no
+    path leads to `target`. `rng` is no longer drawn from (H87: a down move teleports when a teleport reaches, else
+    drops); the parameter stays for the walker, the simulator and the route preview. The rules are `plan_move`'s.
+    """
+    return plan_move(rg, pos, target, rng)

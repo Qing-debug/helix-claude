@@ -4,13 +4,16 @@ plan contract V4).
 `preview(rg, pos, target)` gives the candidate starts with their costs, the chosen start, the minimum-cost path and
 the hops: hop 0 is the move `next_move` makes from `pos`, and hop k the move it makes from the point where hop k-1 is
 assumed to land (the landing rule, V4). It draws nothing. Since H87 `next_move` takes no draw (a down move is a teleport when one reaches, a drop only when
-none does), so every hop holds one option; the two-option branch of the old drop-or-teleport coin flip stays, unreached.
+none does), so every hop holds one option (a tuple still: two were the old drop-or-teleport coin flip).
 
-`_plan` is this module's copy of `next_move`'s rules P1-P5 (`planner.py:246-328`), statement for statement, and calls
-the planner's private helpers (RV1-D4 A, H53; RV-11 notes the seam in `src/route/CLAUDE.md`); `planner.py` is never
-edited. It differs only in what it returns (the options, `toward`, the total, the starts, the path and the move's
-aim) and in the old coin flip, where it calls `_go_down` with two stub generators (RV3-D4 A; one move since H87).
-`tests/route/test_route_preview.py` pins it against `next_move` (checks S3 and S3b).
+`_plan` runs `planner.plan_move`, the one routine for `next_move`'s rules P1-P5 that `next_move` runs too (cleanup
+piece W1-8, R13, Hong's H140; until then `_plan` was a statement-for-statement copy, RV1-D4 A, H53), asking it for
+the decision's `PlanDetail`, and turns the two into this module's `_Plan`: the move as a one-option tuple, `toward`,
+the total, the starts, the chosen start, the path, the move's aim (`_Across` or `_Edge`) and the platform. It passes
+`plan_move` a stub generator, since the
+preview takes none (`_go_down` draws nothing since H87). Its landing rule still calls two private helpers of the
+planner, `_surface_ys` and `_launch_x`. `tests/route/test_route_preview.py` pins it against `next_move` (checks S3 and
+S3b) and `tests/route/test_plan_pin.py` pins both, and the whole preview, as they were before the change.
 
 Where the plan is silent (each decided here):
 - An arrived preview is `complete=True`: its only position, `pos`, is arrived.
@@ -21,7 +24,7 @@ Where the plan is silent (each decided here):
 - The from-anchor's platform is left out of the landing order when the anchor has none (`attach` always sets one).
 - An up/down landing with no surface at the launch x either (`_launch_x` never gives such an x) is `h` itself.
 - An aim node missing from `path` (never so today) counts as at index 0: no earlier path platform is tried.
-- The stub generators are two classes, one per value, each defining `random()` and nothing else.
+- The stub generator is a class defining `random()` and nothing else.
 - V4's past-end landing (the end node's y) is a stated assumption: 2 of the FF2 sweep's 7 would fall (RV3-D5 notes).
 """
 
@@ -34,30 +37,14 @@ from returns.result import Failure, Result, Success
 
 from src.controller.node import Node
 from src.input.protocol import Key
-from src.route.locate import attach
-from src.route.planner import (
-    Move,
-    MoveKind,
-    _edge_kind,
-    _go_down,
-    _is_at,
-    _launch_x,
-    _offered,
-    _on_slope_segment,
-    _past_marked_end,
-    _run,
-    _starts,
-    _surface_ys,
-    _walk,
-    _walk_run_end,
-)
-from src.route.route_graph import EdgeKind, RouteGraph
+from src.route.planner import Move, MoveKind, PlanDetail, _launch_x, _surface_ys, plan_move
+from src.route.route_graph import RouteGraph
 
 
 @dataclass(frozen=True)
 class StartOption:
     node: Node
-    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (planner.py:270-273)
+    cost_s: float  # approach + rg.cost_to(node, target) on the offered graph (`plan_move`'s P3)
 
 
 @dataclass(frozen=True)
@@ -82,22 +69,15 @@ class Preview:
     complete: bool  # the last landing is arrived (P1); False when max_hops stopped it or a plan failed
 
 
-class _DrawLow:
-    """Stands in for `np.random.Generator` in `_go_down`: `random()` only, so any other draw raises AttributeError."""
+class _NoDraw:
+    """Stands in for `np.random.Generator` in `plan_move`, which hands it to `_go_down` (no draw since H87): `random()`
+    only, so any other draw raises AttributeError."""
 
     def random(self) -> float:
         return 0.0
 
 
-class _DrawHigh:
-    """Stands in for `np.random.Generator` in `_go_down`: `random()` only, so any other draw raises AttributeError."""
-
-    def random(self) -> float:
-        return 0.99
-
-
-_LOW = cast(np.random.Generator, _DrawLow())  # the old coin flip's low draw (`_go_down` draws nothing since H87, planner.py:216)
-_HIGH = cast(np.random.Generator, _DrawHigh())  # the old coin flip's high draw
+_NO_DRAW = cast(np.random.Generator, _NoDraw())
 
 
 @dataclass(frozen=True)
@@ -118,9 +98,9 @@ class _Edge:
 
 @dataclass(frozen=True)
 class _Plan:
-    """What `next_move` decides at one position, with what the preview needs besides: one option, or the two of a
-    coin flip; `toward` and `total` as the Decision's; the starts, the chosen start, the path; the move's aim; and the
-    platform `attach` gave the position."""
+    """A `plan_move` decision and its `PlanDetail` as the preview uses them: the move as a one-option tuple; `toward`
+    and `total` as the Decision's;
+    the starts, the chosen start, the path; the move's aim; and the platform `attach` gave the position."""
 
     options: tuple[Move, ...]
     toward: Node
@@ -133,91 +113,20 @@ class _Plan:
 
 
 def _plan(rg: RouteGraph, pos: tuple[int, int], target: Node) -> Result[_Plan | None, str]:
-    """`next_move` at `pos` (`planner.py:246-328`, statement for statement), or None when arrived (P1)."""
-    if target not in rg.graph:
-        return Failure(f"target {target.minimap_position!r} is not in the route graph")
-    px, py = pos
-    anchor_result = attach(rg, pos)
-    anchor = anchor_result.value_or(None)
-
-    # P1
-    if _is_at(rg, pos, target, anchor):
+    """`planner.plan_move` at `pos` with its `PlanDetail`, as a `_Plan`; None when arrived (P1); its `Failure`
+    unchanged."""
+    detail: list[PlanDetail] = []
+    result = plan_move(rg, pos, target, _NO_DRAW, detail)
+    if not is_successful(result):
+        return Failure(result.failure())
+    decision = result.unwrap()
+    if decision.move is None or decision.toward is None:  # arrived: `Decision(None, 0.0, None)`
         return Success(None)
-    # P2
-    if anchor is None:
-        return Failure(anchor_result.failure())
-
-    # P3: the cheapest start, ties left before right, over the moves the planner offers
-    rg = _offered(rg)
-    on_slope = _on_slope_segment(rg, anchor)
-    candidates = []
-    for start, approach in _starts(rg, pos, anchor, on_slope):
-        cost = rg.cost_to(start, target)
-        if is_successful(cost):
-            candidates.append((approach + cost.unwrap(), start))
-    if not candidates:
-        tx, ty = target.minimap_position
-        return Failure(f"no path from ({px}, {py}) to ({tx}, {ty})")
-    total, start = min(candidates, key=lambda c: c[0])
-    path_result = rg.path(start, target)
-    if not is_successful(path_result):  # cost_to succeeded on the same graph, so this does not happen
-        return Failure(path_result.failure())
-    path = path_result.unwrap()
-    starts = tuple(StartOption(node, cost_s) for cost_s, node in candidates)
-    platform = anchor.platform
-
-    def planned(options: tuple[Move, ...], toward: Node, aim: _Across | _Edge) -> Result[_Plan | None, str]:
-        return Success(_Plan(options, toward, total, starts, start, path, aim, platform))
-
-    # P4: on a slope segment the goal is the start itself, otherwise the end of the WALK run from the start
-    gi = 0 if on_slope else _walk_run_end(rg, path, 0)
-    g = path[gi]
-    # P4: when g's next edge is UP/DOWN (a launch x, B14-inv-D1) or GAP (`gap_launch`, QB282) and the character is on
-    # g's platform, the goal is that move's launch x, so the character lines up before it moves; otherwise the goal is g
-    launch = None
-    if gi + 1 < len(path) and anchor.platform == rg.terrain.platform_index(g):
-        h = path[gi + 1]
-        edge_kind = _edge_kind(rg, g, h)
-        if edge_kind in (EdgeKind.UP, EdgeKind.DOWN):
-            launch = _launch_x(rg, g, h)  # never None here: `_offered` dropped the edges without one
-        elif edge_kind == EdgeKind.GAP:
-            launch = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
-        if launch is not None and abs(px - launch) > rg.params.arrive_px:
-            move = _walk(rg, px, launch) if on_slope else _run(rg, px, launch, anchor.platform)
-            return planned((move,), h, _Across(launch, g))
-    if launch is None and not _is_at(rg, pos, g, anchor):
-        goal_x = g.minimap_position[0]
-        move = _walk(rg, px, goal_x) if on_slope else _run(rg, px, goal_x, anchor.platform)
-        return planned((move,), g, _Across(g.minimap_position[0], g))
-
-    # P5: at g, or lined up on the launch x of g's UP/DOWN/GAP edge (g is not the target, or P1 would have applied)
-    h = path[gi + 1]
-    kind = _edge_kind(rg, g, h)
-    if kind == EdgeKind.SLOPE:
-        return planned((_walk(rg, px, h.minimap_position[0]),), h, _Across(h.minimap_position[0], h))
-    if kind == EdgeKind.WALK:  # only when P4 kept g at the start of a slope segment
-        g_next = path[_walk_run_end(rg, path, gi + 1)]
-        move = _run(rg, px, g_next.minimap_position[0], anchor.platform)
-        return planned((move,), g_next, _Across(g_next.minimap_position[0], g_next))
-    if kind in (EdgeKind.UP, EdgeKind.DOWN) and _past_marked_end(rg, px, h):
-        # the walk to the launch x from past a marked end of h's platform (ANYMAP198-R3-D1 B); its aim is `_Across`
-        launch_x = _launch_x(rg, g, h)  # never None: `_offered` dropped the edges without one
-        launch_x = h.minimap_position[0] if launch_x is None else launch_x
-        return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))
-    if kind == EdgeKind.UP:
-        return planned((Move(MoveKind.TELEPORT, Key.UP, None),), h, _Edge(g, h))
-    if kind == EdgeKind.GAP:
-        # the aims are `_Across`, never `_Edge`: `_landing_vertical` would call the UP/DOWN-only `_launch_x` on a side edge
-        sign = 1 if h.minimap_position[0] > px else -1
-        if anchor.platform is not None and rg.side_landing(anchor.platform, px, sign)[1] == rg.terrain.platform_index(h):
-            teleport = Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None)
-            return planned((teleport,), h, _Across(h.minimap_position[0], h))
-        launch_x = rg.gap_launch(g, h)  # never None: `_edge_cost` added no GAP edge without a launch
-        launch_x = g.minimap_position[0] if launch_x is None else launch_x
-        return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))
-    # `_go_down` takes no draw since H87, so low == high and the hop has one option; two (DROP, TELEPORT DOWN) is the old flip
-    low, high = _go_down(rg, g, h, _LOW), _go_down(rg, g, h, _HIGH)
-    return planned((low,) if low == high else (low, high), h, _Edge(g, h))
+    (why,) = detail
+    aim = _Edge(why.aim_node, decision.toward) if why.aim_x is None else _Across(why.aim_x, why.aim_node)
+    starts = tuple(StartOption(node, cost_s) for cost_s, node in why.candidates)
+    plan = _Plan((decision.move,), decision.toward, decision.cost_to_go_s, starts, why.start, why.path, aim, why.platform)
+    return Success(plan)
 
 
 def _surface_y(rg: RouteGraph, platform: int, x: int, py: int) -> int | None:

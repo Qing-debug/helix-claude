@@ -6,7 +6,6 @@ that disagrees with V4's rule text is a plan error to report, not a reason to ch
 """
 
 import inspect
-import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -407,95 +406,9 @@ def test_the_table_literals(built, case_id):
     assert [hop.from_pos for hop in pv.hops] == [case.pos] + [hop.landing for hop in pv.hops[:-1]]
 
 
-# ---- 3. the six planner branches are really taken (spec S3) ----
-
-# ANYMAP198-FIX moved every line after 189 down: `_past_marked_end` (11 lines) went in before `_go_down`, and P5's
-# marked-end walk (5 lines, 316, reached by T28) before the GAP branch
-_BRANCH_LINES = {
-    189: "return None",
-    222: "return Move(MoveKind.TELEPORT, Key.DOWN, None)",  # `_go_down`: the teleport reaches (H87)
-    223: "return Move(MoveKind.DROP, None, None)",  # `_go_down`: only a drop does
-    264: "return Failure(anchor_result.failure())",
-    276: 'return Failure(f"no path from ',
-    310: "g_next = path[_walk_run_end(rg, path, gi + 1)]",
-    316: "return Success(Decision(_walk(rg, px, h.minimap_position[0] if launch_x is None else launch_x), total, h))",
-    # P5's GAP branch (walk-fluid Task 3, QB282): the sideways teleport across a gap (T25), and the I2 guard's walk to
-    # the launch (T27). p1-anymap Task 1 fix (ANYMAP197-R1 I1): the gap cap (H112) leaves the walk reachable through
-    # `next_move` at the default settings: lined up past a launch clamped onto a platform end, a teleport may stop at
-    # that end (T27, a 2 px gap); with `shortest_side_teleport_px` 20 or 21 it is also reached from the far 1-2 px of
-    # the lined-up range
-    325: "return Success(Decision(Move(MoveKind.TELEPORT, Key.RIGHT if sign > 0 else Key.LEFT, None), total, h))",
-    327: "return Success(Decision(_walk(rg, px, g.minimap_position[0] if launch_x is None else launch_x), total, h))",
-}
-
-
-def test_s3_the_table_takes_the_planner_branches(built):
-    lines = Path(planner.__file__).read_text(encoding="utf-8").splitlines()
-    for number, text in _BRANCH_LINES.items():  # a moved line fails here, not by tracing the wrong statement
-        assert lines[number - 1].strip().startswith(text), (number, lines[number - 1])
-        if number != 276:
-            assert lines[number - 1].strip() == text, (number, lines[number - 1])
-
-    planner_file = planner.__file__
-    recorded = set()
-
-    def local(frame, event, arg):
-        if event == "line":
-            recorded.add((frame.f_code.co_filename, frame.f_lineno))
-        return local
-
-    def global_trace(frame, event, arg):  # 'call': a local tracer for planner.py's frames only
-        return local if frame.f_code.co_filename == planner_file else None
-
-    starts = []
-    for case_id in IDS:
-        case = built[case_id]
-        result = preview(case.rg, case.pos, case.target)
-        hops = result.unwrap().hops if is_successful(result) else ()
-        starts += [(case, case.pos)] + [(case, hop.from_pos) for hop in hops]
-    previous = sys.gettrace()
-    sys.settrace(global_trace)
-    try:
-        for case, pos in starts:
-            next_move(case.rg, pos, case.target, np.random.default_rng(0))
-    finally:
-        sys.settrace(previous)
-    assert {(planner_file, number) for number in _BRANCH_LINES} <= recorded, sorted(
-        number for number in _BRANCH_LINES if (planner_file, number) not in recorded
-    )
-
-
-# p1-anymap Task 1 fix (ANYMAP197-R1 I1): the preview's mirror of the guard's walk (route_preview.py:215-217, straight
-# code, so its last line stands for the three) runs for T27's first hop, traced as the planner's lines are above;
-# ANYMAP198-FIX moved it from 209-211 to 215-217 (the marked-end walk's mirror went in before it, and its last line, 206,
-# has the same text)
-_PREVIEW_GUARD_LINE = (217, "return planned((_walk(rg, px, launch_x),), h, _Across(launch_x, g))")
-
-
-def test_t27_takes_the_previews_mirror_of_the_guard_walk(built):
-    number, text = _PREVIEW_GUARD_LINE
-    preview_file = preview.__code__.co_filename
-    lines = Path(preview_file).read_text(encoding="utf-8").splitlines()
-    assert lines[number - 1].strip() == text, (number, lines[number - 1])  # a moved line fails here
-    recorded = set()
-
-    def local(frame, event, arg):
-        if event == "line":
-            recorded.add(frame.f_lineno)
-        return local
-
-    def global_trace(frame, event, arg):  # 'call': a local tracer for route_preview.py's frames only
-        return local if frame.f_code.co_filename == preview_file else None
-
-    case = built["T27"]
-    previous = sys.gettrace()
-    sys.settrace(global_trace)
-    try:
-        result = preview(case.rg, case.pos, case.target)
-    finally:
-        sys.settrace(previous)
-    assert [hop.options for hop in result.unwrap().hops] == [(walk(R, 160),), (TP_L,)]  # the guard's walk, then across
-    assert number in recorded
+# ---- 3. retired by cleanup piece W1-8 (R13, H140) ----
+# `_BRANCH_LINES` and `_PREVIEW_GUARD_LINE` pinned the preview's copy of the planner, and the planner lines the table
+# reaches, by line number; the preview now runs the planner's own `plan_move`, and test_plan_pin.py pins both
 
 
 # ---- 4. starts ----
