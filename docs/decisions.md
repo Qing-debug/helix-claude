@@ -3174,3 +3174,13 @@ In plain words:
 Cost if wrong: a message could show a new name Hong did not expect, or keep an old name he wanted changed. Undo: Hong narrows or widens the reading; the pieces restore or update the part that names the thing.
 
 Pointer: Hong in chat, 2026-11-21 (orch 220); CLEAN219-PLAN-D2; plan `CLEAN216-plan.md` constraints 3, 8 and 13; H134; H141.
+
+## H147 (2026-11-22): Standing yes covers merging each cleanup wave into p1b-route-walking and pushing it (Hong, in chat; CLEAN221-W0MERGE)
+
+Context: at the end of orch 222's session the orchestrator asked Hong in chat: "Does your standing yes for merging fixes also cover merging each finished cleanup wave into `p1b-route-walking` and pushing it? My recommendation is yes." That standing yes is qbr171-1 (Hong's pick A: agents may merge an approved, fully tested fix into its own feature branch and push it, never before a walk of his that is pending; merges into master are still asked). Hong answered in chat on 2026-11-22, verbatim: "2.  yes". The question is page question orch223-2 (bank QB396).
+
+In plain words: the standing yes qbr171-1 also covers merging each reviewed, fully tested cleanup wave from `p1-cleanup` into `p1b-route-walking` and pushing it. Never before a walk of Hong's that is pending; never into master (H143 still holds); never to upstream; never a force push.
+
+Cost if wrong: a cleanup wave lands on `p1b-route-walking` and on GitHub without Hong seeing it first. Undo: revert that wave's merge commit on `p1b-route-walking` with a new commit and push it (no force).
+
+Pointer: Hong in chat, 2026-11-22 (orch 222's session); page question orch223-2; bank QB396; CLEAN221-W0MERGE; qbr171-1; H141; H143.
